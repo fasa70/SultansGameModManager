@@ -72,6 +72,8 @@ enum class PatchStage {
     ClassifyingProfile,
     AwaitingConfirmation,
     PreparingArtifacts,
+    AwaitingGameUninstall,
+    AwaitingInstallPermission,
     AwaitingSystemInstall,
     VerifyingInstall,
     Completed,

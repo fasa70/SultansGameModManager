@@ -17,11 +17,14 @@ internal data class PatchTransaction(
     val expectedCertificateSha256: String? = null,
     val expectedVersionCode: Long? = null,
     val expectedSplitNames: List<String> = emptyList(),
+    val signedArtifactNames: List<String> = emptyList(),
     val failure: String? = null,
 )
 
 internal class PatchTransactionStore(context: Context) {
     private val root = File(context.filesDir, "patch-staging")
+
+    fun root(transactionId: String): File = File(root, transactionId)
 
     fun write(transaction: PatchTransaction) {
         val directory = File(root, transaction.id).apply { mkdirs() }
@@ -36,6 +39,7 @@ internal class PatchTransactionStore(context: Context) {
             transaction.expectedCertificateSha256?.let { setProperty("certificate", it) }
             transaction.expectedVersionCode?.let { setProperty("versionCode", it.toString()) }
             setProperty("splitNames", transaction.expectedSplitNames.joinToString(","))
+            setProperty("signedArtifacts", transaction.signedArtifactNames.joinToString(","))
             transaction.failure?.let { setProperty("failure", it) }
             FileOutputStream(temporary).use { output ->
                 store(output, null)
@@ -61,6 +65,7 @@ internal class PatchTransactionStore(context: Context) {
                     expectedCertificateSha256 = getProperty("certificate"),
                     expectedVersionCode = getProperty("versionCode")?.toLongOrNull(),
                     expectedSplitNames = getProperty("splitNames").orEmpty().split(',').filter(String::isNotBlank),
+                    signedArtifactNames = getProperty("signedArtifacts").orEmpty().split(',').filter(String::isNotBlank),
                     failure = getProperty("failure"),
                 )
             }

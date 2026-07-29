@@ -21,8 +21,12 @@ internal sealed interface PatchOrchestrationResult {
         val reason: String,
     ) : PatchOrchestrationResult
 
+    data class NeedsInstallPermission(val transactionId: String? = null) : PatchOrchestrationResult
+
+    data class NeedsGameUninstall(val transactionId: String) : PatchOrchestrationResult
+
     data class AwaitingSystemInstall(
-        val plan: PatchInstallPlan,
+        val transactionId: String,
         val sessionId: Int,
     ) : PatchOrchestrationResult
 
@@ -96,7 +100,7 @@ internal class PatchOrchestrator(
             )
         }
         if (!installer.canRequestInstalls()) {
-            return fail(extracted.transactionId, PatchFailure.InstallPermissionMissing, "尚未授予安装未知应用权限。")
+            return PatchOrchestrationResult.NeedsInstallPermission()
         }
         if (keyStore.state() == com.sultansgame.modmanager.model.DeviceSigningKeyState.MissingAfterMigration) {
             return fail(extracted.transactionId, PatchFailure.DeviceKeyMissing, "设备签名密钥已丢失，必须卸载旧迁移版游戏后重新迁移。")
@@ -160,26 +164,67 @@ internal class PatchOrchestrator(
             confirmation = confirmation,
             profileId = classification.profileId,
         )
-        val submission = installer.submit(extracted.transactionId, plan.artifacts.map { File(signedDirectory, it.fileName) })
-        return when (submission) {
-            is PackageInstallSubmission.Submitted -> {
-                transactions.write(
-                    PatchTransaction(
-                        id = extracted.transactionId,
-                        stage = PatchStage.AwaitingSystemInstall,
-                        sessionId = submission.sessionId,
-                        artifactDigests = plan.artifacts.map(PatchArtifact::sha256),
-                        mode = plan.mode,
-                        profileId = plan.profileId,
-                        expectedCertificateSha256 = identity.certificateSha256,
-                        expectedVersionCode = signedBase.inspection.versionCode,
-                        expectedSplitNames = plan.splits.mapNotNull { it.inspection.splitName },
-                    ),
-                )
-                PatchOrchestrationResult.AwaitingSystemInstall(plan, submission.sessionId)
+        transactions.write(
+            PatchTransaction(
+                id = extracted.transactionId,
+                stage = PatchStage.AwaitingGameUninstall,
+                sessionId = null,
+                artifactDigests = plan.artifacts.map(PatchArtifact::sha256),
+                mode = plan.mode,
+                profileId = plan.profileId,
+                expectedCertificateSha256 = identity.certificateSha256,
+                expectedVersionCode = signedBase.inspection.versionCode,
+                expectedSplitNames = plan.splits.mapNotNull { it.inspection.splitName },
+                signedArtifactNames = plan.artifacts.map(PatchArtifact::fileName),
+            ),
+        )
+        return PatchOrchestrationResult.NeedsGameUninstall(extracted.transactionId)
+    }
+
+    fun submitPreparedArtifacts(transactionId: String): PatchOrchestrationResult {
+        val transaction = transactions.read(transactionId)
+            ?: return PatchOrchestrationResult.Failed(null, PatchFailure.InternalError, "找不到待安装的修补事务。")
+        if (transaction.stage != PatchStage.AwaitingGameUninstall) {
+            return fail(transactionId, PatchFailure.InternalError, "修补事务不处于等待卸载阶段。")
+        }
+        when (gameProbe.probe()) {
+            is com.sultansgame.modmanager.platform.game.GameProbeResult.NotInstalled -> Unit
+            is com.sultansgame.modmanager.platform.game.GameProbeResult.Found -> {
+                return PatchOrchestrationResult.NeedsGameUninstall(transactionId)
             }
-            is PackageInstallSubmission.Unavailable -> fail(extracted.transactionId, PatchFailure.InstallPermissionMissing, submission.reason)
-            is PackageInstallSubmission.Failed -> fail(extracted.transactionId, PatchFailure.SystemInstallFailed, submission.reason)
+            is com.sultansgame.modmanager.platform.game.GameProbeResult.Failed -> {
+                return fail(transactionId, PatchFailure.SystemInstallFailed, "无法确认原版游戏是否已卸载。")
+            }
+        }
+        if (!installer.canRequestInstalls()) return PatchOrchestrationResult.NeedsInstallPermission(transactionId)
+        val artifactNames = transaction.signedArtifactNames
+        if (artifactNames.isEmpty() || artifactNames.distinct().size != artifactNames.size) {
+            return fail(transactionId, PatchFailure.InternalError, "修补事务缺少签名 APK 集合。")
+        }
+        val signedDirectory = File(transactions.root(transactionId), "signed")
+        val artifacts = artifactNames.map { name ->
+            if (name != File(name).name) return fail(transactionId, PatchFailure.InternalError, "签名 APK 文件名无效。")
+            File(signedDirectory, name)
+        }
+        if (artifacts.any { !it.isFile }) {
+            return fail(transactionId, PatchFailure.InternalError, "签名 APK 暂存文件不完整。")
+        }
+        val digests = artifacts.map { artifact ->
+            com.sultansgame.modmanager.apk.ReadOnlyApkInspector().sha256 { artifact.inputStream() }
+        }
+        if (digests != transaction.artifactDigests) {
+            return fail(transactionId, PatchFailure.InternalError, "签名 APK 暂存文件摘要不匹配。")
+        }
+        return when (val submission = installer.submit(transactionId, artifacts)) {
+            is PackageInstallSubmission.Submitted -> {
+                transactions.write(transaction.copy(
+                    stage = PatchStage.AwaitingSystemInstall,
+                    sessionId = submission.sessionId,
+                ))
+                PatchOrchestrationResult.AwaitingSystemInstall(transactionId, submission.sessionId)
+            }
+            is PackageInstallSubmission.Unavailable -> PatchOrchestrationResult.NeedsInstallPermission(transactionId)
+            is PackageInstallSubmission.Failed -> fail(transactionId, PatchFailure.SystemInstallFailed, submission.reason)
         }
     }
 

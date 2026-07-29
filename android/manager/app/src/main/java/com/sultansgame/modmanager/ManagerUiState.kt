@@ -29,6 +29,7 @@ data class ManagerUiState(
     val patchConfirmation: PatchConfirmation = PatchConfirmation(),
     val patchStage: PatchStage = PatchStage.Idle,
     val patchStatus: String? = null,
+    val patchTransactionId: String? = null,
     val patchInProgress: Boolean = false,
     val noticeAccepted: Boolean? = null,
     val feedback: FeedbackMessage? = null,

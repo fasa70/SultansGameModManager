@@ -51,10 +51,18 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
+
+sealed interface ManagerUiEvent {
+    data class OpenGameUninstall(val transactionId: String) : ManagerUiEvent
+    data class OpenUnknownSourcesSettings(val intent: android.content.Intent) : ManagerUiEvent
+    data class ConfirmPackageInstall(val intent: android.content.Intent) : ManagerUiEvent
+}
 
 class ManagerViewModel(application: Application) : AndroidViewModel(application) {
     private val privateModCache = AndroidPrivateModCache(File(application.filesDir, "mod-cache"))
@@ -72,11 +80,12 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     private val profileRegistry = GameProfileRegistry()
     private val apkExtractor = InstalledApkExtractor(application)
     private val transactions = PatchTransactionStore(application)
+    private val packageInstaller = PackageInstallerGateway(application)
     private val orchestrator = PatchOrchestrator(
         keyStore = deviceSigningKeyStore,
         profileRegistry = profileRegistry,
         signer = AndroidKeystoreApkSigner(),
-        installer = PackageInstallerGateway(application),
+        installer = packageInstaller,
         transactions = transactions,
         archiveInspector = archiveInspector,
         gameProbe = gameProbe,
@@ -90,6 +99,8 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
 
     private val mutableState = MutableStateFlow(ManagerUiState())
     val state: StateFlow<ManagerUiState> = mutableState.asStateFlow()
+    private val uiEventChannel = Channel<ManagerUiEvent>(Channel.BUFFERED)
+    val uiEvents = uiEventChannel.receiveAsFlow()
 
     init {
         privateModCache.recoverInterruptedImports()
@@ -374,13 +385,30 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
 
     fun beginPatching() {
         val current = mutableState.value
-        if (current.patchInProgress || current.gameProbeResult !is GameProbeResult.Found) return
+        if (current.patchInProgress) return
+        if (current.patchStage == PatchStage.AwaitingGameUninstall) {
+            current.patchTransactionId?.let(::requestGameUninstall)
+            return
+        }
+        if (current.patchStage == PatchStage.AwaitingInstallPermission) {
+            requestInstallPermission()
+            return
+        }
+        if (current.gameProbeResult !is GameProbeResult.Found) return
         val confirmation = current.patchConfirmation
         val classification = current.patchClassification ?: return
         if (!confirmation.permits(classification.mode)) return
+        if (!packageInstaller.canRequestInstalls()) {
+            requestInstallPermission()
+            return
+        }
 
         viewModelScope.launch {
-            mutableState.value = mutableState.value.copy(patchInProgress = true, patchStatus = "正在提取并重签游戏 APK…", patchStage = PatchStage.PreparingArtifacts)
+            mutableState.value = mutableState.value.copy(
+                patchInProgress = true,
+                patchStatus = "正在提取并重签游戏 APK…",
+                patchStage = PatchStage.PreparingArtifacts,
+            )
             val extracted = withContext(Dispatchers.IO) {
                 runCatching { apkExtractor.extract("com.gametree.sultan.pd") }
             }.getOrElse { error ->
@@ -398,6 +426,46 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun continueAfterGameUninstall(transactionId: String) {
+        viewModelScope.launch {
+            mutableState.value = mutableState.value.copy(
+                patchInProgress = true,
+                patchStatus = "正在确认原版游戏已卸载…",
+            )
+            val result = withContext(Dispatchers.IO) { orchestrator.submitPreparedArtifacts(transactionId) }
+            applyOrchestrationResult(result)
+        }
+    }
+
+    fun refreshInstallPermission() {
+        if (!packageInstaller.canRequestInstalls()) {
+            requestInstallPermission()
+            return
+        }
+        val transactionId = mutableState.value.patchTransactionId
+        if (mutableState.value.patchStage == PatchStage.AwaitingInstallPermission && transactionId != null) {
+            continueAfterGameUninstall(transactionId)
+            return
+        }
+        mutableState.value = mutableState.value.copy(
+            patchStage = PatchStage.Idle,
+            patchStatus = "已允许 Manager 安装未知应用；请开始迁移。",
+        )
+    }
+
+    fun requestGameUninstall(transactionId: String) {
+        uiEventChannel.trySend(ManagerUiEvent.OpenGameUninstall(transactionId))
+    }
+
+    private fun requestInstallPermission() {
+        mutableState.value = mutableState.value.copy(
+            patchInProgress = false,
+            patchStage = PatchStage.AwaitingInstallPermission,
+            patchStatus = "需要允许 Manager 安装未知应用。",
+        )
+        uiEventChannel.trySend(ManagerUiEvent.OpenUnknownSourcesSettings(packageInstaller.unknownSourcesSettingsIntent()))
+    }
+
     private fun handleInstallResult(intent: android.content.Intent) {
         val result = orchestrator.handleInstallResult(intent) ?: return
         applyOrchestrationResult(result)
@@ -407,21 +475,40 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         when (result) {
             is PatchOrchestrationResult.AwaitingConfirmation -> {
                 mutableState.value = mutableState.value.copy(
+                    patchInProgress = false,
                     patchStatus = result.reason,
                     patchStage = PatchStage.AwaitingConfirmation,
                 )
+            }
+            is PatchOrchestrationResult.NeedsInstallPermission -> {
+                mutableState.value = mutableState.value.copy(patchTransactionId = result.transactionId)
+                requestInstallPermission()
+            }
+            is PatchOrchestrationResult.NeedsGameUninstall -> {
+                mutableState.value = mutableState.value.copy(
+                    patchInProgress = false,
+                    patchStage = PatchStage.AwaitingGameUninstall,
+                    patchTransactionId = result.transactionId,
+                    patchStatus = "已准备好签名产物；请在系统界面卸载原版游戏。",
+                )
+                requestGameUninstall(result.transactionId)
             }
             is PatchOrchestrationResult.AwaitingSystemInstall -> {
                 mutableState.value = mutableState.value.copy(
                     patchInProgress = false,
                     patchStage = PatchStage.AwaitingSystemInstall,
+                    patchTransactionId = result.transactionId,
                     patchStatus = "等待系统完成安装…",
                 )
             }
             is PatchOrchestrationResult.NeedsUserAction -> {
                 mutableState.value = mutableState.value.copy(
-                    patchStatus = "需要你在系统界面中确认安装。",
+                    patchInProgress = false,
+                    patchStage = PatchStage.AwaitingSystemInstall,
+                    patchTransactionId = result.transactionId,
+                    patchStatus = "正在打开系统安装确认…",
                 )
+                uiEventChannel.trySend(ManagerUiEvent.ConfirmPackageInstall(result.intent))
             }
             is PatchOrchestrationResult.AwaitingVerification -> {
                 mutableState.value = mutableState.value.copy(
@@ -433,6 +520,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                 mutableState.value = mutableState.value.copy(
                     patchInProgress = false,
                     patchStage = PatchStage.Completed,
+                    patchTransactionId = result.transactionId,
                     patchStatus = "迁移完成。请冷启动游戏验证。",
                     feedback = FeedbackMessage("迁移完成。请退出游戏后重新启动以加载 Mod 支持。"),
                 )
@@ -442,6 +530,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                 mutableState.value = mutableState.value.copy(
                     patchInProgress = false,
                     patchStage = PatchStage.Failed,
+                    patchTransactionId = result.transactionId,
                     patchStatus = result.reason,
                     feedback = FeedbackMessage("迁移失败：${result.reason}", isError = true),
                 )

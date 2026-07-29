@@ -5,7 +5,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentSender
 import android.content.pm.PackageInstaller
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import java.io.File
 import java.io.FileInputStream
 
@@ -32,6 +34,11 @@ data class PackageInstallStatus(
 class PackageInstallerGateway(private val context: Context) {
     fun canRequestInstalls(): Boolean = Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
         context.packageManager.canRequestPackageInstalls()
+
+    fun unknownSourcesSettingsIntent(): Intent = Intent(
+        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+        Uri.parse("package:${context.packageName}"),
+    )
 
     fun statusReceiver(transactionId: String): IntentSender {
         val intent = Intent(context, PatchInstallReceiver::class.java)

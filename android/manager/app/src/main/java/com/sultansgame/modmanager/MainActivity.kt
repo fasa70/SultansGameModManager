@@ -1,5 +1,7 @@
 package com.sultansgame.modmanager
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -50,8 +52,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.launch
 import com.sultansgame.modmanager.model.PatchConfirmation
 import com.sultansgame.modmanager.model.WorkshopAvailability
 import com.sultansgame.modmanager.platform.game.GameProbeResult
@@ -77,9 +83,29 @@ class MainActivity : ComponentActivity() {
     private val selectModZip = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let(viewModel::importZip)
     }
+    private val uninstallOriginalGame = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        viewModel.state.value.patchTransactionId?.let(viewModel::continueAfterGameUninstall)
+    }
+    private val configureUnknownSources = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        viewModel.refreshInstallPermission()
+    }
+    private val confirmPackageInstall = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.uiEvents.collect { event ->
+                    when (event) {
+                        is ManagerUiEvent.OpenGameUninstall -> uninstallOriginalGame.launch(
+                            Intent(Intent.ACTION_DELETE, Uri.parse("package:com.gametree.sultan.pd")),
+                        )
+                        is ManagerUiEvent.OpenUnknownSourcesSettings -> configureUnknownSources.launch(event.intent)
+                        is ManagerUiEvent.ConfirmPackageInstall -> confirmPackageInstall.launch(event.intent)
+                    }
+                }
+            }
+        }
         setContent {
             MiuixTheme(controller = remember { ThemeController(ColorSchemeMode.System) }) {
                 val state by viewModel.state.collectAsStateWithLifecycle()
@@ -702,6 +728,8 @@ private fun PatchScreen(
         confirmation.permits(classification?.mode ?: return)
     val patchStage = state.patchStage
     val isInProgress = state.patchInProgress || patchStage == com.sultansgame.modmanager.model.PatchStage.AwaitingSystemInstall
+    val canResumePatch = patchStage == com.sultansgame.modmanager.model.PatchStage.AwaitingGameUninstall ||
+        patchStage == com.sultansgame.modmanager.model.PatchStage.AwaitingInstallPermission
 
     ScreenList(wide) {
         item {
@@ -796,6 +824,16 @@ private fun PatchScreen(
         item {
             if (isInProgress) {
                 LoadingPanel(state.patchStatus ?: "正在处理安装事务…")
+            } else if (patchStage == com.sultansgame.modmanager.model.PatchStage.AwaitingGameUninstall) {
+                NoticeStrip(
+                    "等待卸载原版游戏",
+                    state.patchStatus ?: "请在系统界面卸载原版游戏；返回后将继续安装已准备好的签名产物。",
+                )
+            } else if (patchStage == com.sultansgame.modmanager.model.PatchStage.AwaitingInstallPermission) {
+                NoticeStrip(
+                    "需要安装授权",
+                    state.patchStatus ?: "请在系统设置中允许 Manager 安装未知应用。",
+                )
             } else if (patchStage == com.sultansgame.modmanager.model.PatchStage.Completed) {
                 NoticeStrip("迁移完成", state.patchStatus ?: "请退出并冷启动游戏以加载 Mod 支持。")
             } else if (patchStage == com.sultansgame.modmanager.model.PatchStage.Failed) {
@@ -804,8 +842,12 @@ private fun PatchScreen(
         }
         item {
             PrimaryButton(
-                label = "开始迁移",
-                enabled = canBegin,
+                label = when (patchStage) {
+                    com.sultansgame.modmanager.model.PatchStage.AwaitingGameUninstall -> "重新打开卸载界面"
+                    com.sultansgame.modmanager.model.PatchStage.AwaitingInstallPermission -> "打开安装权限设置"
+                    else -> "开始迁移"
+                },
+                enabled = canBegin || canResumePatch,
                 onClick = onBeginPatching,
             )
         }
