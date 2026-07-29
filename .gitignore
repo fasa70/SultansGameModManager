@@ -1,0 +1,45 @@
+# Build artifacts
+.gradle/
+.kotlin/
+**/build/
+*.apk
+!android/manager/app/src/main/assets/release/modloader-template-10005.apk
+*.aab
+*.dex
+
+# Native
+*.so
+*.dll
+*.exe
+native/build-android/
+native/build-host/
+
+# IDE
+.idea/
+.vscode/
+*.i64
+*.idb
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Sensitive
+*.keystore
+*.jks
+*.p12
+*.pem
+*.key
+/release/manager-release-password.txt
+.env
+.env.*
+local.properties
+
+# OS
+.DS_Store
+Thumbs.db
+*.bak
+*.tmp
+*.log
+**/bin/

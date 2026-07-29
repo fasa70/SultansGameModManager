@@ -1,0 +1,3 @@
+[submodule "native/third_party/dobby"]
+	path = native/third_party/dobby
+	url = https://github.com/jmpews/Dobby.git
