@@ -20,6 +20,7 @@ data class ManagerUiState(
     val deploymentPlan: List<DeploymentEntry> = emptyList(),
     val deploymentInProgress: Boolean = false,
     val gameStopSyncConfirmation: Boolean? = null,
+    val cachedModDeletionInProgress: Boolean = false,
     val cachedMods: List<CachedMod> = emptyList(),
     val workshop: WorkshopUiState = WorkshopUiState.Idle,
     val workshopBrowse: WorkshopBrowseUiState = WorkshopBrowseUiState(),
