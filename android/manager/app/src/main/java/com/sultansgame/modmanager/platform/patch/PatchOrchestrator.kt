@@ -181,8 +181,8 @@ internal class PatchOrchestrator(
     fun submitPreparedArtifacts(transactionId: String): PatchOrchestrationResult {
         val transaction = transactions.read(transactionId)
             ?: return PatchOrchestrationResult.Failed(null, PatchFailure.InternalError, "找不到待安装的修补事务。")
-        if (transaction.stage != PatchStage.AwaitingGameUninstall) {
-            return fail(transactionId, PatchFailure.InternalError, "修补事务不处于等待卸载阶段。")
+        if (transaction.stage !in setOf(PatchStage.AwaitingGameUninstall, PatchStage.AwaitingInstallPermission)) {
+            return fail(transactionId, PatchFailure.InternalError, "修补事务不处于可安装阶段。")
         }
         when (gameProbe.probe()) {
             is com.sultansgame.modmanager.platform.game.GameProbeResult.NotInstalled -> Unit
@@ -193,7 +193,10 @@ internal class PatchOrchestrator(
                 return fail(transactionId, PatchFailure.SystemInstallFailed, "无法确认原版游戏是否已卸载。")
             }
         }
-        if (!installer.canRequestInstalls()) return PatchOrchestrationResult.NeedsInstallPermission(transactionId)
+        if (!installer.canRequestInstalls()) {
+            transactions.write(transaction.copy(stage = PatchStage.AwaitingInstallPermission))
+            return PatchOrchestrationResult.NeedsInstallPermission(transactionId)
+        }
         val artifactNames = transaction.signedArtifactNames
         if (artifactNames.isEmpty() || artifactNames.distinct().size != artifactNames.size) {
             return fail(transactionId, PatchFailure.InternalError, "修补事务缺少签名 APK 集合。")

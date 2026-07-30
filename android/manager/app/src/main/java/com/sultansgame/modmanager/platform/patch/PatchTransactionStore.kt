@@ -26,18 +26,21 @@ internal class PatchTransactionStore(context: Context) {
 
     fun root(transactionId: String): File = File(root, transactionId)
 
-    fun latestAwaitingGameUninstall(): PatchTransaction? = root.listFiles()
+    fun latestResumable(): PatchTransaction? = root.listFiles()
         .orEmpty()
         .asSequence()
         .filter(File::isDirectory)
         .mapNotNull { directory -> read(directory.name)?.let { transaction -> transaction to directory } }
         .filter { (transaction, _) ->
-            transaction.stage == PatchStage.AwaitingGameUninstall &&
+            transaction.stage in RESUMABLE_STAGES &&
                 transaction.signedArtifactNames.isNotEmpty() &&
                 transaction.signedArtifactNames.distinct().size == transaction.signedArtifactNames.size
         }
         .maxByOrNull { (_, directory) -> File(directory, "transaction.properties").lastModified() }
         ?.first
+
+    fun latestAwaitingGameUninstall(): PatchTransaction? = latestResumable()
+        ?.takeIf { it.stage == PatchStage.AwaitingGameUninstall }
 
     fun write(transaction: PatchTransaction) {
         val directory = File(root, transaction.id).apply { mkdirs() }
@@ -83,5 +86,12 @@ internal class PatchTransactionStore(context: Context) {
                 )
             }
         }.getOrNull()
+    }
+
+    companion object {
+        private val RESUMABLE_STAGES = setOf(
+            PatchStage.AwaitingGameUninstall,
+            PatchStage.AwaitingInstallPermission,
+        )
     }
 }

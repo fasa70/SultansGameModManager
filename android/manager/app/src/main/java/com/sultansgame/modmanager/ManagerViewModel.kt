@@ -12,6 +12,7 @@ import com.sultansgame.modmanager.model.DownloadStage
 import com.sultansgame.modmanager.model.PatchConfirmation
 import com.sultansgame.modmanager.model.PatchSource
 import com.sultansgame.modmanager.platform.patch.AndroidApkArchiveInspector
+import com.sultansgame.modmanager.platform.patch.ApksExporter
 import com.sultansgame.modmanager.platform.patch.AndroidKeystoreApkSigner
 import com.sultansgame.modmanager.platform.patch.AndroidLoaderSplitArtifactFactory
 import com.sultansgame.modmanager.platform.patch.DeviceSigningKeyStore
@@ -58,6 +59,7 @@ sealed interface ManagerUiEvent {
     data class OpenGameUninstall(val transactionId: String) : ManagerUiEvent
     data class OpenUnknownSourcesSettings(val intent: android.content.Intent) : ManagerUiEvent
     data class ConfirmPackageInstall(val intent: android.content.Intent) : ManagerUiEvent
+    data class CreateApksExport(val transactionId: String, val suggestedName: String) : ManagerUiEvent
 }
 
 class ManagerViewModel(application: Application) : AndroidViewModel(application) {
@@ -108,19 +110,13 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     init {
         privateModCache.recoverInterruptedImports()
         val cachedMods = privateModCache.listCached()
-        val pendingPatch = transactions.latestAwaitingGameUninstall()
+        val pendingPatch = transactions.latestResumable()
         mutableState.value = mutableState.value.copy(
             cachedMods = cachedMods,
             deploymentPlan = deploymentPlan.entries(cachedMods),
             downloadTasks = taskStore.tasks.value,
             deviceSigningKeyState = deviceSigningKeyStore.state(),
-            patch = pendingPatch?.let {
-                PatchUiState.AwaitingOriginalUninstall(
-                    transactionId = it.id,
-                    gameState = null,
-                    summary = "已恢复已准备的修补工件；正在检查原版游戏状态…",
-                )
-            } ?: PatchUiState.ChooseSource,
+            patch = pendingPatch?.let(::restorePatchUiState) ?: PatchUiState.ChooseSource,
         )
         refreshGame()
         refreshGameModStorage()
@@ -446,8 +442,39 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun refreshPendingPatchState() {
-        when (mutableState.value.patch) {
+    fun exportPreparedApks(transactionId: String) {
+        val current = mutableState.value.patch
+        if (current !is PatchUiState.AwaitingOriginalUninstall &&
+            current !is PatchUiState.ReadyToInstall &&
+            current !is PatchUiState.AwaitingInstallPermission
+        ) return
+        val suggestedName = "sultans-game-patched-${transactionId.take(8)}.apks"
+        uiEventChannel.trySend(ManagerUiEvent.CreateApksExport(transactionId, suggestedName))
+    }
+
+    fun writePreparedApks(transactionId: String, uri: Uri) {
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    requireNotNull(getApplication<Application>().contentResolver.openOutputStream(uri)) {
+                        "无法写入所选导出位置。"
+                    }.use { output ->
+                        ApksExporter(transactions).export(transactionId, output)
+                    }
+                }
+            }.onSuccess {
+                mutableState.value = mutableState.value.copy(
+                    feedback = FeedbackMessage("已导出修补 APKS；请使用支持 APKS 的安装工具安装。"),
+                )
+            }.onFailure { error ->
+                mutableState.value = mutableState.value.copy(
+                    feedback = FeedbackMessage("导出 APKS 失败：${error.message ?: "无法写入文件"}", isError = true),
+                )
+            }
+        }
+    }
+
+    fun refreshPendingPatchState() {        when (mutableState.value.patch) {
             is PatchUiState.AwaitingOriginalUninstall -> refreshGame()
             else -> Unit
         }
@@ -487,6 +514,20 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun onGameUninstallResult() = refreshPendingPatchState()
+
+    private fun restorePatchUiState(transaction: com.sultansgame.modmanager.platform.patch.PatchTransaction): PatchUiState = when (transaction.stage) {
+        com.sultansgame.modmanager.model.PatchStage.AwaitingGameUninstall -> PatchUiState.AwaitingOriginalUninstall(
+            transactionId = transaction.id,
+            gameState = null,
+            summary = "已恢复已准备的修补工件；正在检查原版游戏状态…",
+        )
+        com.sultansgame.modmanager.model.PatchStage.AwaitingInstallPermission -> PatchUiState.AwaitingInstallPermission(
+            transactionId = transaction.id,
+            input = null,
+            confirmation = null,
+        )
+        else -> PatchUiState.ChooseSource
+    }
 
     private fun importPatchInput(
         progressLabel: String,
