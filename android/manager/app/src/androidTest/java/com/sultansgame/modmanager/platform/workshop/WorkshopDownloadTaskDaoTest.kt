@@ -37,7 +37,7 @@ class WorkshopDownloadTaskDaoTest {
     }
 
     @Test
-    fun `old generation cannot overwrite retried task`() = runBlocking {
+    fun oldGenerationCannotOverwriteRetriedTask() = runBlocking {
         dao.insert(task(stage = DownloadStage.Downloading, generation = 1L).toEntity())
 
         assertEquals(1, dao.requestPause(TASK_ID, 20L))
@@ -68,7 +68,7 @@ class WorkshopDownloadTaskDaoTest {
     }
 
     @Test
-    fun `completion cannot overwrite paused or cancelled task`() = runBlocking {
+    fun completionCannotOverwritePausedOrCancelledTask() = runBlocking {
         dao.insert(task(stage = DownloadStage.Downloading).toEntity())
         assertEquals(1, dao.requestPause(TASK_ID, 20L))
 
@@ -95,7 +95,7 @@ class WorkshopDownloadTaskDaoTest {
     }
 
     @Test
-    fun `only one caller claims import`() = runBlocking {
+    fun onlyOneCallerClaimsImport() = runBlocking {
         dao.insert(task(stage = DownloadStage.AwaitingImportConfirmation).copy(
             rawArtifactDigestSha256 = "b".repeat(64),
             completedFileCount = 1,
@@ -111,7 +111,7 @@ class WorkshopDownloadTaskDaoTest {
     }
 
     @Test
-    fun `interrupted active task is requeued with new generation`() = runBlocking {
+    fun interruptedActiveTaskIsRequeuedWithNewGeneration() = runBlocking {
         dao.insert(task(stage = DownloadStage.Downloading, generation = 4L).toEntity())
 
         assertEquals(1, dao.requeueInterruptedDownloads(20L))
@@ -124,7 +124,7 @@ class WorkshopDownloadTaskDaoTest {
     }
 
     @Test
-    fun `interrupted import returns to explicit user confirmation`() = runBlocking {
+    fun interruptedImportReturnsToExplicitUserConfirmation() = runBlocking {
         dao.insert(task(stage = DownloadStage.Importing).copy(
             rawArtifactDigestSha256 = "b".repeat(64),
             completedFileCount = 3,
