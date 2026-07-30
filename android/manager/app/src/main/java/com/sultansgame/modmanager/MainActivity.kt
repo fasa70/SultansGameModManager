@@ -891,9 +891,12 @@ private fun WorkshopDetailScreen(
         }
         item {
             if (item.canDownload) {
+                item.contentManifestId?.takeIf { item.fileUrl == null }?.let {
+                    NoticeStrip("Steam 内容下载可用", "Steam 未提供公开直链；加入队列后将通过 Steam 内容服务获取该条目。")
+                }
                 PrimaryButton("加入下载队列") { onQueueDownload(item) }
             } else {
-                NoticeStrip("当前不可下载", "Steam 没有为此条目提供可验证的公开下载信息。")
+                NoticeStrip("当前不可下载", "Steam 未提供可验证的安全直链或内容清单。")
             }
         }
     }
@@ -1563,10 +1566,24 @@ private fun WorkshopArtworkThumbnail(
     modifier: Modifier = Modifier,
     contentScale: ContentScale = ContentScale.Crop,
 ) {
-    val previewUrl = remember(item.previewUrl) {
-        com.sultansgame.modmanager.workshop.WorkshopHttpPolicy.normalizePreviewImageUrl(item.previewUrl)
+    // GPLv3 adaptation of Workshop-Native ArtworkThumbnail's candidate retry.
+    // Candidate URLs remain subject to this project's strict Steam preview policy.
+    val candidateUrls = remember(item.previewUrl) {
+        buildList {
+            fun addCandidate(url: String?) {
+                val normalized = com.sultansgame.modmanager.workshop.WorkshopHttpPolicy.normalizePreviewImageUrl(url)
+                if (normalized != null) add(normalized)
+                if (normalized?.contains("/capsule_616x353.jpg") == true) {
+                    com.sultansgame.modmanager.workshop.WorkshopHttpPolicy
+                        .normalizePreviewImageUrl(normalized.replace("/capsule_616x353.jpg", "/header.jpg"))
+                        ?.let(::add)
+                }
+            }
+            addCandidate(item.previewUrl)
+        }.distinct()
     }
-    var imageFailed by remember(previewUrl) { mutableStateOf(false) }
+    var candidateIndex by remember(candidateUrls) { mutableIntStateOf(0) }
+    val previewUrl = candidateUrls.getOrNull(candidateIndex)
     Box(
         modifier.clip(RoundedCornerShape(12.dp)).background(MiuixTheme.colorScheme.surfaceVariant),
         contentAlignment = Alignment.Center,
@@ -1577,7 +1594,7 @@ private fun WorkshopArtworkThumbnail(
             fontWeight = FontWeight.Bold,
             color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
         )
-        if (previewUrl != null && !imageFailed) {
+        if (previewUrl != null) {
             AsyncImage(
                 model = ImageRequest.Builder(androidx.compose.ui.platform.LocalContext.current)
                     .data(previewUrl)
@@ -1586,7 +1603,9 @@ private fun WorkshopArtworkThumbnail(
                 contentDescription = "${item.title} 的创意工坊封面",
                 contentScale = contentScale,
                 modifier = Modifier.fillMaxSize(),
-                onError = { imageFailed = true },
+                onError = {
+                    if (candidateIndex < candidateUrls.lastIndex) candidateIndex += 1
+                },
             )
         }
     }

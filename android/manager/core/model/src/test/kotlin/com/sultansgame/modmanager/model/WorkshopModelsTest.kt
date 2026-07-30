@@ -1,8 +1,10 @@
 package com.sultansgame.modmanager.model
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WorkshopModelsTest {
@@ -52,5 +54,29 @@ class WorkshopModelsTest {
         assertEquals(20L, normalized.createdDateRange.endEpochSeconds)
         assertEquals(1, normalized.page)
         assertEquals(WorkshopBrowseQuery.DEFAULT_PAGE_SIZE, normalized.pageSize)
+    }
+
+    @Test
+    fun `workshop item accepts either a direct url or a Steam content manifest`() {
+        val id = PublishedFileId.parse("123")!!
+        val noDownload = WorkshopItem(
+            appId = SULTANS_GAME_APP_ID,
+            publishedFileId = id,
+            title = "Test",
+            updatedAtEpochSeconds = null,
+            fileUrl = null,
+            previewUrl = null,
+            declaredSizeBytes = null,
+            availability = WorkshopAvailability.Unavailable,
+        )
+        val directDownload = noDownload.copy(fileUrl = "https://steamusercontent-a.akamaihd.net/mod.zip")
+        val manifestDownload = noDownload.copy(contentManifestId = 123456789uL)
+
+        assertFalse(noDownload.canDownload)
+        assertTrue(directDownload.canDirectDownload)
+        assertTrue(directDownload.canDownload)
+        assertTrue(manifestDownload.canSteamContentDownload)
+        assertTrue(manifestDownload.canDownload)
+        assertFalse(noDownload.copy(contentManifestId = 0u).canSteamContentDownload)
     }
 }

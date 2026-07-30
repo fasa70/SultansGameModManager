@@ -14,6 +14,14 @@ The adaptation changes its package names and connects it to this project's
 App ID and domain models; its compatibility-oriented HTML/SSR/DOM parsing
 logic is preserved.
 
+The Workshop artwork retry logic in
+`android/manager/app/src/main/java/com/sultansgame/modmanager/MainActivity.kt`
+is adapted from Workshop-Native's
+`app/src/main/java/com/slay/workshopnative/ui/components/ArtworkThumbnail.kt`
+at the same commit and archive. This project retains only the ordered
+candidate retry behavior and revalidates every candidate with its stricter
+Steam HTTPS preview-image policy.
+
 The Steam Guard interaction state handling in
 `android/manager/app/src/main/java/com/sultansgame/modmanager/platform/auth/SteamCmAuthProvider.kt`
 was additionally adapted from the code-challenge flow in Workshop-Native's

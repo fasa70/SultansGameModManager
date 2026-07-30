@@ -56,6 +56,7 @@ class SteamPublicMetadataTransport : PublicWorkshopMetadataTransport {
             description = detail.optString("description").takeIf(String::isNotBlank),
             timeCreatedEpochSeconds = detail.optLong("time_created", -1).takeIf { it >= 0 },
             creatorSteamId = detail.optString("creator").toULongOrNull(),
+            contentManifestId = detail.optString("hcontent_file").toULongOrNull()?.takeIf { it > 0u },
             tags = detail.optJSONArray("tags")?.let { tags ->
                 buildList {
                     for (index in 0 until tags.length()) {

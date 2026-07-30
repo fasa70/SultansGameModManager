@@ -33,6 +33,78 @@ class SteamPublicWorkshopProviderTest {
     }
 
     @Test
+    fun `accepts a Steam content manifest when no public direct url is available`() {
+        val provider = SteamPublicWorkshopProvider(FakeTransport(
+            PublicWorkshopMetadata(
+                consumerAppId = 3117820u,
+                publishedFileId = itemId,
+                resultCode = 1,
+                title = "Steam 内容 Mod",
+                fileUrl = null,
+                previewUrl = null,
+                updatedAtEpochSeconds = null,
+                declaredSizeBytes = null,
+                contentManifestId = 123456789uL,
+            ),
+        ))
+
+        val item = (provider.getItem(3117820u, itemId, WorkshopAccessMode.Anonymous) as WorkshopLookupResult.Available).item
+
+        assertEquals(WorkshopAvailability.PublicDownloadAvailable, item.availability)
+        assertNull(item.fileUrl)
+        assertEquals(123456789uL, item.contentManifestId)
+        assertFalse(item.canDirectDownload)
+        assertTrue(item.canSteamContentDownload)
+        assertTrue(item.canDownload)
+    }
+
+    @Test
+    fun `uses a valid manifest without trusting an unsafe direct url`() {
+        val provider = SteamPublicWorkshopProvider(FakeTransport(
+            PublicWorkshopMetadata(
+                consumerAppId = 3117820u,
+                publishedFileId = itemId,
+                resultCode = 1,
+                title = "Steam 内容 Mod",
+                fileUrl = "http://127.0.0.1/archive.zip",
+                previewUrl = null,
+                updatedAtEpochSeconds = null,
+                declaredSizeBytes = null,
+                contentManifestId = 123456789uL,
+            ),
+        ))
+
+        val item = (provider.getItem(3117820u, itemId, WorkshopAccessMode.Anonymous) as WorkshopLookupResult.Available).item
+
+        assertEquals(WorkshopAvailability.PublicDownloadAvailable, item.availability)
+        assertNull(item.fileUrl)
+        assertTrue(item.canSteamContentDownload)
+    }
+
+    @Test
+    fun `rejects a manifest returned with a failed metadata result`() {
+        val provider = SteamPublicWorkshopProvider(FakeTransport(
+            PublicWorkshopMetadata(
+                consumerAppId = 3117820u,
+                publishedFileId = itemId,
+                resultCode = 15,
+                title = "不可用",
+                fileUrl = null,
+                previewUrl = null,
+                updatedAtEpochSeconds = null,
+                declaredSizeBytes = null,
+                contentManifestId = 123456789uL,
+            ),
+        ))
+
+        val item = (provider.getItem(3117820u, itemId, WorkshopAccessMode.Anonymous) as WorkshopLookupResult.Available).item
+
+        assertEquals(WorkshopAvailability.Unavailable, item.availability)
+        assertNull(item.contentManifestId)
+        assertFalse(item.canDownload)
+    }
+
+    @Test
     fun `rejects metadata for a different game`() {
         val provider = SteamPublicWorkshopProvider(FakeTransport(
             PublicWorkshopMetadata(
@@ -137,6 +209,10 @@ class SteamPublicWorkshopProviderTest {
         assertNull(WorkshopHttpPolicy.normalizePreviewImageUrl("http://steamusercontent-a.akamaihd.net.evil.test/preview.jpg"))
         assertNull(WorkshopHttpPolicy.normalizePreviewImageUrl("http://127.0.0.1/preview.jpg"))
         assertNull(WorkshopHttpPolicy.normalizePreviewImageUrl("http://user@steamusercontent-a.akamaihd.net/preview.jpg"))
+        assertEquals(
+            "https://images.steamusercontent.com/ugc/123/preview.jpg",
+            WorkshopHttpPolicy.normalizePreviewImageUrl("https://images.steamusercontent.com/ugc/123/preview.jpg"),
+        )
     }
 
     @Test

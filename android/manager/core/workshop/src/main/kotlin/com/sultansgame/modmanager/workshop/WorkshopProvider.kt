@@ -31,6 +31,7 @@ object WorkshopHttpPolicy {
     private val previewImageHosts = setOf(
         "steamusercontent-a.akamaihd.net",
         "images.akamai.steamusercontent.com",
+        "images.steamusercontent.com",
         "steamuserimages-a.akamaihd.net",
     )
 

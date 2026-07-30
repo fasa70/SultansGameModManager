@@ -19,6 +19,7 @@ data class PublicWorkshopMetadata(
     val description: String? = null,
     val timeCreatedEpochSeconds: Long? = null,
     val creatorSteamId: ULong? = null,
+    val contentManifestId: ULong? = null,
     val tags: List<String> = emptyList(),
 )
 
@@ -51,8 +52,13 @@ class SteamPublicWorkshopProvider(
         if (metadata.consumerAppId != appId || metadata.publishedFileId != publishedFileId) {
             return WorkshopLookupResult.Unavailable("Workshop 元数据与请求不匹配。")
         }
-        val available = metadata.resultCode == RESULT_OK &&
-            metadata.fileUrl != null && WorkshopHttpPolicy.isAllowedArtifactUrl(metadata.fileUrl)
+        val safeDirectFileUrl = metadata.fileUrl?.takeIf {
+            metadata.resultCode == RESULT_OK && WorkshopHttpPolicy.isAllowedArtifactUrl(it)
+        }
+        val contentManifestId = metadata.contentManifestId?.takeIf {
+            metadata.resultCode == RESULT_OK && it > 0u
+        }
+        val available = safeDirectFileUrl != null || contentManifestId != null
         val availability = when {
             available -> WorkshopAvailability.PublicDownloadAvailable
             else -> WorkshopAvailability.Unavailable
@@ -64,7 +70,7 @@ class SteamPublicWorkshopProvider(
                 publishedFileId = publishedFileId,
                 title = metadata.title.orEmpty().ifBlank { "Workshop 条目 $publishedFileId" },
                 updatedAtEpochSeconds = metadata.updatedAtEpochSeconds,
-                fileUrl = metadata.fileUrl?.takeIf(WorkshopHttpPolicy::isAllowedArtifactUrl),
+                fileUrl = safeDirectFileUrl,
                 previewUrl = WorkshopHttpPolicy.normalizePreviewImageUrl(metadata.previewUrl)
                     ?: WorkshopHttpPolicy.normalizePreviewImageUrl(detail?.previewUrl),
                 declaredSizeBytes = metadata.declaredSizeBytes?.takeIf { it >= 0 },
@@ -76,6 +82,7 @@ class SteamPublicWorkshopProvider(
                 detailUrl = detailUrlFor(publishedFileId),
                 createdAtEpochSeconds = metadata.timeCreatedEpochSeconds,
                 creatorSteamId = metadata.creatorSteamId,
+                contentManifestId = contentManifestId,
                 tags = metadata.tags,
                 isDownloadInfoResolved = true,
             ),
