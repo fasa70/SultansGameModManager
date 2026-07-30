@@ -250,12 +250,14 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             mutableState.value = mutableState.value.copy(feedback = FeedbackMessage("正在校验并导入 ZIP Mod…"))
             runCatching { withContext(Dispatchers.IO) { zipImporter.importZip(uri) } }
-                .onSuccess { cached ->
-                    val cachedMods = (mutableState.value.cachedMods + cached).distinctBy { it.cacheKey }
+                .onSuccess { imported ->
+                    val cachedMods = (mutableState.value.cachedMods + imported).distinctBy { it.cacheKey }
                     mutableState.value = mutableState.value.copy(
                         cachedMods = cachedMods,
                         deploymentPlan = deploymentPlan.entries(cachedMods),
-                        feedback = FeedbackMessage("已安全缓存 ${cached.displayName}；可在 Mod 页面启用并同步到游戏。"),
+                        feedback = FeedbackMessage(
+                            "已安全缓存 ${imported.size} 个 Mod：${imported.joinToString { it.displayName }}；可在 Mod 页面启用并同步到游戏。",
+                        ),
                     )
                 }
                 .onFailure { error ->

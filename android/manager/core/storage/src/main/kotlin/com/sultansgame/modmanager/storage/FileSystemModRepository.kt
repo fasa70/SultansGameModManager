@@ -105,7 +105,7 @@ class FileSystemModRepository : ModRepository {
                             rejected += RejectedEntry(entry.toString(), RejectionReason.ReadFailure)
                             return@forEach
                         }
-                        if (size > MAXIMUM_MOD_FILE_SIZE_BYTES) {
+                        if (!ModPathPolicy.isSupportedSize(size, relative)) {
                             rejected += RejectedEntry(entry.toString(), RejectionReason.FileTypeOrSize)
                             return@forEach
                         }

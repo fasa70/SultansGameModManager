@@ -55,12 +55,11 @@ class AndroidPrivateModCache(private val cacheRoot: File) {
             ?.forEach(File::deleteRecursively)
     }
     fun importDirectory(sourceRoot: File, source: CacheSource): CachedMod {
-        if (!sourceRoot.isDirectory || isSymbolicLink(sourceRoot)) throw ImportValidationException("Mod 根目录不可读")
+        val validated = validateDirectory(sourceRoot)
         if (!cacheRoot.mkdirs() && !cacheRoot.isDirectory) throw ImportValidationException("无法创建私有缓存目录")
         val staging = File(cacheRoot, ".${UUID.randomUUID()}.partial")
         try {
             copyDirectory(sourceRoot, staging, 0)
-            val validated = validate(staging)
             val destination = File(cacheRoot, validated.digest)
             if (!destination.exists() && !staging.renameTo(destination)) throw ImportValidationException("无法提交私有缓存")
             if (destination.exists() && staging.exists()) staging.deleteRecursively()
@@ -77,6 +76,11 @@ class AndroidPrivateModCache(private val cacheRoot: File) {
             staging.deleteRecursively()
             throw error
         }
+    }
+
+    fun validateDirectory(sourceRoot: File): AndroidValidatedMod {
+        if (!sourceRoot.isDirectory || isSymbolicLink(sourceRoot)) throw ImportValidationException("Mod 根目录不可读")
+        return validate(sourceRoot)
     }
 
     private fun copyDirectory(source: File, target: File, depth: Int) {
@@ -117,7 +121,7 @@ class AndroidPrivateModCache(private val cacheRoot: File) {
                     entry.isFile -> {
                         if (++count > MAXIMUM_MOD_ENTRY_COUNT) throw ImportValidationException("文件数量超出限制")
                         val size = entry.length()
-                        if (!ModPathPolicy.isSupportedSize(size)) throw ImportValidationException("文件大小超出限制")
+                        if (!ModPathPolicy.isSupportedSize(size, relative)) throw ImportValidationException("文件大小超出限制")
                         total = Math.addExact(total, size)
                         if (total > MAXIMUM_MOD_TOTAL_SIZE_BYTES) throw ImportValidationException("总大小超出限制")
                         entries += "$relative\t$size\t${sha256(entry)}"
