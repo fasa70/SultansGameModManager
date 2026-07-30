@@ -99,9 +99,6 @@ internal class PatchOrchestrator(
                 "继续前必须确认安装风险${if (classification.mode == PatchMode.Experimental) "、已备份存档和兼容性风险" else "与密钥恢复限制"}。",
             )
         }
-        if (!installer.canRequestInstalls()) {
-            return PatchOrchestrationResult.NeedsInstallPermission()
-        }
         if (keyStore.state() == com.sultansgame.modmanager.model.DeviceSigningKeyState.MissingAfterMigration) {
             return fail(extracted.transactionId, PatchFailure.DeviceKeyMissing, "设备签名密钥已丢失，必须卸载旧迁移版游戏后重新迁移。")
         }

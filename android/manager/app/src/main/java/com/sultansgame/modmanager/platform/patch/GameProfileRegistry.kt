@@ -21,34 +21,20 @@ internal class GameProfileRegistry(
         trustedDeviceCertificateSha256: String? = null,
     ): PatchInputClassification {
         if (base.packageName != TARGET_PACKAGE) {
-            return PatchInputClassification(
-                source = source,
-                mode = PatchMode.Experimental,
-                profileId = null,
-                compatibility = CompatibilityReport(
-                    Compatibility.Unsupported,
-                    listOf("包名不是目标游戏。"),
-                ),
-            )
+            return unsupported(source, "包名不是目标游戏。")
         }
         if (REQUIRED_ABI !in base.supportedAbis) {
-            return PatchInputClassification(
-                source = source,
-                mode = PatchMode.Experimental,
-                profileId = null,
-                compatibility = CompatibilityReport(
-                    Compatibility.Unsupported,
-                    listOf("APK 不包含 $REQUIRED_ABI。"),
-                ),
-            )
+            return unsupported(source, "APK 不包含 $REQUIRED_ABI。")
         }
         val profile = profiles.firstOrNull { candidate ->
-            candidate.matchesVerified(base) ||
-                (trustedDeviceCertificateSha256 != null &&
-                    base.packageName in candidate.packageNames &&
-                    candidate.requiredAbi in base.supportedAbis &&
-                    base.versionCode in candidate.versionCodes &&
-                    trustedDeviceCertificateSha256 in base.signerDigestsSha256)
+            candidate.isComplete() && (
+                candidate.matchesVerified(base) ||
+                    (trustedDeviceCertificateSha256 != null &&
+                        base.packageName in candidate.packageNames &&
+                        candidate.requiredAbi in base.supportedAbis &&
+                        base.versionCode in candidate.versionCodes &&
+                        trustedDeviceCertificateSha256 in base.signerDigestsSha256)
+                )
         }
         return if (profile != null) {
             PatchInputClassification(
@@ -58,21 +44,28 @@ internal class GameProfileRegistry(
                 compatibility = CompatibilityReport(Compatibility.Candidate, emptyList()),
             )
         } else {
-            PatchInputClassification(
-                source = source,
-                mode = PatchMode.Experimental,
-                profileId = null,
-                compatibility = CompatibilityReport(
-                    Compatibility.Unverified,
-                    listOf("未命中已冻结的官方 profile；兼容性未经验证，请确认已备份存档。"),
-                ),
-            )
+            unsupported(source, "未命中可安全修补的已冻结游戏 profile。")
         }
     }
+
+    private fun unsupported(source: PatchSource, reason: String) = PatchInputClassification(
+        source = source,
+        mode = PatchMode.Experimental,
+        profileId = null,
+        compatibility = CompatibilityReport(Compatibility.Unsupported, listOf(reason)),
+    )
+
+    private fun GameProfile.isComplete(): Boolean =
+        loaderSplitName.isNotBlank() &&
+            loaderTemplateSha256.isSha256() &&
+            nativeLoaderSha256.isSha256()
+
+    private fun String?.isSha256(): Boolean = this?.matches(SHA256_PATTERN) == true
 
     private companion object {
         const val TARGET_PACKAGE = "com.gametree.sultan.pd"
         const val REQUIRED_ABI = "arm64-v8a"
+        val SHA256_PATTERN = Regex("[0-9a-f]{64}", RegexOption.IGNORE_CASE)
         val OFFICIAL_10005 = GameProfile(
             id = "official-android-2026-07-27",
             packageNames = setOf(TARGET_PACKAGE),

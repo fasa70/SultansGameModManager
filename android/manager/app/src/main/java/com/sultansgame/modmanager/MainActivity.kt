@@ -83,6 +83,12 @@ class MainActivity : ComponentActivity() {
     private val selectModZip = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let(viewModel::importZip)
     }
+    private val selectLocalApk = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let { viewModel.importLocalApk(it, displayNameFor(it)) }
+    }
+    private val selectLocalApkSet = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let { viewModel.importLocalApkSet(it, displayNameFor(it)) }
+    }
     private val uninstallOriginalGame = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         viewModel.onGameUninstallResult()
     }
@@ -114,6 +120,15 @@ class MainActivity : ComponentActivity() {
                     state = state,
                     onRefreshGame = viewModel::refreshGame,
                     onImportMod = { selectModZip.launch(arrayOf("application/zip", "application/x-zip-compressed")) },
+                    onImportLocalApk = { selectLocalApk.launch(arrayOf("application/vnd.android.package-archive", "application/octet-stream")) },
+                    onImportLocalApkSet = { selectLocalApkSet.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) },
+                    onSelectInstalledGame = viewModel::selectInstalledGameSource,
+                    onPreparePatch = viewModel::preparePatchArtifacts,
+                    onRefreshPendingPatch = viewModel::refreshPendingPatchState,
+                    onRequestOriginalUninstall = viewModel::requestOriginalGameUninstall,
+                    onInstallPreparedArtifacts = viewModel::installPreparedArtifacts,
+                    onOpenUnknownSourcesSettings = viewModel::openUnknownSourcesSettings,
+                    onRestartPatch = viewModel::restartPatchFlow,
                     onLookupWorkshop = viewModel::lookupWorkshop,
                     onBeginSteamLogin = viewModel::beginSteamLogin,
                     onSubmitSteamGuard = viewModel::submitSteamGuard,
@@ -131,16 +146,22 @@ class MainActivity : ComponentActivity() {
                     onMoveMod = viewModel::moveMod,
                     onSyncMods = viewModel::syncMods,
                     onClearFeedback = viewModel::clearFeedback,
-                    onBeginPatching = viewModel::beginPatching,
                     onUpdatePatchConfirmation = viewModel::updatePatchConfirmation,
-                    onConfirmInstallPermissionExplanation = viewModel::confirmInstallPermissionExplanation,
-                    onDismissInstallPermissionExplanation = viewModel::dismissInstallPermissionExplanation,
-                    onConfirmGameUninstallExplanation = viewModel::confirmGameUninstallExplanation,
-                    onDismissGameUninstallExplanation = viewModel::dismissGameUninstallExplanation,
                 )
             }
         }
     }
+
+    private fun displayNameFor(uri: Uri): String = contentResolver.query(
+        uri,
+        arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
+        null,
+        null,
+        null,
+    )?.use { cursor ->
+        cursor.takeIf { it.moveToFirst() }
+            ?.getString(cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME))
+    } ?: uri.lastPathSegment ?: "所选文件"
 }
 
 @Composable
@@ -148,6 +169,15 @@ private fun ManagerApp(
     state: ManagerUiState,
     onRefreshGame: () -> Unit,
     onImportMod: () -> Unit,
+    onImportLocalApk: () -> Unit,
+    onImportLocalApkSet: () -> Unit,
+    onSelectInstalledGame: () -> Unit,
+    onPreparePatch: () -> Unit,
+    onRefreshPendingPatch: () -> Unit,
+    onRequestOriginalUninstall: (String) -> Unit,
+    onInstallPreparedArtifacts: (String) -> Unit,
+    onOpenUnknownSourcesSettings: () -> Unit,
+    onRestartPatch: () -> Unit,
     onLookupWorkshop: (String) -> Unit,
     onBeginSteamLogin: (String, String) -> Unit,
     onSubmitSteamGuard: (String) -> Unit,
@@ -165,12 +195,7 @@ private fun ManagerApp(
     onMoveMod: (String, Int) -> Unit,
     onSyncMods: (Boolean) -> Unit,
     onClearFeedback: () -> Unit,
-    onBeginPatching: () -> Unit,
     onUpdatePatchConfirmation: (PatchConfirmation) -> Unit,
-    onConfirmInstallPermissionExplanation: () -> Unit,
-    onDismissInstallPermissionExplanation: () -> Unit,
-    onConfirmGameUninstallExplanation: () -> Unit,
-    onDismissGameUninstallExplanation: () -> Unit,
 ) {
     var destinationIndex by remember { mutableIntStateOf(0) }
     var dialog by remember { mutableStateOf<DialogKind?>(null) }
@@ -203,7 +228,15 @@ private fun ManagerApp(
                     onMoveMod = onMoveMod,
                     onSyncMods = onSyncMods,
                     onShowDialog = { dialog = it },
-                    onBeginPatching = onBeginPatching,
+                    onImportLocalApk = onImportLocalApk,
+                    onImportLocalApkSet = onImportLocalApkSet,
+                    onSelectInstalledGame = onSelectInstalledGame,
+                    onPreparePatch = onPreparePatch,
+                    onRefreshPendingPatch = onRefreshPendingPatch,
+                    onRequestOriginalUninstall = onRequestOriginalUninstall,
+                    onInstallPreparedArtifacts = onInstallPreparedArtifacts,
+                    onOpenUnknownSourcesSettings = onOpenUnknownSourcesSettings,
+                    onRestartPatch = onRestartPatch,
                     onUpdatePatchConfirmation = onUpdatePatchConfirmation,
                 )
             }
@@ -232,7 +265,15 @@ private fun ManagerApp(
                     onMoveMod = onMoveMod,
                     onSyncMods = onSyncMods,
                     onShowDialog = { dialog = it },
-                    onBeginPatching = onBeginPatching,
+                    onImportLocalApk = onImportLocalApk,
+                    onImportLocalApkSet = onImportLocalApkSet,
+                    onSelectInstalledGame = onSelectInstalledGame,
+                    onPreparePatch = onPreparePatch,
+                    onRefreshPendingPatch = onRefreshPendingPatch,
+                    onRequestOriginalUninstall = onRequestOriginalUninstall,
+                    onInstallPreparedArtifacts = onInstallPreparedArtifacts,
+                    onOpenUnknownSourcesSettings = onOpenUnknownSourcesSettings,
+                    onRestartPatch = onRestartPatch,
                     onUpdatePatchConfirmation = onUpdatePatchConfirmation,
                 )
                 CompactNavigation(destinationIndex) { destinationIndex = it }
@@ -244,25 +285,6 @@ private fun ManagerApp(
     if (state.noticeAccepted == null) PreparingNoticeDialog()
     else if (state.noticeAccepted == false) LegalNoticeDialog(onAcceptNotice)
 
-    if (state.showGameUninstallExplanation) {
-        ConfirmDialog(
-            title = "需要先卸载原版游戏",
-            body = "原版游戏与修补版本的签名不同，Android 不允许直接覆盖安装。Manager 已将重签的游戏 base APK、原有 split 和 loader split 安全暂存。继续会打开 Android 系统卸载界面，必须由你在系统界面确认卸载原版游戏；系统确认卸载成功后，Manager 才会继续安装修补版本。取消不会卸载游戏或删除已暂存的修补产物。",
-            confirmLabel = "打开系统卸载界面",
-            onConfirm = onConfirmGameUninstallExplanation,
-            onDismiss = onDismissGameUninstallExplanation,
-        )
-    }
-
-    if (state.showInstallPermissionExplanation) {
-        ConfirmDialog(
-            title = "需要允许安装未知应用",
-            body = "Manager 需要此 Android 系统授权，才能提交已重签的游戏 APK 与 loader split。授权只针对 Manager 这个来源；取消不会删除游戏、Mod 或已暂存的修补产物。完成授权后，系统仍会要求你确认安装。",
-            confirmLabel = "前往系统设置",
-            onConfirm = onConfirmInstallPermissionExplanation,
-            onDismiss = onDismissInstallPermissionExplanation,
-        )
-    }
 
     when (dialog) {
         DialogKind.Notice -> LegalNoticeDialog(onAcceptNotice) { dialog = null }
@@ -414,7 +436,15 @@ private fun ContentArea(
     onMoveMod: (String, Int) -> Unit,
     onSyncMods: (Boolean) -> Unit,
     onShowDialog: (DialogKind) -> Unit,
-    onBeginPatching: () -> Unit,
+    onImportLocalApk: () -> Unit,
+    onImportLocalApkSet: () -> Unit,
+    onSelectInstalledGame: () -> Unit,
+    onPreparePatch: () -> Unit,
+    onRefreshPendingPatch: () -> Unit,
+    onRequestOriginalUninstall: (String) -> Unit,
+    onInstallPreparedArtifacts: (String) -> Unit,
+    onOpenUnknownSourcesSettings: () -> Unit,
+    onRestartPatch: () -> Unit,
     onUpdatePatchConfirmation: (PatchConfirmation) -> Unit,
 ) {
     Column(modifier) {
@@ -448,7 +478,15 @@ private fun ContentArea(
                 wide = wideLayout,
                 state = state,
                 onShowWarning = { onShowDialog(DialogKind.PatchWarning) },
-                onBeginPatching = onBeginPatching,
+                onImportLocalApk = onImportLocalApk,
+                onImportLocalApkSet = onImportLocalApkSet,
+                onSelectInstalledGame = onSelectInstalledGame,
+                onPrepare = onPreparePatch,
+                onRefreshPending = onRefreshPendingPatch,
+                onRequestUninstall = onRequestOriginalUninstall,
+                onInstallPrepared = onInstallPreparedArtifacts,
+                onOpenUnknownSourcesSettings = onOpenUnknownSourcesSettings,
+                onRestart = onRestartPatch,
                 onUpdateConfirmation = onUpdatePatchConfirmation,
             )
             Destination.Settings -> SettingsScreen(state, wideLayout, onShowDialog)
@@ -732,169 +770,137 @@ private fun PatchScreen(
     wide: Boolean,
     state: ManagerUiState,
     onShowWarning: () -> Unit,
-    onBeginPatching: () -> Unit,
+    onImportLocalApk: () -> Unit,
+    onImportLocalApkSet: () -> Unit,
+    onSelectInstalledGame: () -> Unit,
+    onPrepare: () -> Unit,
+    onRefreshPending: () -> Unit,
+    onRequestUninstall: (String) -> Unit,
+    onInstallPrepared: (String) -> Unit,
+    onOpenUnknownSourcesSettings: () -> Unit,
+    onRestart: () -> Unit,
     onUpdateConfirmation: (PatchConfirmation) -> Unit,
 ) {
-    val deviceKeyState = state.deviceSigningKeyState
-    val keyStatus = when (deviceKeyState) {
-        com.sultansgame.modmanager.model.DeviceSigningKeyState.NotCreated -> "首次迁移时创建"
+    val keyStatus = when (state.deviceSigningKeyState) {
+        com.sultansgame.modmanager.model.DeviceSigningKeyState.NotCreated -> "首次准备时创建"
         com.sultansgame.modmanager.model.DeviceSigningKeyState.Ready -> "可复用"
         com.sultansgame.modmanager.model.DeviceSigningKeyState.MissingAfterMigration -> "已丢失"
         null -> "正在检查"
     }
-    val classification = state.patchClassification
-    val isExperimental = classification?.mode == com.sultansgame.modmanager.model.PatchMode.Experimental
-    val inputStatus = when (classification?.mode) {
-        com.sultansgame.modmanager.model.PatchMode.Verified -> "已验证 · 官方 1.0.5"
-        com.sultansgame.modmanager.model.PatchMode.Experimental -> "未验证版本"
-        null -> "等待读取游戏"
-    }
-    val confirmation = state.patchConfirmation
-    val canBegin = classification != null &&
-        deviceKeyState != com.sultansgame.modmanager.model.DeviceSigningKeyState.MissingAfterMigration &&
-        state.gameProbeResult is com.sultansgame.modmanager.platform.game.GameProbeResult.Found &&
-        !state.patchInProgress &&
-        confirmation.permits(classification?.mode ?: return)
-    val patchStage = state.patchStage
-    val isInProgress = state.patchInProgress || patchStage == com.sultansgame.modmanager.model.PatchStage.AwaitingSystemInstall
-    val canResumePatch = patchStage == com.sultansgame.modmanager.model.PatchStage.AwaitingGameUninstall ||
-        patchStage == com.sultansgame.modmanager.model.PatchStage.AwaitingInstallPermission
-
     ScreenList(wide) {
         item {
             HeroPanel(
                 eyebrow = "安装迁移",
-                title = "设备专用签名与 split 模板已冻结",
-                body = "首次迁移会在此设备的 Android Keystore 创建不可导出的 RTA-4096 签名密钥。base APK、原有 split 与 loader split 使用同一设备证书重签并通过 v1+v2 验证。",
+                title = "按步骤准备并重装游戏",
+                body = "所有输入都会先复制到 Manager 私有目录。base APK、原有 split 与 loader split 始终使用同一设备证书重签，并在安装前后校验。",
                 action = "阅读安装前说明",
                 onAction = onShowWarning,
             )
         }
         item { SectionLabel("设备签名密钥", keyStatus) }
-        item {
-            when (deviceKeyState) {
-                com.sultansgame.modmanager.model.DeviceSigningKeyState.MissingAfterMigration -> ErrorPanel(
-                    "此前迁移记录存在，但 Android Keystore 中的设备签名密钥已丢失。必须卸载旧迁移版游戏后重新迁移，不能直接覆盖更新。",
-                )
-                com.sultansgame.modmanager.model.DeviceSigningKeyState.NotCreated -> NoticeStrip(
-                    "尚未创建密钥",
-                    "仅浏览本页不会创建密钥。开始迁移时才会在本机生成，不会上传或导出。",
-                )
-                com.sultansgame.modmanager.model.DeviceSigningKeyState.Ready -> NoticeStrip(
-                    "密钥可复用",
-                    "后续迁移会使用同一设备证书；私钥不会离开 Android Keystore。",
-                )
-                null -> LoadingPanel("正在检查设备签名状态…")
-            }
-        }
-        item { SectionLabel("目标游戏 profile", inputStatus) }
-        item {
-            if (isExperimental) {
-                ErrorPanel(
-                    "未命中已冻结的官方 profile。将以本机签名重签并安装，但兼容性未经验证，可能出现闪退、数据异常或无法启动。\n\n" +
-                        (classification?.compatibility?.reasons?.joinToString("\n") ?: ""),
-                )
-            } else {
-                NoticeStrip(
-                    "版本保护",
-                    classification?.compatibility?.reasons?.joinToString("\n")
-                        ?: "已命中官方签名、versionCode 与 native 指纹。",
-                )
-            }
-        }
-        item { SectionLabel("安装前检查", if (isInProgress) "进行中…" else "待确认") }
-        item {
-            if (wide) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                PatchStep("01", "检查 APK", "版本、ABI 与签名")
-                PatchStep("02", "验证 Split", "固定模板与 native 摘要")
-                PatchStep("03", "系统重装", "用户确认卸载后安装")
-                PatchStep("04", "启动验证", "Provider 与 Loader 状态")
-            } else Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                PatchStep("01", "检查 APK", "版本、ABI 与签名")
-                PatchStep("02", "验证 Split", "固定模板与 native 摘要")
-                PatchStep("03", "系统重装", "用户确认卸载后安装")
-                PatchStep("04", "启动验证", "Provider 与 Loader 状态")
-            }
-        }
-        item {
-            NoticeStrip(
-                "首次迁移需要系统卸载确认",
-                "官方游戏签名与设备签名不同，Android 不允许直接覆盖。Manager 会在私有目录保存完整 APK 集；你必须在系统界面确认卸载官方游戏后，才能安装设备签名的 base 与 loader split。",
-            )
-        }
-
-        // Confirmation checkboxes
-        item { SectionLabel("迁移前确认", "${if (isExperimental) 5 else 3} 项") }
-        item {
-            Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(16.dp)) {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    ConfirmationCheckbox("我已阅读安装前说明，理解这是非官方修改", confirmation.acknowledgedInstallRisk) {
-                        onUpdateConfirmation(confirmation.copy(acknowledgedInstallRisk = it))
-                    }
-                    ConfirmationCheckbox("我理解设备密钥创建后不可导出，换机需重新迁移", confirmation.acknowledgedRecoveryLimit) {
-                        onUpdateConfirmation(confirmation.copy(acknowledgedRecoveryLimit = it))
-                    }
-                    ConfirmationCheckbox("我理解首次迁移需先卸载原游戏，再安装设备签名版本", confirmation.acknowledgedReinstallRequirement) {
-                        onUpdateConfirmation(confirmation.copy(acknowledgedReinstallRequirement = it))
-                    }
-                    if (isExperimental) {
-                        ConfirmationCheckbox("我已备份游戏存档到安全位置", confirmation.confirmedBackup) {
-                            onUpdateConfirmation(confirmation.copy(confirmedBackup = it))
-                        }
-                        ConfirmationCheckbox("我理解此版本未经验证，兼容性无法保证", confirmation.confirmedExperimentalRetry) {
-                            onUpdateConfirmation(confirmation.copy(confirmedExperimentalRetry = it))
-                        }
-                    }
+        when (val patch = state.patch) {
+            PatchUiState.ChooseSource -> {
+                item { SectionLabel("步骤 1", "选择来源") }
+                item {
+                    NoticeStrip(
+                        "选择要修补的完整游戏包",
+                        "可读取当前已安装的游戏，也可导入无 split 的单个 APK，或包含 base 与全部 split 的 APKS 文件。未知或不完整版本不会进入重签与安装。",
+                    )
+                }
+                item {
+                    PrimaryButton(
+                        "使用已安装游戏",
+                        state.gameProbeResult is GameProbeResult.Found,
+                        onSelectInstalledGame,
+                    )
+                }
+                item { PrimaryButton("选择本地 APK", onClick = onImportLocalApk) }
+                item { PrimaryButton("选择本地 APKS", onClick = onImportLocalApkSet) }
+                if (state.gameProbeResult !is GameProbeResult.Found) {
+                    item { NoticeStrip("未检测到已安装游戏", "仍可选择本地 APK 或 APKS 修补；单 APK 必须是不依赖 split 的完整安装包。") }
                 }
             }
-        }
-
-        // Action button
-        item {
-            if (isInProgress) {
-                LoadingPanel(state.patchStatus ?: "正在处理安装事务…")
-            } else if (patchStage == com.sultansgame.modmanager.model.PatchStage.AwaitingGameUninstall) {
-                NoticeStrip(
-                    "等待卸载原版游戏",
-                    state.patchStatus ?: "请在系统界面卸载原版游戏；返回后将继续安装已准备好的签名产物。",
-                )
-            } else if (patchStage == com.sultansgame.modmanager.model.PatchStage.AwaitingInstallPermission) {
-                NoticeStrip(
-                    "需要安装授权",
-                    state.patchStatus ?: "请在系统设置中允许 Manager 安装未知应用。",
-                )
-            } else if (patchStage == com.sultansgame.modmanager.model.PatchStage.Completed) {
-                NoticeStrip("迁移完成", state.patchStatus ?: "请退出并冷启动游戏以加载 Mod 支持。")
-            } else if (patchStage == com.sultansgame.modmanager.model.PatchStage.Failed) {
-                ErrorPanel(state.patchStatus ?: "迁移未完成，请检查日志后重试。")
-            }
-        }
-        item {
-            PrimaryButton(
-                label = when (patchStage) {
-                    com.sultansgame.modmanager.model.PatchStage.AwaitingGameUninstall -> when (state.gameProbeResult) {
-                        com.sultansgame.modmanager.platform.game.GameProbeResult.NotInstalled -> "继续安装已暂存产物"
-                        is com.sultansgame.modmanager.platform.game.GameProbeResult.Failed -> "重新探测游戏状态"
-                        else -> "打开系统卸载界面"
+            is PatchUiState.Importing -> item { LoadingPanel(patch.label) }
+            is PatchUiState.Review -> {
+                val input = patch.input
+                val unsupported = input.classification.compatibility.compatibility == com.sultansgame.modmanager.model.Compatibility.Unsupported
+                item { SectionLabel("步骤 1", "输入已检查") }
+                item {
+                    NoticeStrip(
+                        input.sourceLabel,
+                        "版本 ${input.versionLabel} · ${input.splitCount} 个原始 split · 签名 ${input.signerSummary}",
+                    )
+                }
+                item { SectionLabel("步骤 2", if (unsupported) "不可修补" else "审阅确认") }
+                item {
+                    if (unsupported) {
+                        ErrorPanel(input.classification.compatibility.reasons.joinToString("\n"))
+                    } else {
+                        NoticeStrip("已命中冻结 profile", "将只重签 base、全部原始 split 和冻结的 loader split。")
                     }
-                    com.sultansgame.modmanager.model.PatchStage.AwaitingInstallPermission -> "查看安装授权说明"
-                    else -> "开始迁移"
-                },
-                enabled = canBegin || canResumePatch,
-                onClick = onBeginPatching,
-            )
-        }
-        if (!canBegin && classification != null && !isInProgress) {
-            val missing = buildList {
-                if (deviceKeyState == com.sultansgame.modmanager.model.DeviceSigningKeyState.MissingAfterMigration) add("设备密钥已丢失")
-                if (state.gameProbeResult !is com.sultansgame.modmanager.platform.game.GameProbeResult.Found) add("游戏未安装")
-                if (!confirmation.acknowledgedInstallRisk) add("安装风险")
-                if (!confirmation.acknowledgedRecoveryLimit) add("密钥限制")
-                if (!confirmation.acknowledgedReinstallRequirement) add("卸载确认")
-                if (isExperimental && !confirmation.confirmedBackup) add("存档备份")
-                if (isExperimental && !confirmation.confirmedExperimentalRetry) add("兼容性风险")
+                }
+                if (!unsupported) {
+                    item {
+                        Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(16.dp)) {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                ConfirmationCheckbox("我已阅读安装前说明，理解这是非官方修改", patch.confirmation.acknowledgedInstallRisk) {
+                                    onUpdateConfirmation(patch.confirmation.copy(acknowledgedInstallRisk = it))
+                                }
+                                ConfirmationCheckbox("我理解设备密钥创建后不可导出，换机需重新迁移", patch.confirmation.acknowledgedRecoveryLimit) {
+                                    onUpdateConfirmation(patch.confirmation.copy(acknowledgedRecoveryLimit = it))
+                                }
+                                ConfirmationCheckbox("我理解必须先卸载旧签名游戏，再安装修补版本", patch.confirmation.acknowledgedReinstallRequirement) {
+                                    onUpdateConfirmation(patch.confirmation.copy(acknowledgedReinstallRequirement = it))
+                                }
+                            }
+                        }
+                    }
+                    item {
+                        PrimaryButton(
+                            "准备修补工件",
+                            state.deviceSigningKeyState != com.sultansgame.modmanager.model.DeviceSigningKeyState.MissingAfterMigration &&
+                                patch.confirmation.permits(input.classification.mode),
+                            onPrepare,
+                        )
+                    }
+                }
+                item { PrimaryButton("重新选择来源", onClick = onRestart) }
             }
-            item { NoticeStrip("迁移尚未满足条件", missing.joinToString("、")) }
+            is PatchUiState.Preparing -> item { LoadingPanel("正在重签 base、原始 split 与 loader split…") }
+            is PatchUiState.AwaitingOriginalUninstall -> {
+                item { SectionLabel("步骤 3", "卸载原版") }
+                item { NoticeStrip("工件已准备", patch.summary) }
+                when (patch.gameState) {
+                    is GameProbeResult.Found -> item { PrimaryButton("打开系统卸载界面") { onRequestUninstall(patch.transactionId) } }
+                    is GameProbeResult.Failed, null -> item { PrimaryButton("重新检查卸载状态", onClick = onRefreshPending) }
+                    GameProbeResult.NotInstalled -> item { PrimaryButton("重新检查卸载状态", onClick = onRefreshPending) }
+                }
+            }
+            is PatchUiState.ReadyToInstall -> {
+                item { SectionLabel("步骤 4", "安装已准备工件") }
+                item { NoticeStrip("原版已卸载", patch.summary) }
+                item { PrimaryButton("安装已准备产物") { onInstallPrepared(patch.transactionId) } }
+            }
+            is PatchUiState.SubmittingInstall -> item { LoadingPanel("正在提交已准备的 APK 集合…") }
+            is PatchUiState.AwaitingInstallPermission -> {
+                item { SectionLabel("步骤 4", "需要安装授权") }
+                item { NoticeStrip("授权后不会自动安装", "请在系统设置中允许 Manager 安装未知应用；返回后将显示独立的安装按钮。") }
+                item { PrimaryButton("前往安装授权设置", onClick = onOpenUnknownSourcesSettings) }
+            }
+            is PatchUiState.AwaitingSystemInstall -> {
+                item { SectionLabel("步骤 4", "等待系统安装") }
+                item { LoadingPanel("请在 Android 系统界面确认安装；完成后 Manager 会验证包、版本、证书和 split 集合。") }
+            }
+            is PatchUiState.Completed -> {
+                item { SectionLabel("迁移完成", "步骤已完成") }
+                item { NoticeStrip("安装验证通过", "请退出并冷启动游戏，以验证 loader 与 Mod 支持。") }
+                item { PrimaryButton("开始新的修补", onClick = onRestart) }
+            }
+            is PatchUiState.Failed -> {
+                item { SectionLabel("修补未完成", "需要重新开始") }
+                item { ErrorPanel(patch.reason) }
+                item { PrimaryButton("重新选择来源", onClick = onRestart) }
+            }
         }
     }
 }

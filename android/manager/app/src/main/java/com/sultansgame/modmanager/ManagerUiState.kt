@@ -8,7 +8,7 @@ import com.sultansgame.modmanager.model.GameModStorageStatus
 import com.sultansgame.modmanager.model.LoaderStatus
 import com.sultansgame.modmanager.model.PatchConfirmation
 import com.sultansgame.modmanager.model.PatchInputClassification
-import com.sultansgame.modmanager.model.PatchStage
+import com.sultansgame.modmanager.model.PatchSource
 import com.sultansgame.modmanager.model.SteamAuthState
 import com.sultansgame.modmanager.model.WorkshopItem
 import com.sultansgame.modmanager.platform.game.GameProbeResult
@@ -25,17 +25,47 @@ data class ManagerUiState(
     val downloadTasks: List<DownloadTask> = emptyList(),
     val steamAuthState: SteamAuthState = SteamAuthState.SignedOut,
     val deviceSigningKeyState: DeviceSigningKeyState? = null,
-    val patchClassification: PatchInputClassification? = null,
-    val patchConfirmation: PatchConfirmation = PatchConfirmation(),
-    val patchStage: PatchStage = PatchStage.Idle,
-    val patchStatus: String? = null,
-    val patchTransactionId: String? = null,
-    val showInstallPermissionExplanation: Boolean = false,
-    val showGameUninstallExplanation: Boolean = false,
-    val patchInProgress: Boolean = false,
+    val patch: PatchUiState = PatchUiState.ChooseSource,
     val noticeAccepted: Boolean? = null,
     val feedback: FeedbackMessage? = null,
 )
+
+data class PatchInputUiModel(
+    val source: PatchSource,
+    val sourceLabel: String,
+    val versionLabel: String,
+    val splitCount: Int,
+    val signerSummary: String,
+    val classification: PatchInputClassification,
+)
+
+sealed interface PatchUiState {
+    data object ChooseSource : PatchUiState
+    data class Importing(val label: String) : PatchUiState
+    data class Review(
+        val input: PatchInputUiModel,
+        val confirmation: PatchConfirmation = PatchConfirmation(),
+    ) : PatchUiState
+    data class Preparing(val input: PatchInputUiModel) : PatchUiState
+    data class AwaitingOriginalUninstall(
+        val transactionId: String,
+        val gameState: GameProbeResult?,
+        val summary: String,
+    ) : PatchUiState
+    data class ReadyToInstall(
+        val transactionId: String,
+        val summary: String,
+    ) : PatchUiState
+    data class SubmittingInstall(val transactionId: String) : PatchUiState
+    data class AwaitingInstallPermission(
+        val transactionId: String?,
+        val input: PatchInputUiModel?,
+        val confirmation: PatchConfirmation?,
+    ) : PatchUiState
+    data class AwaitingSystemInstall(val transactionId: String) : PatchUiState
+    data class Completed(val transactionId: String) : PatchUiState
+    data class Failed(val reason: String, val transactionId: String? = null) : PatchUiState
+}
 
 data class FeedbackMessage(
     val text: String,

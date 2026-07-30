@@ -7,12 +7,10 @@ import androidx.lifecycle.viewModelScope
 import com.sultansgame.modmanager.bridge.ApplyRequest
 import com.sultansgame.modmanager.bridge.ApplyResult
 import com.sultansgame.modmanager.bridge.LoaderBridge
-import com.sultansgame.modmanager.bridge.UnavailableLoaderBridge
 import com.sultansgame.modmanager.model.DownloadFailureCode
 import com.sultansgame.modmanager.model.DownloadStage
 import com.sultansgame.modmanager.model.PatchConfirmation
 import com.sultansgame.modmanager.model.PatchSource
-import com.sultansgame.modmanager.model.PatchStage
 import com.sultansgame.modmanager.platform.patch.AndroidApkArchiveInspector
 import com.sultansgame.modmanager.platform.patch.AndroidKeystoreApkSigner
 import com.sultansgame.modmanager.platform.patch.AndroidLoaderSplitArtifactFactory
@@ -27,7 +25,6 @@ import com.sultansgame.modmanager.platform.patch.PatchTransactionStore
 import com.sultansgame.modmanager.model.DownloadTask
 import com.sultansgame.modmanager.model.PublishedFileId
 import com.sultansgame.modmanager.model.SULTANS_GAME_APP_ID
-import com.sultansgame.modmanager.model.WorkshopAccessMode
 import com.sultansgame.modmanager.model.WorkshopItem
 import com.sultansgame.modmanager.platform.auth.SteamAuthProvider
 import com.sultansgame.modmanager.platform.auth.SteamCmAuthProvider
@@ -50,7 +47,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
@@ -101,6 +97,13 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     val state: StateFlow<ManagerUiState> = mutableState.asStateFlow()
     private val uiEventChannel = Channel<ManagerUiEvent>(Channel.BUFFERED)
     val uiEvents = uiEventChannel.receiveAsFlow()
+    private var selectedPatchInput: SelectedPatchInput? = null
+
+    private data class SelectedPatchInput(
+        val source: PatchSource,
+        val extracted: com.sultansgame.modmanager.platform.patch.ExtractedApkSet,
+        val uiModel: PatchInputUiModel,
+    )
 
     init {
         privateModCache.recoverInterruptedImports()
@@ -111,9 +114,13 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             deploymentPlan = deploymentPlan.entries(cachedMods),
             downloadTasks = taskStore.tasks.value,
             deviceSigningKeyState = deviceSigningKeyStore.state(),
-            patchStage = pendingPatch?.stage ?: PatchStage.Idle,
-            patchTransactionId = pendingPatch?.id,
-            patchStatus = pendingPatch?.let { "已恢复待安装事务；正在检查原版游戏状态…" },
+            patch = pendingPatch?.let {
+                PatchUiState.AwaitingOriginalUninstall(
+                    transactionId = it.id,
+                    gameState = null,
+                    summary = "已恢复已准备的修补工件；正在检查原版游戏状态…",
+                )
+            } ?: PatchUiState.ChooseSource,
         )
         refreshGame()
         refreshGameModStorage()
@@ -199,41 +206,27 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     fun refreshGame() {
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) { gameProbe.probe() }
-            val classification = (result as? com.sultansgame.modmanager.platform.game.GameProbeResult.Found)
-                ?.snapshot
-                ?.let { snapshot ->
-                    GameProfileRegistry().classify(
-                        PatchSource.InstalledGame,
-                        com.sultansgame.modmanager.model.ApkInspection(
-                            sourceLabel = "已安装游戏",
-                            packageName = snapshot.packageName,
-                            versionCode = snapshot.versionCode,
-                            versionName = snapshot.versionName,
-                            splitName = null,
-                            supportedAbis = setOf("arm64-v8a"),
-                            signerDigestsSha256 = snapshot.signerDigestsSha256,
-                            entryCount = 0,
-                            sizeBytes = 0,
-                            warnings = emptyList(),
-                        ),
-                        trustedDeviceCertificateSha256 = deviceSigningKeyStore.certificateSha256(),
+            val currentPatch = mutableState.value.patch
+            val nextPatch = when (currentPatch) {
+                is PatchUiState.AwaitingOriginalUninstall -> when (result) {
+                    GameProbeResult.NotInstalled -> PatchUiState.ReadyToInstall(
+                        currentPatch.transactionId,
+                        "已确认原版游戏未安装；可安装已准备的修补工件。",
+                    )
+                    is GameProbeResult.Found -> currentPatch.copy(
+                        gameState = result,
+                        summary = "原版游戏仍已安装；请先在系统界面完成卸载。",
+                    )
+                    is GameProbeResult.Failed -> currentPatch.copy(
+                        gameState = result,
+                        summary = "无法确认原版游戏状态；请重新检查后再继续。",
                     )
                 }
-            val isPendingPatch = mutableState.value.patchStage == PatchStage.AwaitingGameUninstall &&
-                mutableState.value.patchTransactionId != null
-            val pendingStatus = if (isPendingPatch) {
-                when (result) {
-                    is GameProbeResult.Found -> "已恢复待安装事务；原版游戏仍已安装。"
-                    GameProbeResult.NotInstalled -> "检测到原版游戏已卸载；可继续安装已暂存产物。"
-                    is GameProbeResult.Failed -> "无法确认原版游戏状态；请重新探测后再继续。"
-                }
-            } else {
-                classification?.compatibility?.reasons?.joinToString()
+                else -> currentPatch
             }
             mutableState.value = mutableState.value.copy(
                 gameProbeResult = result,
-                patchClassification = classification,
-                patchStatus = pendingStatus,
+                patch = nextPatch,
             )
         }
     }
@@ -395,221 +388,196 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun updatePatchConfirmation(confirmation: PatchConfirmation) {
-        mutableState.value = mutableState.value.copy(patchConfirmation = confirmation)
+        val current = mutableState.value.patch as? PatchUiState.Review ?: return
+        mutableState.value = mutableState.value.copy(patch = current.copy(confirmation = confirmation))
     }
 
-    fun beginPatching() {
-        val current = mutableState.value
-        if (current.patchInProgress) return
-        if (current.patchStage == PatchStage.AwaitingGameUninstall) {
-            val transactionId = current.patchTransactionId ?: return
-            when (current.gameProbeResult) {
-                GameProbeResult.NotInstalled -> continueAfterGameUninstall(transactionId)
-                is GameProbeResult.Found -> requestGameUninstall(transactionId)
-                else -> refreshGame()
-            }
+    fun selectInstalledGameSource() {
+        if (mutableState.value.patch !is PatchUiState.ChooseSource) return
+        if (mutableState.value.gameProbeResult !is GameProbeResult.Found) {
+            mutableState.value = mutableState.value.copy(feedback = FeedbackMessage("未检测到已安装的目标游戏；请选择本地 APK 或 APKS。", isError = true))
             return
         }
-        if (current.patchStage == PatchStage.AwaitingInstallPermission) {
-            requestInstallPermission()
-            return
+        importPatchInput("正在读取已安装游戏…", PatchSource.InstalledGame, "已安装游戏") {
+            apkExtractor.extract("com.gametree.sultan.pd")
         }
-        if (current.gameProbeResult !is GameProbeResult.Found) return
-        val confirmation = current.patchConfirmation
-        val classification = current.patchClassification ?: return
-        if (!confirmation.permits(classification.mode)) return
-        if (!packageInstaller.canRequestInstalls()) {
-            requestInstallPermission()
-            return
-        }
+    }
 
-        viewModelScope.launch {
-            mutableState.value = mutableState.value.copy(
-                patchInProgress = true,
-                patchStatus = "正在提取并重签游戏 APK…",
-                patchStage = PatchStage.PreparingArtifacts,
-            )
-            val extracted = withContext(Dispatchers.IO) {
-                runCatching { apkExtractor.extract("com.gametree.sultan.pd") }
-            }.getOrElse { error ->
-                mutableState.value = mutableState.value.copy(
-                    patchInProgress = false,
-                    patchStatus = "提取游戏 APK 失败：${error.message}",
-                    feedback = FeedbackMessage("提取游戏 APK 失败：${error.message}", isError = true),
-                )
-                return@launch
+    fun importLocalApk(uri: Uri, displayName: String) {
+        if (mutableState.value.patch !is PatchUiState.ChooseSource) return
+        importPatchInput("正在导入 $displayName…", PatchSource.SelectedApk, displayName) {
+            requireNotNull(getApplication<Application>().contentResolver.openInputStream(uri)) { "无法读取所选 APK。" }.use { input ->
+                apkExtractor.importSingle(input, displayName)
             }
+        }
+    }
+
+    fun importLocalApkSet(uri: Uri, displayName: String) {
+        if (mutableState.value.patch !is PatchUiState.ChooseSource) return
+        importPatchInput("正在导入 $displayName…", PatchSource.SelectedApks, displayName) {
+            requireNotNull(getApplication<Application>().contentResolver.openInputStream(uri)) { "无法读取所选 APKS。" }.use { input ->
+                apkExtractor.importApkSet(input, displayName)
+            }
+        }
+    }
+
+    fun restartPatchFlow() {
+        selectedPatchInput = null
+        mutableState.value = mutableState.value.copy(patch = PatchUiState.ChooseSource)
+    }
+
+    fun preparePatchArtifacts() {
+        val review = mutableState.value.patch as? PatchUiState.Review ?: return
+        val selected = selectedPatchInput ?: return
+        if (!review.confirmation.permits(review.input.classification.mode)) return
+        if (review.input.classification.compatibility.compatibility == com.sultansgame.modmanager.model.Compatibility.Unsupported) return
+        if (deviceSigningKeyStore.state() == com.sultansgame.modmanager.model.DeviceSigningKeyState.MissingAfterMigration) {
+            mutableState.value = mutableState.value.copy(
+                patch = PatchUiState.Failed("设备签名密钥已丢失，必须卸载旧迁移版游戏后重新开始。"),
+            )
+            return
+        }
+        viewModelScope.launch {
+            mutableState.value = mutableState.value.copy(patch = PatchUiState.Preparing(review.input))
             val result = withContext(Dispatchers.IO) {
-                orchestrator.submit(PatchSource.InstalledGame, extracted, confirmation)
+                orchestrator.submit(selected.source, selected.extracted, review.confirmation)
             }
-            applyOrchestrationResult(result)
+            applyOrchestrationResult(result, review.input, review.confirmation)
         }
     }
 
-    fun continueAfterGameUninstall(transactionId: String) {
+    fun refreshPendingPatchState() {
+        when (mutableState.value.patch) {
+            is PatchUiState.AwaitingOriginalUninstall -> refreshGame()
+            else -> Unit
+        }
+    }
+
+    fun requestOriginalGameUninstall(transactionId: String) {
+        val current = mutableState.value.patch as? PatchUiState.AwaitingOriginalUninstall ?: return
+        if (current.transactionId != transactionId || current.gameState !is GameProbeResult.Found) return
+        uiEventChannel.trySend(ManagerUiEvent.OpenGameUninstall(transactionId))
+    }
+
+    fun installPreparedArtifacts(transactionId: String) {
+        val current = mutableState.value.patch as? PatchUiState.ReadyToInstall ?: return
+        if (current.transactionId != transactionId) return
         viewModelScope.launch {
-            mutableState.value = mutableState.value.copy(
-                patchInProgress = true,
-                patchStatus = "正在确认原版游戏已卸载…",
-            )
+            mutableState.value = mutableState.value.copy(patch = PatchUiState.SubmittingInstall(transactionId))
             val result = withContext(Dispatchers.IO) { orchestrator.submitPreparedArtifacts(transactionId) }
-            applyOrchestrationResult(result)
+            applyOrchestrationResult(result, null, null)
         }
     }
 
     fun refreshInstallPermission() {
-        if (!packageInstaller.canRequestInstalls()) {
-            mutableState.value = mutableState.value.copy(
-                showInstallPermissionExplanation = false,
-                patchInProgress = false,
-                patchStage = PatchStage.AwaitingInstallPermission,
-                patchStatus = "尚未允许 Manager 安装未知应用；点击按钮可查看授权说明。",
-            )
-            return
-        }
-        val transactionId = mutableState.value.patchTransactionId
-        if (mutableState.value.patchStage == PatchStage.AwaitingInstallPermission && transactionId != null) {
-            continueAfterGameUninstall(transactionId)
-            return
-        }
+        val current = mutableState.value.patch as? PatchUiState.AwaitingInstallPermission ?: return
+        if (!packageInstaller.canRequestInstalls()) return
         mutableState.value = mutableState.value.copy(
-            showInstallPermissionExplanation = false,
-            patchStage = PatchStage.Idle,
-            patchStatus = "已允许 Manager 安装未知应用；请开始迁移。",
+            patch = current.transactionId?.let { transactionId ->
+                PatchUiState.ReadyToInstall(transactionId, "已获得安装授权；请确认后安装已准备的修补工件。")
+            } ?: current.input?.let { input ->
+                PatchUiState.Review(input, requireNotNull(current.confirmation))
+            } ?: PatchUiState.ChooseSource,
         )
     }
 
-    fun confirmInstallPermissionExplanation() {
-        mutableState.value = mutableState.value.copy(showInstallPermissionExplanation = false)
+    fun openUnknownSourcesSettings() {
+        if (mutableState.value.patch !is PatchUiState.AwaitingInstallPermission) return
         uiEventChannel.trySend(ManagerUiEvent.OpenUnknownSourcesSettings(packageInstaller.unknownSourcesSettingsIntent()))
     }
 
-    fun dismissInstallPermissionExplanation() {
-        mutableState.value = mutableState.value.copy(showInstallPermissionExplanation = false)
-    }
+    fun onGameUninstallResult() = refreshPendingPatchState()
 
-    fun onGameUninstallResult() {
-        val transactionId = mutableState.value.patchTransactionId ?: return
+    private fun importPatchInput(
+        progressLabel: String,
+        source: PatchSource,
+        sourceLabel: String,
+        importer: () -> com.sultansgame.modmanager.platform.patch.ExtractedApkSet,
+    ) {
         viewModelScope.launch {
-            val result = withContext(Dispatchers.IO) { gameProbe.probe() }
-            mutableState.value = mutableState.value.copy(
-                gameProbeResult = result,
-                patchStatus = when (result) {
-                    GameProbeResult.NotInstalled -> "原版游戏已卸载；点击继续安装已暂存产物。"
-                    is GameProbeResult.Found -> "系统卸载已取消或尚未完成；不会自动再次打开卸载界面。"
-                    is GameProbeResult.Failed -> "无法确认原版游戏状态；请重新探测后再继续。"
-                },
-            )
-            if (result == GameProbeResult.NotInstalled) continueAfterGameUninstall(transactionId)
+            mutableState.value = mutableState.value.copy(patch = PatchUiState.Importing(progressLabel))
+            runCatching { withContext(Dispatchers.IO) { importer() } }
+                .onSuccess { extracted ->
+                    val classification = profileRegistry.classify(
+                        source,
+                        extracted.base.inspection,
+                        trustedDeviceCertificateSha256 = deviceSigningKeyStore.certificateSha256(),
+                    )
+                    val inspection = extracted.base.inspection
+                    val input = PatchInputUiModel(
+                        source = source,
+                        sourceLabel = sourceLabel,
+                        versionLabel = inspection.versionName ?: inspection.versionCode?.toString() ?: "未知版本",
+                        splitCount = extracted.splits.size,
+                        signerSummary = inspection.signerDigestsSha256.firstOrNull()?.take(12)?.plus("…") ?: "未读取到签名",
+                        classification = classification,
+                    )
+                    selectedPatchInput = SelectedPatchInput(source, extracted, input)
+                    mutableState.value = mutableState.value.copy(patch = PatchUiState.Review(input))
+                }
+                .onFailure { error ->
+                    selectedPatchInput = null
+                    mutableState.value = mutableState.value.copy(
+                        patch = PatchUiState.Failed("导入 APK 失败：${error.message ?: "无法验证所选内容"}"),
+                    )
+                }
         }
     }
 
-    fun requestGameUninstall(transactionId: String) {
-        val current = mutableState.value
-        if (
-            current.patchStage != PatchStage.AwaitingGameUninstall ||
-            current.patchTransactionId != transactionId ||
-            current.gameProbeResult !is GameProbeResult.Found
-        ) return
-        mutableState.value = current.copy(showGameUninstallExplanation = true)
-    }
-
-    fun confirmGameUninstallExplanation() {
-        val current = mutableState.value
-        val transactionId = current.patchTransactionId
-        mutableState.value = current.copy(showGameUninstallExplanation = false)
-        if (
-            transactionId != null &&
-            current.patchStage == PatchStage.AwaitingGameUninstall &&
-            current.gameProbeResult is GameProbeResult.Found
-        ) {
-            uiEventChannel.trySend(ManagerUiEvent.OpenGameUninstall(transactionId))
-        }
-    }
-
-    fun dismissGameUninstallExplanation() {
-        mutableState.value = mutableState.value.copy(showGameUninstallExplanation = false)
-    }
-
-    private fun requestInstallPermission() {
-        mutableState.value = mutableState.value.copy(
-            patchInProgress = false,
-            patchStage = PatchStage.AwaitingInstallPermission,
-            patchStatus = "需要允许 Manager 安装未知应用。",
-            showInstallPermissionExplanation = true,
-        )
-    }
-
-    private fun handleInstallResult(intent: android.content.Intent) {
+    private suspend fun handleInstallResult(intent: android.content.Intent) {
         val result = orchestrator.handleInstallResult(intent) ?: return
-        applyOrchestrationResult(result)
+        applyOrchestrationResult(result, null, null)
     }
 
-    private fun applyOrchestrationResult(result: PatchOrchestrationResult) {
-        when (result) {
+    private suspend fun applyOrchestrationResult(
+        result: PatchOrchestrationResult,
+        input: PatchInputUiModel?,
+        confirmation: PatchConfirmation?,
+    ) {
+        val patch = when (result) {
             is PatchOrchestrationResult.AwaitingConfirmation -> {
-                mutableState.value = mutableState.value.copy(
-                    patchInProgress = false,
-                    patchStatus = result.reason,
-                    patchStage = PatchStage.AwaitingConfirmation,
-                )
+                input?.let { PatchUiState.Review(it, confirmation ?: PatchConfirmation()) }
+                    ?: PatchUiState.Failed(result.reason)
             }
-            is PatchOrchestrationResult.NeedsInstallPermission -> {
-                mutableState.value = mutableState.value.copy(patchTransactionId = result.transactionId)
-                requestInstallPermission()
-            }
+            is PatchOrchestrationResult.NeedsInstallPermission -> PatchUiState.AwaitingInstallPermission(
+                transactionId = result.transactionId,
+                input = input,
+                confirmation = confirmation,
+            )
             is PatchOrchestrationResult.NeedsGameUninstall -> {
-                mutableState.value = mutableState.value.copy(
-                    patchInProgress = false,
-                    patchStage = PatchStage.AwaitingGameUninstall,
-                    patchTransactionId = result.transactionId,
-                    patchStatus = "已准备好签名产物；请在系统界面卸载原版游戏。",
-                )
-                requestGameUninstall(result.transactionId)
+                val currentGameState = withContext(Dispatchers.IO) { gameProbe.probe() }
+                mutableState.value = mutableState.value.copy(gameProbeResult = currentGameState)
+                when (currentGameState) {
+                    GameProbeResult.NotInstalled -> PatchUiState.ReadyToInstall(
+                        result.transactionId,
+                        "已确认原版游戏未安装；可安装已准备的修补工件。",
+                    )
+                    else -> PatchUiState.AwaitingOriginalUninstall(
+                        transactionId = result.transactionId,
+                        gameState = currentGameState,
+                        summary = "签名工件已准备。请先在系统界面卸载当前游戏，再返回此处继续。",
+                    )
+                }
             }
-            is PatchOrchestrationResult.AwaitingSystemInstall -> {
-                mutableState.value = mutableState.value.copy(
-                    patchInProgress = false,
-                    patchStage = PatchStage.AwaitingSystemInstall,
-                    patchTransactionId = result.transactionId,
-                    patchStatus = "等待系统完成安装…",
-                )
-            }
+            is PatchOrchestrationResult.AwaitingSystemInstall -> PatchUiState.AwaitingSystemInstall(result.transactionId)
             is PatchOrchestrationResult.NeedsUserAction -> {
-                mutableState.value = mutableState.value.copy(
-                    patchInProgress = false,
-                    patchStage = PatchStage.AwaitingSystemInstall,
-                    patchTransactionId = result.transactionId,
-                    patchStatus = "正在打开系统安装确认…",
-                )
                 uiEventChannel.trySend(ManagerUiEvent.ConfirmPackageInstall(result.intent))
+                PatchUiState.AwaitingSystemInstall(result.transactionId)
             }
-            is PatchOrchestrationResult.AwaitingVerification -> {
-                mutableState.value = mutableState.value.copy(
-                    patchStage = PatchStage.VerifyingInstall,
-                    patchStatus = "正在验证安装结果…",
-                )
-            }
+            is PatchOrchestrationResult.AwaitingVerification -> PatchUiState.AwaitingSystemInstall(result.transactionId)
             is PatchOrchestrationResult.Completed -> {
-                mutableState.value = mutableState.value.copy(
-                    patchInProgress = false,
-                    patchStage = PatchStage.Completed,
-                    patchTransactionId = result.transactionId,
-                    patchStatus = "迁移完成。请冷启动游戏验证。",
-                    feedback = FeedbackMessage("迁移完成。请退出游戏后重新启动以加载 Mod 支持。"),
-                )
+                selectedPatchInput = null
                 refreshGame()
+                PatchUiState.Completed(result.transactionId)
             }
-            is PatchOrchestrationResult.Failed -> {
-                mutableState.value = mutableState.value.copy(
-                    patchInProgress = false,
-                    patchStage = PatchStage.Failed,
-                    patchTransactionId = result.transactionId,
-                    patchStatus = result.reason,
-                    feedback = FeedbackMessage("迁移失败：${result.reason}", isError = true),
-                )
-            }
+            is PatchOrchestrationResult.Failed -> PatchUiState.Failed(result.reason, result.transactionId)
         }
+        mutableState.value = mutableState.value.copy(
+            patch = patch,
+            deviceSigningKeyState = deviceSigningKeyStore.state(),
+            feedback = (result as? PatchOrchestrationResult.Failed)?.let { FeedbackMessage("迁移失败：${it.reason}", isError = true) }
+                ?: mutableState.value.feedback,
+        )
     }
 
     private fun handleAuthResult(result: com.sultansgame.modmanager.platform.auth.SteamAuthResult) {

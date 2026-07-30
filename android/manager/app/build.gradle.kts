@@ -64,6 +64,7 @@ dependencies {
     implementation(libs.apksig)
     implementation(platform(libs.okhttp.bom))
     implementation(libs.okhttp)
+    testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.androidx.test.ext.junit)
