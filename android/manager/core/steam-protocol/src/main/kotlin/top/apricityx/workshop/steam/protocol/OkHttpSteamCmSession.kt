@@ -328,7 +328,33 @@ class OkHttpSteamCmSession(
         methodName: String,
         request: MessageLite,
         parser: Parser<T>,
-    ): T = retryRecoverableRequest {
+        replayPolicy: SteamServiceMethodReplayPolicy,
+    ): T {
+        return if (replayPolicy == SteamServiceMethodReplayPolicy.RetryRecoverable) {
+            retryRecoverableRequest {
+                callServiceMethodOnce(
+                    methodName = methodName,
+                    request = request,
+                    parser = parser,
+                    replayPolicy = replayPolicy,
+                )
+            }
+        } else {
+            callServiceMethodOnce(
+                methodName = methodName,
+                request = request,
+                parser = parser,
+                replayPolicy = replayPolicy,
+            )
+        }
+    }
+
+    private suspend fun <T : MessageLite> callServiceMethodOnce(
+        methodName: String,
+        request: MessageLite,
+        parser: Parser<T>,
+        replayPolicy: SteamServiceMethodReplayPolicy,
+    ): T {
         if (webSocket == null) {
             throw SteamProtocolException("Steam CM session is not connected")
         }
@@ -366,10 +392,16 @@ class OkHttpSteamCmSession(
             throw SteamProtocolException("Failed to send Steam service request: $methodName")
         }
 
-        try {
+        return try {
             withTimeout(REQUEST_TIMEOUT_MS) { response.await() }
         } catch (error: Throwable) {
             pendingRequests.remove(sourceJobId)
+            if (
+                replayPolicy == SteamServiceMethodReplayPolicy.NeverReplay &&
+                isRecoverableConnectionFailure(error)
+            ) {
+                throw SteamRequestDeliveryUncertainException(methodName, error)
+            }
             throw error
         }
     }

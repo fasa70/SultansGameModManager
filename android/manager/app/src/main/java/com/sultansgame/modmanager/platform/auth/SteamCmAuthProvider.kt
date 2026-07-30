@@ -2,6 +2,7 @@ package com.sultansgame.modmanager.platform.auth
 
 import android.content.Context
 import com.sultansgame.modmanager.model.SteamAuthState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.sync.Mutex
@@ -9,6 +10,7 @@ import kotlinx.coroutines.sync.withLock
 import top.apricityx.workshop.steam.protocol.OkHttpSteamCmSession
 import top.apricityx.workshop.steam.protocol.SteamAccountSession
 import top.apricityx.workshop.steam.protocol.SteamAuthenticationClient
+import top.apricityx.workshop.steam.protocol.SteamAuthenticationException
 import top.apricityx.workshop.steam.protocol.SteamAuthSessionDetails
 import top.apricityx.workshop.steam.protocol.SteamCredentialAuthSession
 import top.apricityx.workshop.steam.protocol.SteamDirectoryClient
@@ -33,6 +35,7 @@ class SteamCmAuthProvider(context: Context) : SteamAuthProvider {
     private var selectedChallengeType: SteamGuardChallengeType? = null
     private var activeInMemorySession: SteamAccountSession? = null
     private var pendingRememberSession = false
+    private var guardVerificationInProgress = false
 
     override fun observeState(): Flow<SteamAuthState> = mutableState
 
@@ -45,7 +48,7 @@ class SteamCmAuthProvider(context: Context) : SteamAuthProvider {
         sessionStore.clear()
         pendingRememberSession = credentials.rememberSession
         mutableState.value = SteamAuthState.SigningIn
-        runCatching {
+        try {
             val pending = authenticationClient.beginAuthSession(
                 SteamAuthSessionDetails(
                     username = credentials.username,
@@ -68,21 +71,59 @@ class SteamCmAuthProvider(context: Context) : SteamAuthProvider {
                 }
                 else -> failure("Steam 要求当前版本尚不支持的验证方式。")
             }
-        }.getOrElse { failure(it.message ?: "Steam 登录失败。") }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            failure(error.message ?: "Steam 登录失败。")
+        }
     }
 
     override suspend fun submitSteamGuard(code: String): SteamAuthResult = authMutex.withLock {
         val pending = pendingSession ?: return@withLock failure("没有等待中的 Steam 登录。")
         val type = selectedChallengeType ?: return@withLock failure("Steam 没有提供可输入的验证码方式。")
+        if (guardVerificationInProgress) {
+            return@withLock SteamAuthResult.Failed("正在确认 Steam 登录状态，请勿重复提交验证码。")
+        }
         if (code.isBlank()) return@withLock SteamAuthResult.Failed("请输入 Steam Guard 或邮箱验证码。")
-        runCatching {
-            pending.submitGuardCode(type, code.trim())
+
+        guardVerificationInProgress = true
+        val challenge = challengeLabel(type)
+        mutableState.value = SteamAuthState.VerifyingSteamGuard(challenge)
+        try {
+            try {
+                pending.submitGuardCode(type, code.trim())
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: SteamAuthenticationException) {
+                when {
+                    error.resultCode in INVALID_GUARD_CODE_RESULTS -> {
+                        mutableState.value = SteamAuthState.SteamGuardRequired(challenge)
+                        return@withLock SteamAuthResult.Failed(error.message ?: "Steam Guard 验证码错误，请重新输入。")
+                    }
+                    error.resultCode != DUPLICATE_REQUEST_RESULT && !error.deliveryUncertain -> {
+                        return@withLock failure(error.message ?: "提交 Steam Guard 验证码失败。")
+                    }
+                    // Steam has either already accepted this update or its delivery is
+                    // unknown. Poll this exact credential session; never submit again.
+                }
+            }
             completePendingLogin()
-        }.getOrElse { error ->
-            // The session remains usable after an invalid code. Do not discard it
-            // until Steam reports a terminal error or the user cancels/login changes.
-            mutableState.value = SteamAuthState.SteamGuardRequired(challengeLabel(type))
-            SteamAuthResult.Failed(error.message ?: "Steam Guard 验证失败，请检查验证码后重试。")
+        } finally {
+            guardVerificationInProgress = false
+        }
+    }
+
+    override suspend fun checkPendingLogin(): SteamAuthResult = authMutex.withLock {
+        val type = selectedChallengeType ?: return@withLock failure("没有等待中的 Steam 登录。")
+        if (guardVerificationInProgress) {
+            return@withLock SteamAuthResult.Failed("正在确认 Steam 登录状态，请稍候。")
+        }
+        guardVerificationInProgress = true
+        mutableState.value = SteamAuthState.VerifyingSteamGuard(challengeLabel(type))
+        try {
+            completePendingLogin()
+        } finally {
+            guardVerificationInProgress = false
         }
     }
 
@@ -117,12 +158,15 @@ class SteamCmAuthProvider(context: Context) : SteamAuthProvider {
             mutableState.value = SteamAuthState.SignedIn(session.accountName, session.steamId)
             closePendingSession()
             SteamAuthResult.SignedIn(session.accountName, session.steamId)
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: Throwable) {
-            // Timeout and code errors return to the input state. A subsequent
-            // submit can reuse the credential session while Steam keeps it alive.
-            if (selectedChallengeType != null) {
-                mutableState.value = SteamAuthState.SteamGuardRequired(challengeLabel(selectedChallengeType!!))
-                SteamAuthResult.Failed(error.message ?: "Steam 验证尚未完成，请重试。")
+            val challenge = selectedChallengeType?.let(::challengeLabel)
+            if (challenge != null) {
+                mutableState.value = SteamAuthState.SteamAuthStatusUnknown(challenge)
+                SteamAuthResult.Failed(
+                    "Steam 验证码可能已被接收，但暂时无法确认登录结果。请继续检查登录状态，不要重复提交验证码。",
+                )
             } else {
                 failure(error.message ?: "Steam 登录失败。")
             }
@@ -146,6 +190,7 @@ class SteamCmAuthProvider(context: Context) : SteamAuthProvider {
         pendingSession?.close()
         pendingSession = null
         selectedChallengeType = null
+        guardVerificationInProgress = false
     }
 
     private fun encodeSession(session: SteamAccountSession): ByteArray = listOf(
@@ -172,6 +217,8 @@ class SteamCmAuthProvider(context: Context) : SteamAuthProvider {
 
     private companion object {
         const val MAXIMUM_AUTH_POLL_ATTEMPTS = 30
+        const val DUPLICATE_REQUEST_RESULT = 29
+        val INVALID_GUARD_CODE_RESULTS = setOf(65, 88)
         val CODE_CHALLENGE_TYPES = setOf(
             SteamGuardChallengeType.DeviceCode,
             SteamGuardChallengeType.EmailCode,

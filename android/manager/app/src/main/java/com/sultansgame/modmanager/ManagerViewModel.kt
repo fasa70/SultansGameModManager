@@ -121,6 +121,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     )
 
     private var workshopBrowseJob: Job? = null
+    private var steamGuardSubmissionJob: Job? = null
     private var workshopBrowseGeneration = 0L
 
     init {
@@ -353,7 +354,17 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun submitSteamGuard(code: String) {
-        viewModelScope.launch { handleAuthResult(steamAuth.submitSteamGuard(code)) }
+        if (steamGuardSubmissionJob?.isActive == true) return
+        steamGuardSubmissionJob = viewModelScope.launch {
+            handleAuthResult(steamAuth.submitSteamGuard(code))
+        }
+    }
+
+    fun checkPendingSteamLogin() {
+        if (steamGuardSubmissionJob?.isActive == true) return
+        steamGuardSubmissionJob = viewModelScope.launch {
+            handleAuthResult(steamAuth.checkPendingLogin())
+        }
     }
 
     fun logoutSteam() {
