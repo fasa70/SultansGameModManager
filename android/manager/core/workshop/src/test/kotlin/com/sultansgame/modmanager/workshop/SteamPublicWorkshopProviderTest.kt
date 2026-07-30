@@ -5,6 +5,7 @@ import com.sultansgame.modmanager.model.WorkshopAccessMode
 import com.sultansgame.modmanager.model.WorkshopAvailability
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -77,6 +78,46 @@ class SteamPublicWorkshopProviderTest {
         assertTrue(PublishedFileId.parse("1") != null)
     }
 
+    @Test
+    fun `merges author detail and keeps preview policy separate from artifacts`() {
+        val provider = SteamPublicWorkshopProvider(
+            transport = FakeTransport(
+                PublicWorkshopMetadata(
+                    consumerAppId = 3117820u,
+                    publishedFileId = itemId,
+                    resultCode = 1,
+                    title = "公开 Mod",
+                    fileUrl = "https://steamusercontent-a.akamaihd.net/workshop.zip",
+                    previewUrl = "https://images.akamai.steamusercontent.com/preview.jpg",
+                    updatedAtEpochSeconds = null,
+                    declaredSizeBytes = 10,
+                ),
+            ),
+            detailTransport = object : PublicWorkshopDetailTransport {
+                override fun getPublishedFileDetail(publishedFileId: PublishedFileId) = PublicWorkshopDetail(
+                    authorName = "Steam 作者",
+                    authorProfileUrl = "https://steamcommunity.com/profiles/76561198000000000/",
+                )
+            },
+        )
+
+        val item = (provider.getItemWithCommunityDetail(3117820u, itemId) as WorkshopLookupResult.Available).item
+
+        assertEquals("Steam 作者", item.authorName)
+        assertEquals("https://steamcommunity.com/profiles/76561198000000000/", item.authorProfileUrl)
+        assertEquals("https://images.akamai.steamusercontent.com/preview.jpg", item.previewUrl)
+        assertFalse(WorkshopHttpPolicy.isAllowedArtifactUrl("https://images.akamai.steamusercontent.com/preview.jpg"))
+        assertTrue(WorkshopHttpPolicy.isAllowedPreviewImageUrl("https://images.akamai.steamusercontent.com/preview.jpg"))
+    }
+
+    @Test
+    fun `rejects unsafe author profile and preview urls`() {
+        assertFalse(WorkshopHttpPolicy.isAllowedAuthorProfileUrl("https://steamcommunity.com.evil.test/profiles/76561198000000000/"))
+        assertFalse(WorkshopHttpPolicy.isAllowedAuthorProfileUrl("https://steamcommunity.com/profiles/not-a-number/"))
+        assertFalse(WorkshopHttpPolicy.isAllowedPreviewImageUrl("http://steamusercontent-a.akamaihd.net/preview.jpg"))
+        assertFalse(WorkshopHttpPolicy.isAllowedPreviewImageUrl("https://127.0.0.1/preview.jpg"))
+        assertNull(PublicWorkshopDetailParser.parse("<div>no usable detail</div>"))
+    }
     private class FakeTransport(private val result: PublicWorkshopMetadata) : PublicWorkshopMetadataTransport {
         override fun getPublishedFileDetails(appId: UInt, publishedFileId: PublishedFileId): PublicWorkshopMetadata = result
     }

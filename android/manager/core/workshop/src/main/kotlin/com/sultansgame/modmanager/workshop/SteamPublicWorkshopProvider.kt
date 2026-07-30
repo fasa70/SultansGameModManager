@@ -28,11 +28,23 @@ interface PublicWorkshopMetadataTransport {
 
 class SteamPublicWorkshopProvider(
     private val transport: PublicWorkshopMetadataTransport,
+    private val detailTransport: PublicWorkshopDetailTransport? = null,
 ) : WorkshopProvider {
     override fun getItem(
         appId: UInt,
         publishedFileId: PublishedFileId,
         accessMode: WorkshopAccessMode,
+    ): WorkshopLookupResult = getItem(appId, publishedFileId, includeCommunityDetail = false)
+
+    fun getItemWithCommunityDetail(
+        appId: UInt,
+        publishedFileId: PublishedFileId,
+    ): WorkshopLookupResult = getItem(appId, publishedFileId, includeCommunityDetail = true)
+
+    private fun getItem(
+        appId: UInt,
+        publishedFileId: PublishedFileId,
+        includeCommunityDetail: Boolean,
     ): WorkshopLookupResult {
         val metadata = transport.getPublishedFileDetails(appId, publishedFileId)
             ?: return WorkshopLookupResult.Unavailable("无法获取公开 Workshop 元数据。")
@@ -45,6 +57,7 @@ class SteamPublicWorkshopProvider(
             available -> WorkshopAvailability.PublicDownloadAvailable
             else -> WorkshopAvailability.Unavailable
         }
+        val detail = detailTransport?.takeIf { includeCommunityDetail }?.getPublishedFileDetail(publishedFileId)
         return WorkshopLookupResult.Available(
             WorkshopItem(
                 appId = appId,
@@ -52,11 +65,15 @@ class SteamPublicWorkshopProvider(
                 title = metadata.title.orEmpty().ifBlank { "Workshop 条目 $publishedFileId" },
                 updatedAtEpochSeconds = metadata.updatedAtEpochSeconds,
                 fileUrl = metadata.fileUrl?.takeIf(WorkshopHttpPolicy::isAllowedArtifactUrl),
-                previewUrl = metadata.previewUrl?.takeIf(WorkshopHttpPolicy::isAllowedArtifactUrl),
+                previewUrl = metadata.previewUrl?.takeIf(WorkshopHttpPolicy::isAllowedPreviewImageUrl)
+                    ?: detail?.previewUrl?.takeIf(WorkshopHttpPolicy::isAllowedPreviewImageUrl),
                 declaredSizeBytes = metadata.declaredSizeBytes?.takeIf { it >= 0 },
                 availability = availability,
                 description = metadata.description.orEmpty(),
+                authorName = detail?.authorName.orEmpty(),
                 shortDescription = metadata.description.orEmpty(),
+                authorProfileUrl = detail?.authorProfileUrl?.takeIf(WorkshopHttpPolicy::isAllowedAuthorProfileUrl),
+                detailUrl = detailUrlFor(publishedFileId),
                 createdAtEpochSeconds = metadata.timeCreatedEpochSeconds,
                 creatorSteamId = metadata.creatorSteamId,
                 tags = metadata.tags,
@@ -64,6 +81,9 @@ class SteamPublicWorkshopProvider(
             ),
         )
     }
+
+    private fun detailUrlFor(publishedFileId: PublishedFileId): String =
+        "https://steamcommunity.com/sharedfiles/filedetails/?id=$publishedFileId"
 
     private companion object {
         const val RESULT_OK = 1

@@ -29,10 +29,10 @@
     <string name="workshop_loading">正在查询公开元数据…</string>
     <string name="workshop_item">%1$s\n状态：%2$s</string>
     <string name="workshop_download_available">此条目可下载公开原始工件。</string>
-    <string name="workshop_download_unavailable">没有可用公开下载地址；本版本未接入 Steam 登录。</string>
+    <string name="workshop_download_unavailable">没有可用公开下载地址；登录后可用于需要账号的内容。</string>
     <string name="workshop_downloading">正在下载 %1$s 的原始工件…</string>
     <string name="workshop_cached">已缓存 %1$s\n%2$s · %3$s\n该工件不是已导入 Mod，也未部署到游戏。</string>
-    <string name="workshop_safety">不会绕过拥有权、可见性、付费、地区或 DRM 限制。本应用不会收集密码或 Steam Guard 验证码。</string>
+    <string name="workshop_safety">不会绕过拥有权、可见性、付费、地区或 DRM 限制。密码和 Steam Guard 验证码仅用于认证，不会写入本地。</string>
     <string name="patch_unavailable">安装迁移尚未开放</string>
     <string name="patch_description">通过同签名 split 接入原生 Mod 加载器。base APK 与 split 均由设备 KeyStore 重签并通过 v1+v2 验证。</string>
     <string name="patch_step_check">1 · 检查 APK 与兼容性</string>
@@ -57,7 +57,7 @@
     <string name="notice_data">导入文件、Mod 元数据和下载工件保存在本应用私有目录；网络请求仅用于 Steam 公开元数据及其符合安全策略的公开下载地址。</string>
     <string name="notice_checkbox">我已阅读并理解上述使用须知</string>
     <string name="privacy_title">隐私与数据流</string>
-    <string name="privacy_body">本应用将你选择导入的 ZIP、校验后的 Mod 缓存和公开 Workshop 工件保存在应用私有目录。文件不会写入游戏目录。\n\n查询 Workshop 时，仅向 Steam 官方公开接口和经校验的公开工件地址发起 HTTPS 请求。当前版本不提供 Steam 登录，也不会收集密码或 Steam Guard 验证码。\n\n你可在设置中清空私有 Mod 缓存；已下载的原始工件会保留在私有目录，直到未来提供独立清理入口。</string>
+    <string name="privacy_body">本应用将你选择导入的 ZIP、校验后的 Mod 缓存和公开 Workshop 工件保存在应用私有目录。文件不会写入游戏目录。\n\n查询 Workshop 时，仅向 Steam 官方公开接口、受限 Steam Community 详情页及经校验的 Steam 图片/公开工件地址发起 HTTPS 请求。密码和 Steam Guard 验证码仅用于认证，不会写入本地。\n\n登录时可选择“记住登录状态”。开启后，Steam 刷新令牌会使用 Android Keystore AES-GCM 加密保存，以便重新启动后恢复登录；关闭后，令牌仅保留在当前进程，关闭或被系统终止后需重新登录，后台下载不会使用该会话。通过“退出 Steam”可删除本地保存的登录状态。\n\n你可在设置中清空私有 Mod 缓存；已下载的原始工件会保留在私有目录，直到未来提供独立清理入口。</string>
     <string name="license_title">开源许可与无担保</string>
     <string name="license_body">本项目以 GNU GPLv3 发布。软件按“原样”提供，在适用法律允许的最大范围内不提供担保。\n\n游戏名称、商标、游戏内容及 Mod 内容的权利分别归其权利人和作者所有。本应用不包含或分发游戏 APK、游戏资源或官方 Mod 内容。</string>
     <string name="clear_cache_title">清空私有 Mod 缓存？</string>

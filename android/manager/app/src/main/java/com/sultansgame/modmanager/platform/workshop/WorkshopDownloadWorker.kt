@@ -58,7 +58,7 @@ class WorkshopDownloadWorker(
         }
 
         val auth = SteamCmAuthProvider(applicationContext)
-        val account = auth.activeSession()
+        val account = auth.persistentSession()
         if (task.accessMode == com.sultansgame.modmanager.model.WorkshopAccessMode.Account && account == null) {
             store.updateActiveState(
                 taskId,

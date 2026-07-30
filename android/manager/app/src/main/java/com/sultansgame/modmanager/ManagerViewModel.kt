@@ -41,6 +41,7 @@ import com.sultansgame.modmanager.platform.saf.ZipModImporter
 import com.sultansgame.modmanager.platform.storage.AndroidPrivateModCache
 import com.sultansgame.modmanager.platform.storage.DeploymentPlanStore
 import com.sultansgame.modmanager.platform.workshop.SteamPublicMetadataTransport
+import com.sultansgame.modmanager.platform.workshop.SteamCommunityWorkshopDetailTransport
 import com.sultansgame.modmanager.platform.workshop.SteamCommunityWorkshopBrowser
 import com.sultansgame.modmanager.platform.workshop.WorkshopArtifactImporter
 import com.sultansgame.modmanager.platform.workshop.WorkshopDownloadScheduler
@@ -77,7 +78,10 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     private val downloadScheduler = WorkshopDownloadScheduler(application)
     private val steamAuthProvider = SteamCmAuthProvider(application)
     private val steamAuth: SteamAuthProvider = steamAuthProvider
-    private val workshopProvider = SteamPublicWorkshopProvider(SteamPublicMetadataTransport())
+    private val workshopProvider = SteamPublicWorkshopProvider(
+        transport = SteamPublicMetadataTransport(),
+        detailTransport = SteamCommunityWorkshopDetailTransport(),
+    )
     private val communityWorkshopBrowser = SteamCommunityWorkshopBrowser(
         client = top.apricityx.workshop.steam.protocol.newDefaultOkHttpClient(),
         metadataProvider = workshopProvider,
@@ -342,9 +346,9 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun beginSteamLogin(username: String, password: String) {
+    fun beginSteamLogin(username: String, password: String, rememberSession: Boolean) {
         viewModelScope.launch {
-            handleAuthResult(steamAuth.beginLogin(SteamCredentials(username, password)))
+            handleAuthResult(steamAuth.beginLogin(SteamCredentials(username, password, rememberSession)))
         }
     }
 
@@ -420,7 +424,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             mutableState.value = mutableState.value.copy(workshop = WorkshopUiState.Loading)
         val accessMode = WorkshopAccessMode.Anonymous
             val lookup = withContext(Dispatchers.IO) {
-                workshopProvider.getItem(SULTANS_GAME_APP_ID, id, accessMode)
+                workshopProvider.getItemWithCommunityDetail(SULTANS_GAME_APP_ID, id)
             }
             mutableState.value = mutableState.value.copy(
                 workshop = when (lookup) {
