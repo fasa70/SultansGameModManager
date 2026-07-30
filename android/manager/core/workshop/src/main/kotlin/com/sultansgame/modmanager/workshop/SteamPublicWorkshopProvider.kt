@@ -65,8 +65,8 @@ class SteamPublicWorkshopProvider(
                 title = metadata.title.orEmpty().ifBlank { "Workshop 条目 $publishedFileId" },
                 updatedAtEpochSeconds = metadata.updatedAtEpochSeconds,
                 fileUrl = metadata.fileUrl?.takeIf(WorkshopHttpPolicy::isAllowedArtifactUrl),
-                previewUrl = metadata.previewUrl?.takeIf(WorkshopHttpPolicy::isAllowedPreviewImageUrl)
-                    ?: detail?.previewUrl?.takeIf(WorkshopHttpPolicy::isAllowedPreviewImageUrl),
+                previewUrl = WorkshopHttpPolicy.normalizePreviewImageUrl(metadata.previewUrl)
+                    ?: WorkshopHttpPolicy.normalizePreviewImageUrl(detail?.previewUrl),
                 declaredSizeBytes = metadata.declaredSizeBytes?.takeIf { it >= 0 },
                 availability = availability,
                 description = metadata.description.orEmpty(),

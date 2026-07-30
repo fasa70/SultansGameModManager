@@ -365,10 +365,13 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         workshopBrowseJob?.cancel()
         val generation = ++workshopBrowseGeneration
         workshopBrowseJob = viewModelScope.launch {
+            val current = mutableState.value.workshopBrowse
+            val append = isWorkshopBrowseAppend(current.query, normalizedQuery)
             mutableState.value = mutableState.value.copy(
-                workshopBrowse = mutableState.value.workshopBrowse.copy(
+                workshopBrowse = current.copy(
                     query = normalizedQuery,
-                    isLoading = true,
+                    isRefreshing = !append,
+                    isLoadingMore = append,
                     error = null,
                 ),
             )
@@ -376,8 +379,6 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                 .onSuccess { page ->
                     if (generation != workshopBrowseGeneration) return@onSuccess
                     val previous = mutableState.value.workshopBrowse
-                    val append = normalizedQuery.page > 1 &&
-                        previous.query.copy(page = 1) == normalizedQuery.copy(page = 1)
                     val items = if (append) {
                         (previous.items + page.items).distinctBy(WorkshopItem::publishedFileId)
                     } else {
@@ -394,22 +395,31 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                             periodOptions = page.periodOptions,
                             tagGroups = page.tagGroups,
                             supportsIncompatibleFilter = page.supportsIncompatibleFilter,
+                            hasLoadedOnce = true,
                         ),
                     )
                 }
                 .onFailure { error ->
                     if (generation != workshopBrowseGeneration || error is kotlinx.coroutines.CancellationException) return@onFailure
-                    val current = mutableState.value.workshopBrowse
+                    val previous = mutableState.value.workshopBrowse
                     mutableState.value = mutableState.value.copy(
-                        workshopBrowse = current.copy(
+                        workshopBrowse = previous.copy(
                             query = normalizedQuery,
-                            isLoading = false,
+                            isRefreshing = false,
+                            isLoadingMore = false,
+                            hasLoadedOnce = true,
                             error = error.message ?: "无法读取 Steam 创意工坊。",
                         ),
                     )
                 }
         }
     }
+
+    private fun isWorkshopBrowseAppend(
+        currentQuery: com.sultansgame.modmanager.model.WorkshopBrowseQuery,
+        requestedQuery: com.sultansgame.modmanager.model.WorkshopBrowseQuery,
+    ): Boolean = requestedQuery.page > currentQuery.page &&
+        currentQuery.copy(page = 1) == requestedQuery.copy(page = 1)
     fun lookupWorkshop(rawId: String) {
         if (rawId.isBlank()) {
             mutableState.value = mutableState.value.copy(workshop = WorkshopUiState.Idle)

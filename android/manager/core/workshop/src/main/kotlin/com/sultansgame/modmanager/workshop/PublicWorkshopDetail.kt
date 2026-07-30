@@ -28,7 +28,7 @@ object PublicWorkshopDetailParser {
             .firstOrNull()
         val previewUrl = document.selectFirst("#previewImageMain[src], .workshopItemPreviewImageMain[src], .workshopItemPreviewImage[src]")
             ?.absUrl("src")
-            ?.takeIf(WorkshopHttpPolicy::isAllowedPreviewImageUrl)
+            ?.let(WorkshopHttpPolicy::normalizePreviewImageUrl)
         return PublicWorkshopDetail(authorName, authorProfileUrl, previewUrl)
             .takeIf { it.authorName != null || it.authorProfileUrl != null || it.previewUrl != null }
     }
