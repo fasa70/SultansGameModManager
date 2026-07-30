@@ -24,6 +24,7 @@ interface LoaderBridge {
     fun runtimeStatus(): Flow<LoaderStatus>
     suspend fun storageStatus(): GameModStorageStatus
     suspend fun requestApply(request: ApplyRequest): ApplyResult
+    suspend fun stopGameForSync(): GameModStorageStatus
     suspend fun revokeStorageAuthorization(): GameModStorageStatus
 }
 
@@ -47,6 +48,8 @@ class UnavailableLoaderBridge : LoaderBridge {
 
     override suspend fun requestApply(request: ApplyRequest): ApplyResult =
         ApplyResult.Rejected(storageUnavailable)
+
+    override suspend fun stopGameForSync(): GameModStorageStatus = storageUnavailable
 
     override suspend fun revokeStorageAuthorization(): GameModStorageStatus = storageUnavailable
 }

@@ -2,6 +2,7 @@ package com.sultansgame.modmanager.platform.game
 
 import android.content.ContentResolver
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
@@ -39,6 +40,10 @@ class AndroidModStorageLoaderBridge(
     private val context: Context,
     private val cacheRoot: File,
 ) : LoaderBridge {
+    private companion object {
+        const val GAME_PACKAGE = "com.gametree.sultan.pd"
+    }
+
     private val uri = Uri.parse("content://$GAME_MOD_STORAGE_AUTHORITY")
 
     override fun runtimeStatus(): Flow<LoaderStatus> = flowOf(
@@ -73,6 +78,16 @@ class AndroidModStorageLoaderBridge(
                     putParcelable("input", readPipe[0])
                 }
                 val status = call(ModStorageCall.SYNC_SNAPSHOT, bundle)
+                if (!status.isReady) {
+                    closeQuietly(readPipe[0])
+                    closeQuietly(readPipe[1])
+                    withContext(NonCancellable) {
+                        if (writer.isActive) writer.cancelAndJoin()
+                    }
+                    return@supervisorScope ApplyResult.Rejected(status)
+                }
+
+                closeQuietly(readPipe[0])
                 val writerFailure = try {
                     writer.await()
                     null
@@ -81,7 +96,7 @@ class AndroidModStorageLoaderBridge(
                 } catch (error: Exception) {
                     error
                 }
-                if (writerFailure != null && status.isReady) {
+                if (writerFailure != null) {
                     ApplyResult.Rejected(
                         unavailable(
                             ModStorageAvailability.Unknown,
@@ -89,18 +104,21 @@ class AndroidModStorageLoaderBridge(
                             writerFailure.message ?: "Mod 数据传输中断",
                         ),
                     )
-                } else if (status.isReady) {
-                    ApplyResult.Applied(ModStorageSyncResult(status, request.snapshot.revision))
                 } else {
-                    ApplyResult.Rejected(status)
+                    ApplyResult.Applied(ModStorageSyncResult(status, request.snapshot.revision))
                 }
             } finally {
                 withContext(NonCancellable) {
-                    readPipe[0].close()
+                    closeQuietly(readPipe[0])
+                    closeQuietly(readPipe[1])
                     if (writer.isActive) writer.cancelAndJoin()
                 }
             }
         }
+    }
+
+    override suspend fun stopGameForSync(): GameModStorageStatus = withContext(Dispatchers.IO) {
+        call(ModStorageCall.STOP_GAME_FOR_SYNC, requestBundle())
     }
 
     override suspend fun revokeStorageAuthorization(): GameModStorageStatus = withContext(Dispatchers.IO) {
@@ -122,7 +140,7 @@ class AndroidModStorageLoaderBridge(
             "Android 系统拒绝访问游戏 Mod 服务；请重新修补并安装匹配的游戏版本",
         )
     } catch (_: IllegalArgumentException) {
-        unavailable(ModStorageAvailability.ProviderMissing, ModStorageFailureCode.ProviderMissing, "游戏内 ModStorageProvider 不可用")
+        providerUnavailableStatus()
     } catch (error: Exception) {
         unavailable(ModStorageAvailability.Unknown, ModStorageFailureCode.InternalError, error.message ?: "无法与游戏 Mod 服务通信")
     }
@@ -161,8 +179,41 @@ class AndroidModStorageLoaderBridge(
         )
     }
 
+    private fun providerUnavailableStatus(): GameModStorageStatus {
+        val provider = context.packageManager.resolveContentProvider(GAME_MOD_STORAGE_AUTHORITY, 0)
+        if (provider?.packageName != GAME_PACKAGE) {
+            return unavailable(
+                ModStorageAvailability.ProviderMissing,
+                ModStorageFailureCode.ProviderMissing,
+                "游戏内 ModStorageProvider 未安装；请重新修补并安装匹配的游戏版本",
+            )
+        }
+        val enabled = context.packageManager.getComponentEnabledSetting(
+            android.content.ComponentName(provider.packageName, provider.name),
+        ) != PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+        if (!enabled) {
+            return unavailable(
+                ModStorageAvailability.ProviderMissing,
+                ModStorageFailureCode.ProviderMissing,
+                "游戏内 ModStorageProvider 已被禁用；请重新修补并安装匹配的游戏版本",
+            )
+        }
+        return unavailable(
+            ModStorageAvailability.ProviderUnavailable,
+            ModStorageFailureCode.ProviderUnavailable,
+            "游戏 Mod 服务当前不可访问。请先启动游戏一次，再返回 Manager 确认关闭游戏后同步。",
+        )
+    }
+
     private fun unavailable(availability: ModStorageAvailability, failure: ModStorageFailureCode, reason: String) =
         GameModStorageStatus(availability = availability, failureCode = failure, reason = reason)
+
+    private fun closeQuietly(descriptor: ParcelFileDescriptor) {
+        try {
+            descriptor.close()
+        } catch (_: Exception) {
+        }
+    }
 
     private fun writeSnapshot(output: DataOutputStream, entries: List<DeploymentEntry>) {
         output.writeInt(entries.size)

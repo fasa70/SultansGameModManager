@@ -95,6 +95,7 @@ private sealed interface DialogKind {
     data object License : DialogKind
     data object ClearCache : DialogKind
     data object SyncMods : DialogKind
+    data object StopGameAndSync : DialogKind
     data object PatchWarning : DialogKind
     data class PatchCleanup(val transactionId: String) : DialogKind
 }
@@ -129,6 +130,7 @@ class MainActivity : ComponentActivity() {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 viewModel.uiEvents.collect { event ->
                     when (event) {
+                        is ManagerUiEvent.LaunchGameForModService -> startActivity(event.intent)
                         is ManagerUiEvent.OpenGameUninstall -> uninstallOriginalGame.launch(
                             Intent(Intent.ACTION_UNINSTALL_PACKAGE, Uri.parse("package:com.gametree.sultan.pd"))
                                 .putExtra(Intent.EXTRA_RETURN_RESULT, true),
@@ -175,9 +177,12 @@ class MainActivity : ComponentActivity() {
                     onAcceptNotice = viewModel::acceptLegalNotice,
                     onClearModCache = viewModel::clearModCache,
                     onRefreshGameMods = viewModel::refreshGameModStorage,
+                    onLaunchGameForModService = viewModel::launchGameForModService,
                     onSetModEnabled = viewModel::setModEnabled,
                     onMoveMod = viewModel::moveMod,
                     onSyncMods = viewModel::syncMods,
+                    onConfirmStopGameAndSync = viewModel::confirmStopGameAndSync,
+                    onDismissStopGameAndSync = viewModel::dismissStopGameAndSyncConfirmation,
                     onClearFeedback = viewModel::clearFeedback,
                     onUpdatePatchConfirmation = viewModel::updatePatchConfirmation,
                     onRequestPatchCleanup = viewModel::requestPatchCleanupConfirmation,
@@ -230,9 +235,12 @@ private fun ManagerApp(
     onAcceptNotice: () -> Unit,
     onClearModCache: () -> Unit,
     onRefreshGameMods: () -> Unit,
+    onLaunchGameForModService: () -> Unit,
     onSetModEnabled: (String, Boolean) -> Unit,
     onMoveMod: (String, Int) -> Unit,
     onSyncMods: (Boolean) -> Unit,
+    onConfirmStopGameAndSync: () -> Unit,
+    onDismissStopGameAndSync: () -> Unit,
     onClearFeedback: () -> Unit,
     onUpdatePatchConfirmation: (PatchConfirmation) -> Unit,
     onRequestPatchCleanup: (String) -> Unit,
@@ -247,6 +255,9 @@ private fun ManagerApp(
     var dialog by remember { mutableStateOf<DialogKind?>(null) }
     LaunchedEffect(state.patchCleanupConfirmation?.transactionId) {
         state.patchCleanupConfirmation?.let { cleanup -> dialog = DialogKind.PatchCleanup(cleanup.transactionId) }
+    }
+    LaunchedEffect(state.gameStopSyncConfirmation) {
+        if (state.gameStopSyncConfirmation != null) dialog = DialogKind.StopGameAndSync
     }
     val destination = Destination.entries[destinationIndex]
 
@@ -274,9 +285,12 @@ private fun ManagerApp(
                     onConfirmWorkshopImport = onConfirmWorkshopImport,
                     onDiscardWorkshopArtifact = onDiscardWorkshopArtifact,
                     onRefreshGameMods = onRefreshGameMods,
+                    onLaunchGameForModService = onLaunchGameForModService,
                     onSetModEnabled = onSetModEnabled,
                     onMoveMod = onMoveMod,
                     onSyncMods = onSyncMods,
+                    onConfirmStopGameAndSync = onConfirmStopGameAndSync,
+                    onDismissStopGameAndSync = onDismissStopGameAndSync,
                     onShowDialog = { dialog = it },
                     onImportLocalApk = onImportLocalApk,
                     onImportLocalApkSet = onImportLocalApkSet,
@@ -315,9 +329,12 @@ private fun ManagerApp(
                     onConfirmWorkshopImport = onConfirmWorkshopImport,
                     onDiscardWorkshopArtifact = onDiscardWorkshopArtifact,
                     onRefreshGameMods = onRefreshGameMods,
+                    onLaunchGameForModService = onLaunchGameForModService,
                     onSetModEnabled = onSetModEnabled,
                     onMoveMod = onMoveMod,
                     onSyncMods = onSyncMods,
+                    onConfirmStopGameAndSync = onConfirmStopGameAndSync,
+                    onDismissStopGameAndSync = onDismissStopGameAndSync,
                     onShowDialog = { dialog = it },
                     onImportLocalApk = onImportLocalApk,
                     onImportLocalApkSet = onImportLocalApkSet,
@@ -373,6 +390,13 @@ private fun ManagerApp(
                 onDismiss = { dialog = null },
             )
         }
+        DialogKind.StopGameAndSync -> ConfirmDialog(
+            title = "关闭游戏后同步 Mod？",
+            body = "游戏仍在运行，继续会立即结束游戏进程；未保存的游戏进度可能丢失。仅关闭游戏默认进程，不会强行停止整个应用包。关闭后将自动重试本次同步。",
+            confirmLabel = "关闭游戏并同步",
+            onConfirm = { onConfirmStopGameAndSync(); dialog = null },
+            onDismiss = { onDismissStopGameAndSync(); dialog = null },
+        )
         is DialogKind.PatchCleanup -> {
             val candidate = state.patchCleanup?.takeIf { it.transactionId == activeDialog.transactionId }
             if (candidate == null) {
@@ -504,9 +528,12 @@ private fun ContentArea(
     onConfirmWorkshopImport: (String) -> Unit,
     onDiscardWorkshopArtifact: (String) -> Unit,
     onRefreshGameMods: () -> Unit,
+    onLaunchGameForModService: () -> Unit,
     onSetModEnabled: (String, Boolean) -> Unit,
     onMoveMod: (String, Int) -> Unit,
     onSyncMods: (Boolean) -> Unit,
+    onConfirmStopGameAndSync: () -> Unit,
+    onDismissStopGameAndSync: () -> Unit,
     onShowDialog: (DialogKind) -> Unit,
     onImportLocalApk: () -> Unit,
     onImportLocalApkSet: () -> Unit,
@@ -530,6 +557,7 @@ private fun ContentArea(
                 wide = wideLayout,
                 onImport = onImportMod,
                 onRefreshGame = onRefreshGameMods,
+                onLaunchGameForService = onLaunchGameForModService,
                 onSetEnabled = onSetModEnabled,
                 onMove = onMoveMod,
                 onSync = { onShowDialog(DialogKind.SyncMods) },
@@ -593,6 +621,7 @@ private fun ModsScreen(
     wide: Boolean,
     onImport: () -> Unit,
     onRefreshGame: () -> Unit,
+    onLaunchGameForService: () -> Unit,
     onSetEnabled: (String, Boolean) -> Unit,
     onMove: (String, Int) -> Unit,
     onSync: () -> Unit,
@@ -616,6 +645,15 @@ private fun ModsScreen(
             )
         }
         item { PrimaryButton("刷新游戏 Mod 目录", !state.deploymentInProgress, onRefreshGame) }
+        if (storage?.failureCode == com.sultansgame.modmanager.model.ModStorageFailureCode.ProviderUnavailable) {
+            item {
+                PrimaryButton(
+                    "启动游戏以激活 Mod 服务",
+                    !state.deploymentInProgress,
+                    onLaunchGameForService,
+                )
+            }
+        }
         item { SectionLabel("部署计划", "${state.deploymentPlan.count { it.enabled }} 个启用") }
         if (state.deploymentPlan.isEmpty()) item {
             EmptyPanel("尚无缓存内容", "导入第一个 ZIP Mod 后，可在此启用、调整顺序并同步。")
