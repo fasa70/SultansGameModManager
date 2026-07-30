@@ -20,10 +20,14 @@ import com.sultansgame.modmanager.model.ModStorageAvailability
 import com.sultansgame.modmanager.model.ModStorageCall
 import com.sultansgame.modmanager.model.ModStorageFailureCode
 import com.sultansgame.modmanager.model.ModStorageSyncResult
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 import java.io.BufferedOutputStream
 import java.io.DataOutputStream
@@ -51,38 +55,52 @@ class AndroidModStorageLoaderBridge(
     }
 
     override suspend fun requestApply(request: ApplyRequest): ApplyResult = withContext(Dispatchers.IO) {
-        val readPipe = ParcelFileDescriptor.createPipe()
-        val writer = async(Dispatchers.IO) {
-            readPipe[1].use { descriptor ->
-                DataOutputStream(BufferedOutputStream(ParcelFileDescriptor.AutoCloseOutputStream(descriptor))).use { output ->
-                    writeSnapshot(output, request.snapshot.enabledEntries)
+        supervisorScope {
+            val readPipe = ParcelFileDescriptor.createPipe()
+            val writer = async(Dispatchers.IO) {
+                readPipe[1].use { descriptor ->
+                    DataOutputStream(BufferedOutputStream(ParcelFileDescriptor.AutoCloseOutputStream(descriptor))).use { output ->
+                        writeSnapshot(output, request.snapshot.enabledEntries)
+                    }
+                }
+            }
+            try {
+                val bundle = requestBundle().apply {
+                    putString(ModStorageCall.KEY_REVISION, request.snapshot.revision)
+                    putString(ModStorageCall.KEY_SNAPSHOT_DIGEST, request.snapshot.snapshotDigestSha256)
+                    putBoolean(ModStorageCall.KEY_ALLOW_EXTERNAL_REPLACEMENT, request.snapshot.allowExternalReplacement)
+                    putBoolean("authorize", true)
+                    putParcelable("input", readPipe[0])
+                }
+                val status = call(ModStorageCall.SYNC_SNAPSHOT, bundle)
+                val writerFailure = try {
+                    writer.await()
+                    null
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    error
+                }
+                if (writerFailure != null && status.isReady) {
+                    ApplyResult.Rejected(
+                        unavailable(
+                            ModStorageAvailability.Unknown,
+                            ModStorageFailureCode.TransferInterrupted,
+                            writerFailure.message ?: "Mod 数据传输中断",
+                        ),
+                    )
+                } else if (status.isReady) {
+                    ApplyResult.Applied(ModStorageSyncResult(status, request.snapshot.revision))
+                } else {
+                    ApplyResult.Rejected(status)
+                }
+            } finally {
+                withContext(NonCancellable) {
+                    readPipe[0].close()
+                    if (writer.isActive) writer.cancelAndJoin()
                 }
             }
         }
-        val bundle = requestBundle().apply {
-            putString(ModStorageCall.KEY_REVISION, request.snapshot.revision)
-            putString(ModStorageCall.KEY_SNAPSHOT_DIGEST, request.snapshot.snapshotDigestSha256)
-            putBoolean(ModStorageCall.KEY_ALLOW_EXTERNAL_REPLACEMENT, request.snapshot.allowExternalReplacement)
-            putBoolean("authorize", true)
-            putParcelable("input", readPipe[0])
-        }
-        val status = try {
-            call(ModStorageCall.SYNC_SNAPSHOT, bundle)
-        } finally {
-            readPipe[0].close()
-        }
-        val writerFailure = runCatching { writer.await() }.exceptionOrNull()
-        if (writerFailure != null && status.isReady) {
-            return@withContext ApplyResult.Rejected(
-                unavailable(
-                    ModStorageAvailability.Unknown,
-                    ModStorageFailureCode.TransferInterrupted,
-                    writerFailure.message ?: "Mod 数据传输中断",
-                ),
-            )
-        }
-        if (status.isReady) ApplyResult.Applied(ModStorageSyncResult(status, request.snapshot.revision))
-        else ApplyResult.Rejected(status)
     }
 
     override suspend fun revokeStorageAuthorization(): GameModStorageStatus = withContext(Dispatchers.IO) {
@@ -95,6 +113,8 @@ class AndroidModStorageLoaderBridge(
 
     private fun call(method: String, extras: Bundle): GameModStorageStatus = try {
         parseResult(context.contentResolver.call(uri, method, null, extras))
+    } catch (error: CancellationException) {
+        throw error
     } catch (_: SecurityException) {
         unavailable(ModStorageAvailability.Unauthorized, ModStorageFailureCode.Unauthorized, "Manager 未获游戏 Mod 管理授权")
     } catch (_: IllegalArgumentException) {
@@ -108,9 +128,10 @@ class AndroidModStorageLoaderBridge(
         val code = bundle.getString(ModStorageCall.KEY_RESULT_CODE).orEmpty()
         val reason = bundle.getString(ModStorageCall.KEY_RESULT_REASON)
         val availability = when (code) {
-            "ok" -> ModStorageAvailability.Available
+            "ok", "externalChangesDetected", "validationFailed", "commitFailed" -> ModStorageAvailability.Available
             "unauthorized" -> ModStorageAvailability.Unauthorized
             "incompatible" -> ModStorageAvailability.Incompatible
+            "gameRunning" -> ModStorageAvailability.GameRunning
             else -> ModStorageAvailability.Unknown
         }
         val failure = when (code) {
@@ -118,7 +139,12 @@ class AndroidModStorageLoaderBridge(
             "unauthorized" -> ModStorageFailureCode.Unauthorized
             "incompatible" -> ModStorageFailureCode.ProtocolMismatch
             "invalid" -> ModStorageFailureCode.InvalidSnapshot
-            else -> ModStorageFailureCode.InternalError
+            "gameRunning" -> ModStorageFailureCode.GameRunning
+            "externalChangesDetected" -> ModStorageFailureCode.ExternalChangesDetected
+            "validationFailed" -> ModStorageFailureCode.ValidationFailed
+            "commitFailed" -> ModStorageFailureCode.CommitFailed
+            "failed" -> ModStorageFailureCode.InternalError
+            else -> ModStorageFailureCode.Unknown
         }
         val names = bundle.getStringArrayList("modNames").orEmpty()
         return GameModStorageStatus(

@@ -193,20 +193,27 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
 
     fun syncMods(allowExternalReplacement: Boolean) {
         viewModelScope.launch {
-            val snapshot = deploymentPlan.snapshot(mutableState.value.cachedMods, allowExternalReplacement)
             mutableState.value = mutableState.value.copy(deploymentInProgress = true, feedback = null)
-            val result = withContext(Dispatchers.IO) { loaderBridge.requestApply(ApplyRequest(snapshot)) }
-            when (result) {
-                is ApplyResult.Applied -> mutableState.value = mutableState.value.copy(
-                    deploymentInProgress = false,
-                    gameModStorage = result.result.status,
-                    feedback = FeedbackMessage("已同步 ${snapshot.enabledEntries.size} 个启用 Mod；请退出并冷启动游戏。"),
+            try {
+                val snapshot = deploymentPlan.snapshot(mutableState.value.cachedMods, allowExternalReplacement)
+                when (val result = withContext(Dispatchers.IO) { loaderBridge.requestApply(ApplyRequest(snapshot)) }) {
+                    is ApplyResult.Applied -> mutableState.value = mutableState.value.copy(
+                        gameModStorage = result.result.status,
+                        feedback = FeedbackMessage("已同步 ${snapshot.enabledEntries.size} 个启用 Mod；请退出并冷启动游戏。"),
+                    )
+                    is ApplyResult.Rejected -> mutableState.value = mutableState.value.copy(
+                        gameModStorage = result.status,
+                        feedback = FeedbackMessage(result.status.reason ?: "同步到游戏失败。", isError = true),
+                    )
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                mutableState.value = mutableState.value.copy(
+                    feedback = FeedbackMessage("同步到游戏失败：${error.message ?: "请重试。"}", isError = true),
                 )
-                is ApplyResult.Rejected -> mutableState.value = mutableState.value.copy(
-                    deploymentInProgress = false,
-                    gameModStorage = result.status,
-                    feedback = FeedbackMessage(result.status.reason ?: "同步到游戏失败。", isError = true),
-                )
+            } finally {
+                mutableState.value = mutableState.value.copy(deploymentInProgress = false)
             }
         }
     }
