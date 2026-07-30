@@ -139,6 +139,7 @@ class MainActivity : ComponentActivity() {
                     onExportPreparedApks = viewModel::exportPreparedApks,
                     onOpenUnknownSourcesSettings = viewModel::openUnknownSourcesSettings,
                     onRestartPatch = viewModel::restartPatchFlow,
+                    onResumePreparedPatch = viewModel::resumePreparedPatch,
                     onLookupWorkshop = viewModel::lookupWorkshop,
                     onBeginSteamLogin = viewModel::beginSteamLogin,
                     onSubmitSteamGuard = viewModel::submitSteamGuard,
@@ -189,6 +190,7 @@ private fun ManagerApp(
     onExportPreparedApks: (String) -> Unit,
     onOpenUnknownSourcesSettings: () -> Unit,
     onRestartPatch: () -> Unit,
+    onResumePreparedPatch: (String) -> Unit,
     onLookupWorkshop: (String) -> Unit,
     onBeginSteamLogin: (String, String) -> Unit,
     onSubmitSteamGuard: (String) -> Unit,
@@ -212,7 +214,8 @@ private fun ManagerApp(
         mutableIntStateOf(
             if (state.patch is PatchUiState.AwaitingOriginalUninstall ||
                 state.patch is PatchUiState.ReadyToInstall ||
-                state.patch is PatchUiState.AwaitingInstallPermission
+                state.patch is PatchUiState.AwaitingInstallPermission ||
+                state.preparedPatchRecovery != null
             ) {
                 Destination.Patch.ordinal
             } else {
@@ -260,6 +263,7 @@ private fun ManagerApp(
                     onExportPreparedApks = onExportPreparedApks,
                     onOpenUnknownSourcesSettings = onOpenUnknownSourcesSettings,
                     onRestartPatch = onRestartPatch,
+                    onResumePreparedPatch = onResumePreparedPatch,
                     onUpdatePatchConfirmation = onUpdatePatchConfirmation,
                 )
             }
@@ -298,6 +302,7 @@ private fun ManagerApp(
                     onExportPreparedApks = onExportPreparedApks,
                     onOpenUnknownSourcesSettings = onOpenUnknownSourcesSettings,
                     onRestartPatch = onRestartPatch,
+                    onResumePreparedPatch = onResumePreparedPatch,
                     onUpdatePatchConfirmation = onUpdatePatchConfirmation,
                 )
                 CompactNavigation(destinationIndex) { destinationIndex = it }
@@ -470,6 +475,7 @@ private fun ContentArea(
     onExportPreparedApks: (String) -> Unit,
     onOpenUnknownSourcesSettings: () -> Unit,
     onRestartPatch: () -> Unit,
+    onResumePreparedPatch: (String) -> Unit,
     onUpdatePatchConfirmation: (PatchConfirmation) -> Unit,
 ) {
     Column(modifier) {
@@ -513,6 +519,7 @@ private fun ContentArea(
                 onExportPreparedApks = onExportPreparedApks,
                 onOpenUnknownSourcesSettings = onOpenUnknownSourcesSettings,
                 onRestart = onRestartPatch,
+                onResumePreparedPatch = onResumePreparedPatch,
                 onUpdateConfirmation = onUpdatePatchConfirmation,
             )
             Destination.Settings -> SettingsScreen(state, wideLayout, onShowDialog)
@@ -806,6 +813,7 @@ private fun PatchScreen(
     onExportPreparedApks: (String) -> Unit,
     onOpenUnknownSourcesSettings: () -> Unit,
     onRestart: () -> Unit,
+    onResumePreparedPatch: (String) -> Unit,
     onUpdateConfirmation: (PatchConfirmation) -> Unit,
 ) {
     val keyStatus = when (state.deviceSigningKeyState) {
@@ -827,6 +835,16 @@ private fun PatchScreen(
         item { SectionLabel("设备签名密钥", keyStatus) }
         when (val patch = state.patch) {
             PatchUiState.ChooseSource -> {
+                state.preparedPatchRecovery?.let { recovery ->
+                    item { SectionLabel("继续未完成的安装", "修补工件已保留") }
+                    item {
+                        NoticeStrip(
+                            "已准备的修补 APK",
+                            "${recovery.summary}\n继续后仍需手动卸载原版并确认 Android 系统安装；不会自动安装。",
+                        )
+                    }
+                    item { PrimaryButton("继续安装已准备工件") { onResumePreparedPatch(recovery.transactionId) } }
+                }
                 item { SectionLabel("步骤 1", "选择来源") }
                 item {
                     NoticeStrip(

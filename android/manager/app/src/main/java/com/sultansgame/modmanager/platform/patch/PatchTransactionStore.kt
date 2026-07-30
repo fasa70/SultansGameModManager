@@ -26,18 +26,16 @@ internal class PatchTransactionStore(context: Context) {
 
     fun root(transactionId: String): File = File(root, transactionId)
 
-    fun latestResumable(): PatchTransaction? = root.listFiles()
+    fun latestPreparedForRecovery(): PatchTransaction? = root.listFiles()
         .orEmpty()
         .asSequence()
         .filter(File::isDirectory)
         .mapNotNull { directory -> read(directory.name)?.let { transaction -> transaction to directory } }
-        .filter { (transaction, _) ->
-            transaction.stage in RESUMABLE_STAGES &&
-                transaction.signedArtifactNames.isNotEmpty() &&
-                transaction.signedArtifactNames.distinct().size == transaction.signedArtifactNames.size
-        }
+        .filter { (transaction, _) -> transaction.isPreparedForRecovery() }
         .maxByOrNull { (_, directory) -> File(directory, "transaction.properties").lastModified() }
         ?.first
+
+    fun latestResumable(): PatchTransaction? = latestPreparedForRecovery()
 
     fun latestAwaitingGameUninstall(): PatchTransaction? = latestResumable()
         ?.takeIf { it.stage == PatchStage.AwaitingGameUninstall }
@@ -88,7 +86,16 @@ internal class PatchTransactionStore(context: Context) {
         }.getOrNull()
     }
 
+    private fun PatchTransaction.isPreparedForRecovery(): Boolean =
+        stage in RESUMABLE_STAGES &&
+            signedArtifactNames.isNotEmpty() &&
+            signedArtifactNames.distinct().size == signedArtifactNames.size &&
+            signedArtifactNames.all { it == File(it).name } &&
+            artifactDigests.size == signedArtifactNames.size &&
+            artifactDigests.all { it.matches(SHA256_PATTERN) }
+
     companion object {
+        private val SHA256_PATTERN = Regex("[0-9a-fA-F]{64}")
         private val RESUMABLE_STAGES = setOf(
             PatchStage.AwaitingGameUninstall,
             PatchStage.AwaitingInstallPermission,

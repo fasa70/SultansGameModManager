@@ -178,6 +178,32 @@ internal class PatchOrchestrator(
         return PatchOrchestrationResult.NeedsGameUninstall(extracted.transactionId)
     }
 
+    fun resumePreparedArtifacts(transactionId: String): PatchOrchestrationResult {
+        val transaction = transactions.read(transactionId)
+            ?: return PatchOrchestrationResult.Failed(null, PatchFailure.InternalError, "找不到已准备的修补事务。")
+        if (transaction.stage !in setOf(PatchStage.AwaitingGameUninstall, PatchStage.AwaitingInstallPermission)) {
+            return PatchOrchestrationResult.Failed(transactionId, PatchFailure.InternalError, "修补事务不处于可恢复的已准备阶段。")
+        }
+        when (val validation = validatePreparedArtifacts(transaction)) {
+            is PreparedArtifactsValidation.Invalid -> return fail(transactionId, validation.failure, validation.reason)
+            is PreparedArtifactsValidation.Valid -> Unit
+        }
+        return when (gameProbe.probe()) {
+            is com.sultansgame.modmanager.platform.game.GameProbeResult.Found ->
+                PatchOrchestrationResult.NeedsGameUninstall(transactionId)
+            is com.sultansgame.modmanager.platform.game.GameProbeResult.Failed ->
+                fail(transactionId, PatchFailure.SystemInstallFailed, "无法确认原版游戏是否已卸载。")
+            com.sultansgame.modmanager.platform.game.GameProbeResult.NotInstalled -> {
+                if (!installer.canRequestInstalls()) {
+                    transactions.write(transaction.copy(stage = PatchStage.AwaitingInstallPermission))
+                    PatchOrchestrationResult.NeedsInstallPermission(transactionId)
+                } else {
+                    PatchOrchestrationResult.NeedsGameUninstall(transactionId)
+                }
+            }
+        }
+    }
+
     fun submitPreparedArtifacts(transactionId: String): PatchOrchestrationResult {
         val transaction = transactions.read(transactionId)
             ?: return PatchOrchestrationResult.Failed(null, PatchFailure.InternalError, "找不到待安装的修补事务。")
@@ -197,23 +223,9 @@ internal class PatchOrchestrator(
             transactions.write(transaction.copy(stage = PatchStage.AwaitingInstallPermission))
             return PatchOrchestrationResult.NeedsInstallPermission(transactionId)
         }
-        val artifactNames = transaction.signedArtifactNames
-        if (artifactNames.isEmpty() || artifactNames.distinct().size != artifactNames.size) {
-            return fail(transactionId, PatchFailure.InternalError, "修补事务缺少签名 APK 集合。")
-        }
-        val signedDirectory = File(transactions.root(transactionId), "signed")
-        val artifacts = artifactNames.map { name ->
-            if (name != File(name).name) return fail(transactionId, PatchFailure.InternalError, "签名 APK 文件名无效。")
-            File(signedDirectory, name)
-        }
-        if (artifacts.any { !it.isFile }) {
-            return fail(transactionId, PatchFailure.InternalError, "签名 APK 暂存文件不完整。")
-        }
-        val digests = artifacts.map { artifact ->
-            com.sultansgame.modmanager.apk.ReadOnlyApkInspector().sha256 { artifact.inputStream() }
-        }
-        if (digests != transaction.artifactDigests) {
-            return fail(transactionId, PatchFailure.InternalError, "签名 APK 暂存文件摘要不匹配。")
+        val artifacts = when (val validation = validatePreparedArtifacts(transaction)) {
+            is PreparedArtifactsValidation.Valid -> validation.artifacts
+            is PreparedArtifactsValidation.Invalid -> return fail(transactionId, validation.failure, validation.reason)
         }
         return when (val submission = installer.submit(transactionId, artifacts)) {
             is PackageInstallSubmission.Submitted -> {
@@ -265,6 +277,55 @@ internal class PatchOrchestrator(
         keyStore.markMigrationCompleted(transactionId, identity)
         transactions.write(transaction.copy(stage = PatchStage.Completed))
         return PatchOrchestrationResult.Completed(transactionId)
+    }
+
+    private fun validatePreparedArtifacts(transaction: PatchTransaction): PreparedArtifactsValidation {
+        val expectedCertificate = transaction.expectedCertificateSha256
+            ?: return PreparedArtifactsValidation.Invalid(
+                PatchFailure.DeviceKeyMissing,
+                "修补事务缺少设备签名证书。",
+            )
+        if (keyStore.state() == com.sultansgame.modmanager.model.DeviceSigningKeyState.MissingAfterMigration) {
+            return PreparedArtifactsValidation.Invalid(
+                PatchFailure.DeviceKeyMissing,
+                "设备签名密钥已丢失，不能继续安装已准备的工件。",
+            )
+        }
+        val currentCertificate = runCatching(keyStore::certificateSha256).getOrNull()
+        if (currentCertificate == null || currentCertificate != expectedCertificate) {
+            return PreparedArtifactsValidation.Invalid(
+                PatchFailure.DeviceKeyMissing,
+                "当前 Android Keystore 与已准备工件的签名证书不一致。",
+            )
+        }
+        val artifactNames = transaction.signedArtifactNames
+        if (artifactNames.isEmpty() || artifactNames.distinct().size != artifactNames.size ||
+            transaction.artifactDigests.size != artifactNames.size
+        ) {
+            return PreparedArtifactsValidation.Invalid(PatchFailure.InternalError, "修补事务缺少完整的签名 APK 集合。")
+        }
+        val signedDirectory = File(transactions.root(transaction.id), "signed")
+        val artifacts = artifactNames.map { name ->
+            if (name != File(name).name) {
+                return PreparedArtifactsValidation.Invalid(PatchFailure.InternalError, "签名 APK 文件名无效。")
+            }
+            File(signedDirectory, name)
+        }
+        if (artifacts.any { !it.isFile }) {
+            return PreparedArtifactsValidation.Invalid(PatchFailure.InternalError, "签名 APK 暂存文件不完整。")
+        }
+        val digests = artifacts.map { artifact ->
+            com.sultansgame.modmanager.apk.ReadOnlyApkInspector().sha256 { artifact.inputStream() }
+        }
+        if (digests != transaction.artifactDigests) {
+            return PreparedArtifactsValidation.Invalid(PatchFailure.InternalError, "签名 APK 暂存文件摘要不匹配。")
+        }
+        return PreparedArtifactsValidation.Valid(artifacts)
+    }
+
+    private sealed interface PreparedArtifactsValidation {
+        data class Valid(val artifacts: List<File>) : PreparedArtifactsValidation
+        data class Invalid(val failure: PatchFailure, val reason: String) : PreparedArtifactsValidation
     }
 
     private fun sign(input: ExtractedApk, output: File, identity: DeviceSigningIdentity): ExtractedApk? {
