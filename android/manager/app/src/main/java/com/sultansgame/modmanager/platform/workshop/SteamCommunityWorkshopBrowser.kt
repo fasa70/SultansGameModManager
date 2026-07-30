@@ -8,6 +8,7 @@ import com.sultansgame.modmanager.workshop.PublicWorkshopBrowseItemSkeleton
 import com.sultansgame.modmanager.workshop.PublicWorkshopBrowseParser
 import com.sultansgame.modmanager.workshop.SteamPublicWorkshopProvider
 import com.sultansgame.modmanager.model.WorkshopAccessMode
+import com.sultansgame.modmanager.workshop.WorkshopHttpPolicy
 import com.sultansgame.modmanager.workshop.WorkshopLookupResult
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
@@ -100,7 +101,7 @@ class SteamCommunityWorkshopBrowser(
         return when (resolved) {
             is WorkshopLookupResult.Available -> resolved.item.copy(
                 title = resolved.item.title.ifBlank { skeleton.title.ifBlank { "Workshop 条目 $id" } },
-                previewUrl = resolved.item.previewUrl ?: skeleton.previewUrl,
+                previewUrl = resolved.item.previewUrl ?: skeleton.previewUrl?.takeIf(WorkshopHttpPolicy::isAllowedPreviewImageUrl),
                 authorName = resolved.item.authorName.ifBlank { skeleton.authorName },
                 isDownloadInfoResolved = true,
             )

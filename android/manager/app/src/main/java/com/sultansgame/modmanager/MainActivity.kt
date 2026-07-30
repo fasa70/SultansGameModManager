@@ -10,6 +10,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -46,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -67,6 +69,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import kotlinx.coroutines.launch
+import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.request.crossfade
 import com.sultansgame.modmanager.model.PatchConfirmation
 import com.sultansgame.modmanager.model.WorkshopAvailability
 import com.sultansgame.modmanager.platform.game.GameProbeResult
@@ -200,7 +205,7 @@ private fun ManagerApp(
     onRestartPatch: () -> Unit,
     onResumePreparedPatch: (String) -> Unit,
     onLookupWorkshop: (String) -> Unit,
-    onBeginSteamLogin: (String, String) -> Unit,
+    onBeginSteamLogin: (String, String, Boolean) -> Unit,
     onSubmitSteamGuard: (String) -> Unit,
     onLogoutSteam: () -> Unit,
     onBrowseWorkshop: (com.sultansgame.modmanager.model.WorkshopBrowseQuery) -> Unit,
@@ -454,7 +459,7 @@ private fun ContentArea(
     wideLayout: Boolean,
     onImportMod: () -> Unit,
     onLookupWorkshop: (String) -> Unit,
-    onBeginSteamLogin: (String, String) -> Unit,
+    onBeginSteamLogin: (String, String, Boolean) -> Unit,
     onSubmitSteamGuard: (String) -> Unit,
     onLogoutSteam: () -> Unit,
     onBrowseWorkshop: (com.sultansgame.modmanager.model.WorkshopBrowseQuery) -> Unit,
@@ -631,7 +636,7 @@ private fun WorkshopNavigation(
     state: ManagerUiState,
     wide: Boolean,
     onLookup: (String) -> Unit,
-    onBeginSteamLogin: (String, String) -> Unit,
+    onBeginSteamLogin: (String, String, Boolean) -> Unit,
     onSubmitSteamGuard: (String) -> Unit,
     onLogoutSteam: () -> Unit,
     onBrowse: (com.sultansgame.modmanager.model.WorkshopBrowseQuery) -> Unit,
@@ -797,7 +802,8 @@ private fun WorkshopDetailScreen(
                     Text("← 返回创意工坊", modifier = Modifier.clickable(onClick = onBack).padding(vertical = 4.dp), fontSize = 13.sp)
                     Text("WORKSHOP ITEM · ${item.publishedFileId}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                     Text(item.title, fontSize = 25.sp, fontWeight = FontWeight.Bold)
-                    Text(item.authorName.ifBlank { "未知作者" }, fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                    WorkshopArtworkThumbnail(item, Modifier.fillMaxWidth().aspectRatio(16f / 9f))
+                    Text("作者 · ${item.authorName.ifBlank { "未知作者" }}", fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                     item.shortDescription.takeIf(String::isNotBlank)?.let { Text(it, fontSize = 15.sp) }
                 }
             }
@@ -849,7 +855,7 @@ private fun WorkshopScreen(
     state: ManagerUiState,
     wide: Boolean,
     onLookup: (String) -> Unit,
-    onBeginSteamLogin: (String, String) -> Unit,
+    onBeginSteamLogin: (String, String, Boolean) -> Unit,
     onSubmitSteamGuard: (String) -> Unit,
     onLogoutSteam: () -> Unit,
     onBrowse: (com.sultansgame.modmanager.model.WorkshopBrowseQuery) -> Unit,
@@ -865,6 +871,7 @@ private fun WorkshopScreen(
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var guardCode by remember { mutableStateOf("") }
+    var rememberSession by rememberSaveable { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf(state.workshopBrowse.query.searchText) }
     var publishedFileId by rememberSaveable { mutableStateOf("") }
     var showSteamLogin by rememberSaveable { mutableStateOf(false) }
@@ -930,15 +937,7 @@ private fun WorkshopScreen(
                 if (browse.items.isNotEmpty()) {
                     item { SectionLabel("公开 Mod", "${browse.totalCount} 项") }
                     items(browse.items, key = { it.publishedFileId.toString() }) { item ->
-                        ListPanel(
-                            item.title,
-                            listOfNotNull(
-                                item.authorName.takeIf(String::isNotBlank),
-                                item.declaredSizeBytes?.let(::formatBytes),
-                                item.tags.take(2).takeIf { it.isNotEmpty() }?.joinToString(),
-                            ).joinToString(" · ").ifBlank { "Steam 创意工坊条目" },
-                            if (item.canDownload) "查看详情" else "不可下载",
-                        ) { onLookup(item.publishedFileId.toString()) }
+                        WorkshopBrowseItemCard(item) { onLookup(item.publishedFileId.toString()) }
                     }
                     if (browse.hasMore) item {
                         PrimaryButton("加载更多") {
@@ -1010,11 +1009,25 @@ private fun WorkshopScreen(
                         com.sultansgame.modmanager.model.SteamAuthState.SigningIn -> LoadingPanel("正在连接 Steam…")
                         else -> {
                             Text("登录 Steam", fontSize = 19.sp, fontWeight = FontWeight.Bold)
-                            Text("账号密码仅用于本次认证；刷新令牌由 Android Keystore 加密保存。", fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                            Text(
+                                if (rememberSession) {
+                                    "密码仅用于本次认证；刷新令牌会使用 Android Keystore 加密保存，以便下次启动恢复登录。"
+                                } else {
+                                    "密码仅用于本次认证；刷新令牌只保留在当前进程，关闭应用后需重新登录。"
+                                },
+                                fontSize = 13.sp,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            )
                             WorkshopTextField(username, { username = it }, "Steam 账号")
                             WorkshopTextField(password, { password = it }, "Steam 密码", password = true)
+                            ConfirmationCheckbox("记住登录状态", rememberSession) { rememberSession = it }
+                            Text(
+                                if (rememberSession) "后台下载可在重启后使用此设备保存的会话。" else "后台下载不会使用未保存的登录状态。",
+                                fontSize = 12.sp,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            )
                             PrimaryButton("登录 Steam", username.isNotBlank() && password.isNotEmpty()) {
-                                onBeginSteamLogin(username, password)
+                                onBeginSteamLogin(username, password, rememberSession)
                                 password = ""
                             }
                         }
@@ -1415,6 +1428,66 @@ private fun SectionLabel(title: String, trailing: String) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(title, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
         StatusPill(trailing)
+    }
+}
+
+@Composable
+private fun WorkshopBrowseItemCard(
+    item: com.sultansgame.modmanager.model.WorkshopItem,
+    onClick: () -> Unit,
+) {
+    Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(14.dp), onClick = onClick) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            WorkshopArtworkThumbnail(item, Modifier.size(width = 104.dp, height = 70.dp))
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text(item.title, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Text(
+                    listOfNotNull(
+                        item.authorName.takeIf(String::isNotBlank),
+                        item.declaredSizeBytes?.let(::formatBytes),
+                        item.tags.take(2).takeIf { it.isNotEmpty() }?.joinToString(),
+                    ).joinToString(" · ").ifBlank { "Steam 创意工坊条目" },
+                    fontSize = 13.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            StatusPill(if (item.canDownload) "查看详情" else "不可下载")
+        }
+    }
+}
+
+@Composable
+private fun WorkshopArtworkThumbnail(
+    item: com.sultansgame.modmanager.model.WorkshopItem,
+    modifier: Modifier = Modifier,
+) {
+    val previewUrl = item.previewUrl?.takeIf(
+        com.sultansgame.modmanager.workshop.WorkshopHttpPolicy::isAllowedPreviewImageUrl,
+    )
+    Box(
+        modifier.clip(RoundedCornerShape(12.dp)).background(MiuixTheme.colorScheme.surfaceVariant),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (previewUrl == null) {
+            Text(
+                item.title.firstOrNull()?.uppercase() ?: "W",
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            )
+        } else {
+            AsyncImage(
+                model = ImageRequest.Builder(androidx.compose.ui.platform.LocalContext.current)
+                    .data(previewUrl)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = "${item.title} 的创意工坊封面",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
     }
 }
 

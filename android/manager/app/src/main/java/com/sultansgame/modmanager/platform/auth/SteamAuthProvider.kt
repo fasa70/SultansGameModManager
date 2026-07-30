@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.flowOf
 data class SteamCredentials(
     val username: String,
     val password: String,
+    val rememberSession: Boolean,
 )
 
 interface SteamAuthProvider {

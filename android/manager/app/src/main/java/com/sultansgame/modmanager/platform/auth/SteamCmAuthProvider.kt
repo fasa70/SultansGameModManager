@@ -31,6 +31,8 @@ class SteamCmAuthProvider(context: Context) : SteamAuthProvider {
     private val authMutex = Mutex()
     private var pendingSession: SteamCredentialAuthSession? = null
     private var selectedChallengeType: SteamGuardChallengeType? = null
+    private var activeInMemorySession: SteamAccountSession? = null
+    private var pendingRememberSession = false
 
     override fun observeState(): Flow<SteamAuthState> = mutableState
 
@@ -39,13 +41,16 @@ class SteamCmAuthProvider(context: Context) : SteamAuthProvider {
             return@withLock failure("请输入 Steam 账号和密码。")
         }
         closePendingSession()
+        activeInMemorySession = null
+        sessionStore.clear()
+        pendingRememberSession = credentials.rememberSession
         mutableState.value = SteamAuthState.SigningIn
         runCatching {
             val pending = authenticationClient.beginAuthSession(
                 SteamAuthSessionDetails(
                     username = credentials.username,
                     password = credentials.password,
-                    isPersistentSession = true,
+                    isPersistentSession = credentials.rememberSession,
                 ),
             )
             pendingSession = pending
@@ -83,12 +88,16 @@ class SteamCmAuthProvider(context: Context) : SteamAuthProvider {
 
     override suspend fun logout(): SteamAuthResult = authMutex.withLock {
         closePendingSession()
+        activeInMemorySession = null
+        pendingRememberSession = false
         sessionStore.clear()
         mutableState.value = SteamAuthState.SignedOut
         SteamAuthResult.Cleared
     }
 
-    fun activeSession(): SteamAccountSession? = sessionStore.load()?.let(::decodeSession)
+    fun activeSession(): SteamAccountSession? = activeInMemorySession ?: persistentSession()
+
+    fun persistentSession(): SteamAccountSession? = sessionStore.load()?.let(::decodeSession)
 
     private suspend fun completePendingLogin(): SteamAuthResult {
         val pending = pendingSession ?: return failure("没有等待中的 Steam 登录。")
@@ -99,7 +108,12 @@ class SteamCmAuthProvider(context: Context) : SteamAuthProvider {
                 steamId = result.steamId,
                 refreshToken = result.refreshToken,
             )
-            sessionStore.save(encodeSession(session))
+            activeInMemorySession = session
+            if (pendingRememberSession) {
+                sessionStore.save(encodeSession(session))
+            } else {
+                sessionStore.clear()
+            }
             mutableState.value = SteamAuthState.SignedIn(session.accountName, session.steamId)
             closePendingSession()
             SteamAuthResult.SignedIn(session.accountName, session.steamId)
@@ -121,6 +135,9 @@ class SteamCmAuthProvider(context: Context) : SteamAuthProvider {
 
     private fun failure(reason: String): SteamAuthResult {
         closePendingSession()
+        activeInMemorySession = null
+        pendingRememberSession = false
+        sessionStore.clear()
         mutableState.value = SteamAuthState.SignedOut
         return SteamAuthResult.Failed(reason)
     }

@@ -67,6 +67,8 @@ dependencies {
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
     implementation(libs.apksig)
+    implementation(libs.coil.compose)
+    implementation(libs.coil.network.okhttp)
     implementation(platform(libs.okhttp.bom))
     implementation(libs.okhttp)
     testImplementation(libs.junit)
