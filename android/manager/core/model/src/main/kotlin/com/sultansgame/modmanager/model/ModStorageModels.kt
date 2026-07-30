@@ -32,6 +32,7 @@ enum class ModStorageAvailability {
 enum class ModStorageFailureCode {
     None,
     ProviderMissing,
+    ProviderAccessDenied,
     Unauthorized,
     ProtocolMismatch,
     GameRunning,

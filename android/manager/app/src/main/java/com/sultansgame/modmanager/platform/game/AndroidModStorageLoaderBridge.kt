@@ -116,7 +116,11 @@ class AndroidModStorageLoaderBridge(
     } catch (error: CancellationException) {
         throw error
     } catch (_: SecurityException) {
-        unavailable(ModStorageAvailability.Unauthorized, ModStorageFailureCode.Unauthorized, "Manager 未获游戏 Mod 管理授权")
+        unavailable(
+            ModStorageAvailability.Unauthorized,
+            ModStorageFailureCode.ProviderAccessDenied,
+            "Android 系统拒绝访问游戏 Mod 服务；请重新修补并安装匹配的游戏版本",
+        )
     } catch (_: IllegalArgumentException) {
         unavailable(ModStorageAvailability.ProviderMissing, ModStorageFailureCode.ProviderMissing, "游戏内 ModStorageProvider 不可用")
     } catch (error: Exception) {

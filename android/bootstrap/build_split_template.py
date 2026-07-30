@@ -17,9 +17,6 @@ MANIFEST = """<manifest xmlns:android="http://schemas.android.com/apk/res/androi
     android:versionCode="{version_code}"
     android:versionName="{version_name}">
     <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="35" />
-    <permission
-        android:name="com.gametree.sultan.pd.mod.permission.MANAGE_MODS"
-        android:protectionLevel="normal" />
     <application>
         <provider
             android:name="com.gametree.sultan.pd.mod.ModLoaderProvider"
@@ -29,7 +26,6 @@ MANIFEST = """<manifest xmlns:android="http://schemas.android.com/apk/res/androi
             android:name="com.gametree.sultan.pd.mod.ModStorageProvider"
             android:authorities="com.gametree.sultan.pd.modstorage"
             android:exported="true"
-            android:permission="com.gametree.sultan.pd.mod.permission.MANAGE_MODS"
             android:process=":modstorage" />
     </application>
 </manifest>

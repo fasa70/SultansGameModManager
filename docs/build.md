@@ -65,12 +65,30 @@ cmake --build native/build-host
 
 ## Building the Loader Split Template
 
-The loader split APK is a pre-built artifact bundled with the Manager. It must be rebuilt only when the native library changes.
+The loader split APK is a pre-built artifact bundled with the Manager. It must be rebuilt whenever the native library, bootstrap Java code, or bootstrap manifest/security contract changes.
+
+After rebuilding, regenerate the unsigned template with `android/bootstrap/build_split_template.py`, replace `android/manager/app/src/main/assets/release/modloader-template-10005.apk`, and update its complete-file SHA-256 in both `GameProfileRegistry.kt` and `AndroidLoaderSplitArtifactFactory.kt`. Update `nativeLoaderSha256` only when the embedded native library itself changes.
 
 ```bash
-# 1. Build native library (see above)
-# 2. Build template
+# 1. Build native library when it changed (see above).
+# 2. Build the bootstrap AAR with the release Manager certificate pin.
 cd android/manager
+./gradlew :bootstrap:assembleRelease \
+  -PmanagerCertificateSha256=<64-hex-characters> \
+  -PmodloaderBinary=../../native/build-android/libmodloader.so
+
+# 3. Generate the unsigned frozen split template from that AAR.
+python ../bootstrap/build_split_template.py \
+  --bootstrap-aar ../bootstrap/build/outputs/aar/bootstrap-release.aar \
+  --android-jar $ANDROID_HOME/platforms/android-35/android.jar \
+  --aapt2 $ANDROID_HOME/build-tools/<version>/aapt2 \
+  --d8 $ANDROID_HOME/build-tools/<version>/d8 \
+  --output app/src/main/assets/release/modloader-template-10005.apk \
+  --version-code 10005 \
+  --version-name 1.0.5
+
+# 4. Calculate the template SHA-256, update both pins, then build Manager.
+sha256sum app/src/main/assets/release/modloader-template-10005.apk
 ./gradlew :app:assembleRelease \
   -PmanagerCertificateSha256=<64-hex-characters> \
   -PmodloaderBinary=../../native/build-android/libmodloader.so

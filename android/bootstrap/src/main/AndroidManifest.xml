@@ -1,8 +1,4 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <permission
-        android:name="com.gametree.sultan.pd.mod.permission.MANAGE_MODS"
-        android:protectionLevel="normal" />
-
     <application>
         <provider
             android:name=".ModLoaderProvider"
@@ -12,7 +8,6 @@
             android:name=".ModStorageProvider"
             android:authorities="com.gametree.sultan.pd.modstorage"
             android:exported="true"
-            android:permission="com.gametree.sultan.pd.mod.permission.MANAGE_MODS"
             android:process=":modstorage" />
     </application>
 </manifest>
