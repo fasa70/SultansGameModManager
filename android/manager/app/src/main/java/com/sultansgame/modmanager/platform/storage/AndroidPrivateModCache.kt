@@ -1,5 +1,7 @@
 package com.sultansgame.modmanager.platform.storage
 
+import android.system.Os
+import android.system.OsConstants
 import com.sultansgame.modmanager.model.CacheSource
 import com.sultansgame.modmanager.model.CachedMod
 import com.sultansgame.modmanager.model.CachedModState
@@ -150,6 +152,6 @@ class AndroidPrivateModCache(private val cacheRoot: File) {
     }
 
     private fun isSymbolicLink(file: File): Boolean = runCatching {
-        file.canonicalFile != file.absoluteFile
+        OsConstants.S_ISLNK(Os.lstat(file.absolutePath).st_mode)
     }.getOrDefault(true)
 }
