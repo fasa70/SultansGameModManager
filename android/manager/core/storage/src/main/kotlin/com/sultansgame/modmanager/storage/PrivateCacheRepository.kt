@@ -66,7 +66,7 @@ class PrivateCacheRepository(
                 when {
                     Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS) -> copyDirectory(entry, destination)
                     Files.isRegularFile(entry, LinkOption.NOFOLLOW_LINKS) -> {
-                        if (!ModPathPolicy.isSupportedSize(Files.size(entry))) {
+                        if (!ModPathPolicy.isSupportedSize(Files.size(entry), entry.name)) {
                             throw ImportValidationException("文件大小超出限制")
                         }
                         Files.copy(entry, destination, StandardCopyOption.COPY_ATTRIBUTES)

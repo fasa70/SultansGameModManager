@@ -105,6 +105,11 @@ class MainActivity : ComponentActivity() {
         viewModel.refreshInstallPermission()
     }
     private val confirmPackageInstall = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { }
+    private var pendingApksExportTransactionId: String? = null
+    private val createApksDocument = registerForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        pendingApksExportTransactionId?.let { transactionId -> uri?.let { viewModel.writePreparedApks(transactionId, it) } }
+        pendingApksExportTransactionId = null
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -118,6 +123,10 @@ class MainActivity : ComponentActivity() {
                         )
                         is ManagerUiEvent.OpenUnknownSourcesSettings -> configureUnknownSources.launch(event.intent)
                         is ManagerUiEvent.ConfirmPackageInstall -> confirmPackageInstall.launch(event.intent)
+                        is ManagerUiEvent.CreateApksExport -> {
+                            pendingApksExportTransactionId = event.transactionId
+                            createApksDocument.launch(event.suggestedName)
+                        }
                     }
                 }
             }
@@ -136,6 +145,7 @@ class MainActivity : ComponentActivity() {
                     onRefreshPendingPatch = viewModel::refreshPendingPatchState,
                     onRequestOriginalUninstall = viewModel::requestOriginalGameUninstall,
                     onInstallPreparedArtifacts = viewModel::installPreparedArtifacts,
+                    onExportPreparedApks = viewModel::exportPreparedApks,
                     onOpenUnknownSourcesSettings = viewModel::openUnknownSourcesSettings,
                     onRestartPatch = viewModel::restartPatchFlow,
                     onLookupWorkshop = viewModel::lookupWorkshop,
@@ -187,6 +197,7 @@ private fun ManagerApp(
     onRefreshPendingPatch: () -> Unit,
     onRequestOriginalUninstall: (String) -> Unit,
     onInstallPreparedArtifacts: (String) -> Unit,
+    onExportPreparedApks: (String) -> Unit,
     onOpenUnknownSourcesSettings: () -> Unit,
     onRestartPatch: () -> Unit,
     onLookupWorkshop: (String) -> Unit,
@@ -210,7 +221,18 @@ private fun ManagerApp(
     onClearFeedback: () -> Unit,
     onUpdatePatchConfirmation: (PatchConfirmation) -> Unit,
 ) {
-    var destinationIndex by remember { mutableIntStateOf(0) }
+    var destinationIndex by remember {
+        mutableIntStateOf(
+            if (state.patch is PatchUiState.AwaitingOriginalUninstall ||
+                state.patch is PatchUiState.ReadyToInstall ||
+                state.patch is PatchUiState.AwaitingInstallPermission
+            ) {
+                Destination.Patch.ordinal
+            } else {
+                Destination.Game.ordinal
+            },
+        )
+    }
     var dialog by remember { mutableStateOf<DialogKind?>(null) }
     val destination = Destination.entries[destinationIndex]
 
@@ -250,6 +272,7 @@ private fun ManagerApp(
                     onRefreshPendingPatch = onRefreshPendingPatch,
                     onRequestOriginalUninstall = onRequestOriginalUninstall,
                     onInstallPreparedArtifacts = onInstallPreparedArtifacts,
+                    onExportPreparedApks = onExportPreparedApks,
                     onOpenUnknownSourcesSettings = onOpenUnknownSourcesSettings,
                     onRestartPatch = onRestartPatch,
                     onUpdatePatchConfirmation = onUpdatePatchConfirmation,
@@ -289,6 +312,7 @@ private fun ManagerApp(
                     onRefreshPendingPatch = onRefreshPendingPatch,
                     onRequestOriginalUninstall = onRequestOriginalUninstall,
                     onInstallPreparedArtifacts = onInstallPreparedArtifacts,
+                    onExportPreparedApks = onExportPreparedApks,
                     onOpenUnknownSourcesSettings = onOpenUnknownSourcesSettings,
                     onRestartPatch = onRestartPatch,
                     onUpdatePatchConfirmation = onUpdatePatchConfirmation,
@@ -462,6 +486,7 @@ private fun ContentArea(
     onRefreshPendingPatch: () -> Unit,
     onRequestOriginalUninstall: (String) -> Unit,
     onInstallPreparedArtifacts: (String) -> Unit,
+    onExportPreparedApks: (String) -> Unit,
     onOpenUnknownSourcesSettings: () -> Unit,
     onRestartPatch: () -> Unit,
     onUpdatePatchConfirmation: (PatchConfirmation) -> Unit,
@@ -506,6 +531,7 @@ private fun ContentArea(
                 onRefreshPending = onRefreshPendingPatch,
                 onRequestUninstall = onRequestOriginalUninstall,
                 onInstallPrepared = onInstallPreparedArtifacts,
+                onExportPreparedApks = onExportPreparedApks,
                 onOpenUnknownSourcesSettings = onOpenUnknownSourcesSettings,
                 onRestart = onRestartPatch,
                 onUpdateConfirmation = onUpdatePatchConfirmation,
@@ -1211,6 +1237,7 @@ private fun PatchScreen(
     onRefreshPending: () -> Unit,
     onRequestUninstall: (String) -> Unit,
     onInstallPrepared: (String) -> Unit,
+    onExportPreparedApks: (String) -> Unit,
     onOpenUnknownSourcesSettings: () -> Unit,
     onRestart: () -> Unit,
     onUpdateConfirmation: (PatchConfirmation) -> Unit,
@@ -1309,17 +1336,22 @@ private fun PatchScreen(
                     is GameProbeResult.Failed, null -> item { PrimaryButton("重新检查卸载状态", onClick = onRefreshPending) }
                     GameProbeResult.NotInstalled -> item { PrimaryButton("重新检查卸载状态", onClick = onRefreshPending) }
                 }
+                item { PrimaryButton("导出 APKS 自行安装") { onExportPreparedApks(patch.transactionId) } }
             }
             is PatchUiState.ReadyToInstall -> {
                 item { SectionLabel("步骤 4", "安装已准备工件") }
                 item { NoticeStrip("原版已卸载", patch.summary) }
-                item { PrimaryButton("安装已准备产物") { onInstallPrepared(patch.transactionId) } }
+                item { PrimaryButton("调用系统安装器") { onInstallPrepared(patch.transactionId) } }
+                item { PrimaryButton("导出 APKS 自行安装") { onExportPreparedApks(patch.transactionId) } }
             }
             is PatchUiState.SubmittingInstall -> item { LoadingPanel("正在提交已准备的 APK 集合…") }
             is PatchUiState.AwaitingInstallPermission -> {
                 item { SectionLabel("步骤 4", "需要安装授权") }
                 item { NoticeStrip("授权后不会自动安装", "请在系统设置中允许 Manager 安装未知应用；返回后将显示独立的安装按钮。") }
                 item { PrimaryButton("前往安装授权设置", onClick = onOpenUnknownSourcesSettings) }
+                patch.transactionId?.let { transactionId ->
+                    item { PrimaryButton("导出 APKS 自行安装") { onExportPreparedApks(transactionId) } }
+                }
             }
             is PatchUiState.AwaitingSystemInstall -> {
                 item { SectionLabel("步骤 4", "等待系统安装") }

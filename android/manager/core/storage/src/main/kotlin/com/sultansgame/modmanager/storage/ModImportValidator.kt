@@ -1,6 +1,5 @@
 package com.sultansgame.modmanager.storage
 
-import com.sultansgame.modmanager.model.MAXIMUM_MOD_FILE_SIZE_BYTES
 import com.sultansgame.modmanager.model.ModFile
 import com.sultansgame.modmanager.model.ModFileKind
 import com.sultansgame.modmanager.model.ModManifest
@@ -61,7 +60,7 @@ class ModImportValidator(
 
     private fun readManifest(path: Path): ModManifest {
         val attributes = Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
-        if (!attributes.isRegularFile || attributes.size() > MAXIMUM_MOD_FILE_SIZE_BYTES) {
+        if (!attributes.isRegularFile || !ModPathPolicy.isSupportedSize(attributes.size(), path.name)) {
             throw ImportValidationException("Info.json 不可读")
         }
         return try {
@@ -95,7 +94,7 @@ class ModImportValidator(
                         visit(entry, relative, depth + 1, files, digests, normalizedPaths, caseFoldedPaths, recordSize)
                     Files.isRegularFile(entry, LinkOption.NOFOLLOW_LINKS) -> {
                         val size = entry.fileSize()
-                        if (!ModPathPolicy.isSupportedSize(size)) throw ImportValidationException("文件大小超出限制")
+                        if (!ModPathPolicy.isSupportedSize(size, relative)) throw ImportValidationException("文件大小超出限制")
                         recordSize(size)
                         val normalized = ModPathPolicy.normalize(relative) ?: throw ImportValidationException("包含不安全路径")
                         if (!normalizedPaths.add(normalized) || !caseFoldedPaths.add(normalized.lowercase())) {

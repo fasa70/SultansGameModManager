@@ -1,6 +1,7 @@
 package com.sultansgame.modmanager.model
 
 const val MAXIMUM_MOD_FILE_SIZE_BYTES: Long = 16L * 1024L * 1024L
+const val MAXIMUM_MOD_MEDIA_FILE_SIZE_BYTES: Long = 256L * 1024L * 1024L
 const val MAXIMUM_MOD_PATH_DEPTH: Int = 8
 
 enum class ModFileKind {
