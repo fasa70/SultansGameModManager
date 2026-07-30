@@ -73,8 +73,9 @@ class DeviceSigningKeyStoreTest {
             })
 
             assertEquals("com.gametree.sultan.pd", packageInfo.packageName)
-            assertEquals("modloader", packageInfo.splitNames?.singleOrNull())
+            assertEquals("modloader", packageInfo.splitNames.singleOrNull())
             assertTrue(provider.exported)
+            assertEquals(":modstorage", provider.processName)
             assertEquals(null, provider.readPermission)
             assertEquals(null, provider.writePermission)
         } finally {
@@ -106,7 +107,7 @@ class DeviceSigningKeyStoreTest {
         val loader = factory.build(
             LoaderSplitRequest(
                 targetApplicationId = "com.gametree.sultan.pd",
-                loaderTemplateSha256 = "57025fd43bba2e5b9e8e5cc6a42259d5794d12e350d5f9b42ccff3caa3c884b4",
+                loaderTemplateSha256 = "f173742e82b468ae88c6ec8d8af6350b445b131c320c5a1099bb05c05b3eb9b7",
                 target = extracted.base.inspection,
                 templateOutputPath = File(context.filesDir, "patch-staging/${java.util.UUID.randomUUID()}/template/modloader.apk").absolutePath,
             ),

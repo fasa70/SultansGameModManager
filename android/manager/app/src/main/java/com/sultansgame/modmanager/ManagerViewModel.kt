@@ -64,6 +64,7 @@ import java.io.File
 import java.util.UUID
 
 sealed interface ManagerUiEvent {
+    data class LaunchGameForModService(val intent: android.content.Intent) : ManagerUiEvent
     data class OpenGameUninstall(val transactionId: String) : ManagerUiEvent
     data class OpenUnknownSourcesSettings(val intent: android.content.Intent) : ManagerUiEvent
     data class ConfirmPackageInstall(val intent: android.content.Intent) : ManagerUiEvent
@@ -197,16 +198,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             mutableState.value = mutableState.value.copy(deploymentInProgress = true, feedback = null)
             try {
                 val snapshot = deploymentPlan.snapshot(mutableState.value.cachedMods, allowExternalReplacement)
-                when (val result = withContext(Dispatchers.IO) { loaderBridge.requestApply(ApplyRequest(snapshot)) }) {
-                    is ApplyResult.Applied -> mutableState.value = mutableState.value.copy(
-                        gameModStorage = result.result.status,
-                        feedback = FeedbackMessage("已同步 ${snapshot.enabledEntries.size} 个启用 Mod；请退出并冷启动游戏。"),
-                    )
-                    is ApplyResult.Rejected -> mutableState.value = mutableState.value.copy(
-                        gameModStorage = result.status,
-                        feedback = FeedbackMessage(result.status.reason ?: "同步到游戏失败。", isError = true),
-                    )
-                }
+                applySnapshot(snapshot)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -217,6 +209,69 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                 mutableState.value = mutableState.value.copy(deploymentInProgress = false)
             }
         }
+    }
+
+    fun confirmStopGameAndSync() {
+        val confirmation = mutableState.value.gameStopSyncConfirmation ?: return
+        mutableState.value = mutableState.value.copy(gameStopSyncConfirmation = null, deploymentInProgress = true, feedback = null)
+        viewModelScope.launch {
+            try {
+                val stopped = withContext(Dispatchers.IO) { loaderBridge.stopGameForSync() }
+                if (!stopped.isReady) {
+                    mutableState.value = mutableState.value.copy(
+                        gameModStorage = stopped,
+                        feedback = FeedbackMessage(stopped.reason ?: "无法关闭游戏，请手动关闭后重试。", isError = true),
+                    )
+                    return@launch
+                }
+                val snapshot = deploymentPlan.snapshot(mutableState.value.cachedMods, confirmation)
+                applySnapshot(snapshot)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                mutableState.value = mutableState.value.copy(
+                    feedback = FeedbackMessage("关闭游戏后同步失败：${error.message ?: "请重试。"}", isError = true),
+                )
+            } finally {
+                mutableState.value = mutableState.value.copy(deploymentInProgress = false)
+            }
+        }
+    }
+
+    fun dismissStopGameAndSyncConfirmation() {
+        mutableState.value = mutableState.value.copy(gameStopSyncConfirmation = null)
+    }
+
+    private suspend fun applySnapshot(snapshot: com.sultansgame.modmanager.model.DeploymentSnapshot) {
+        when (val result = withContext(Dispatchers.IO) { loaderBridge.requestApply(ApplyRequest(snapshot)) }) {
+            is ApplyResult.Applied -> mutableState.value = mutableState.value.copy(
+                gameModStorage = result.result.status,
+                feedback = FeedbackMessage("已同步 ${snapshot.enabledEntries.size} 个启用 Mod；请退出并冷启动游戏。"),
+            )
+            is ApplyResult.Rejected -> {
+                mutableState.value = mutableState.value.copy(
+                    gameModStorage = result.status,
+                    gameStopSyncConfirmation = if (result.status.failureCode == com.sultansgame.modmanager.model.ModStorageFailureCode.GameRunning) {
+                        snapshot.allowExternalReplacement
+                    } else {
+                        null
+                    },
+                    feedback = FeedbackMessage(result.status.reason ?: "同步到游戏失败。", isError = true),
+                )
+            }
+        }
+    }
+
+    fun launchGameForModService() {
+        val intent = getApplication<Application>().packageManager
+            .getLaunchIntentForPackage("com.gametree.sultan.pd")
+        if (intent == null) {
+            mutableState.value = mutableState.value.copy(
+                feedback = FeedbackMessage("未找到游戏启动入口；请重新修补并安装匹配的游戏版本。", isError = true),
+            )
+            return
+        }
+        uiEventChannel.trySend(ManagerUiEvent.LaunchGameForModService(intent))
     }
 
     fun revokeGameModAuthorization() {

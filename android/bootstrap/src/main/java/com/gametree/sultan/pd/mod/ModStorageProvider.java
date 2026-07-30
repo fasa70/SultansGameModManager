@@ -13,6 +13,7 @@ import android.os.Binder;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
+import android.os.Process;
 
 import java.io.BufferedInputStream;
 import java.io.DataInputStream;
@@ -46,6 +47,7 @@ public final class ModStorageProvider extends ContentProvider {
     private static final String RESULT_INVALID = "invalid";
     private static final String RESULT_FAILED = "failed";
     private static final String RESULT_GAME_RUNNING = "gameRunning";
+    private static final String RESULT_PROCESS_STATE_UNKNOWN = "processStateUnknown";
     private static final String RESULT_EXTERNAL_CHANGES_DETECTED = "externalChangesDetected";
     private static final String RESULT_VALIDATION_FAILED = "validationFailed";
     private static final String RESULT_COMMIT_FAILED = "commitFailed";
@@ -61,14 +63,20 @@ public final class ModStorageProvider extends ContentProvider {
 
     @Override
     public Bundle call(String method, String arg, Bundle extras) {
-        if (!hasCompatibleProtocol(extras)) return result(RESULT_INCOMPATIBLE, "协议版本不兼容");
-        if (!isPinnedManager()) return result(RESULT_UNAUTHORIZED, "调用方证书不受信任");
-        if ("status".equals(method)) return status();
-        if ("syncSnapshot".equals(method)) return syncSnapshot(extras);
-        if (!isTrustedManager()) return result(RESULT_UNAUTHORIZED, "调用方未获授权");
-        if ("list".equals(method)) return listMods();
-        if ("revokeAuthorization".equals(method)) return revokeAuthorization();
-        return result(RESULT_INVALID, "不支持的调用方法");
+        ParcelFileDescriptor input = extras == null ? null : extras.getParcelable(KEY_INPUT);
+        try {
+            if (!hasCompatibleProtocol(extras)) return result(RESULT_INCOMPATIBLE, "协议版本不兼容");
+            if (!isPinnedManager()) return result(RESULT_UNAUTHORIZED, "调用方证书不受信任");
+            if ("status".equals(method)) return status();
+            if ("syncSnapshot".equals(method)) return syncSnapshot(extras, input);
+            if ("stopGameForSync".equals(method)) return stopGameForSync();
+            if (!isTrustedManager()) return result(RESULT_UNAUTHORIZED, "调用方未获授权");
+            if ("list".equals(method)) return listMods();
+            if ("revokeAuthorization".equals(method)) return revokeAuthorization();
+            return result(RESULT_INVALID, "不支持的调用方法");
+        } finally {
+            closeQuietly(input);
+        }
     }
 
     private boolean hasCompatibleProtocol(Bundle extras) {
@@ -96,19 +104,22 @@ public final class ModStorageProvider extends ContentProvider {
         return result(RESULT_OK, null);
     }
 
-    private Bundle syncSnapshot(Bundle extras) {
+    private synchronized Bundle syncSnapshot(Bundle extras, ParcelFileDescriptor input) {
         if (!isPinnedManager()) return result(RESULT_UNAUTHORIZED, "调用方证书不受信任");
         if (!extras.getBoolean(KEY_AUTHORIZE, false) && !isAuthorized()) {
             return result(RESULT_UNAUTHORIZED, "请先在 Manager 确认允许管理游戏 Mod");
         }
         String revision = extras.getString(KEY_REVISION);
-        ParcelFileDescriptor input = extras.getParcelable(KEY_INPUT);
         if (!isSafeRevision(revision) || input == null) return result(RESULT_INVALID, "同步参数无效");
 
         Context context = getContext();
         if (context == null) return result(RESULT_FAILED, "游戏存储不可用");
-        if (isGameProcessRunning(context)) {
-            return result(RESULT_GAME_RUNNING, "请完全退出游戏后再同步 Mod");
+        ProcessState processState = gameProcessState(context);
+        if (processState == ProcessState.UNKNOWN) {
+            return result(RESULT_PROCESS_STATE_UNKNOWN, "无法确认游戏是否已退出，请先打开游戏后返回 Manager 重试");
+        }
+        if (processState == ProcessState.RUNNING) {
+            return result(RESULT_GAME_RUNNING, "游戏仍在运行；确认关闭游戏后才能同步 Mod");
         }
         File externalFiles = context.getExternalFilesDir(null);
         if (externalFiles == null) return result(RESULT_FAILED, "游戏外部存储不可用");
@@ -130,6 +141,13 @@ public final class ModStorageProvider extends ContentProvider {
             return result(RESULT_FAILED, error.getMessage() == null ? "同步失败" : error.getMessage());
         }
 
+        processState = gameProcessState(context);
+        if (processState != ProcessState.STOPPED) {
+            deleteRecursively(staging);
+            return processState == ProcessState.RUNNING
+                    ? result(RESULT_GAME_RUNNING, "游戏在同步期间启动；未替换当前 Mod 目录")
+                    : result(RESULT_PROCESS_STATE_UNKNOWN, "无法确认游戏是否已退出；未替换当前 Mod 目录");
+        }
         try {
             if (backup.exists()) deleteRecursively(backup);
             if (active.exists() && !active.renameTo(backup)) throw new IOException("无法备份当前 Mod 目录");
@@ -251,14 +269,63 @@ public final class ModStorageProvider extends ContentProvider {
         return names;
     }
 
-    private boolean isGameProcessRunning(Context context) {
-        ActivityManager activityManager = context.getSystemService(ActivityManager.class);
-        if (activityManager == null) return false;
-        String processName = context.getPackageName();
-        for (ActivityManager.RunningAppProcessInfo process : activityManager.getRunningAppProcesses()) {
-            if (processName.equals(process.processName)) return true;
+    private synchronized Bundle stopGameForSync() {
+        Context context = getContext();
+        if (context == null) return result(RESULT_FAILED, "游戏进程不可用");
+        ActivityManager.RunningAppProcessInfo gameProcess = gameProcess(context);
+        if (gameProcess == null) {
+            return gameProcessState(context) == ProcessState.UNKNOWN
+                    ? result(RESULT_PROCESS_STATE_UNKNOWN, "无法确认游戏是否已退出，请先打开游戏后返回 Manager 重试")
+                    : result(RESULT_OK, null);
         }
-        return false;
+        Process.killProcess(gameProcess.pid);
+        for (int attempt = 0; attempt < 20; attempt++) {
+            try {
+                Thread.sleep(100L);
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+                return result(RESULT_FAILED, "等待游戏退出时被中断");
+            }
+            ProcessState state = gameProcessState(context);
+            if (state == ProcessState.STOPPED) return result(RESULT_OK, null);
+            if (state == ProcessState.UNKNOWN) {
+                return result(RESULT_PROCESS_STATE_UNKNOWN, "无法确认游戏是否已经退出");
+            }
+        }
+        return result(RESULT_GAME_RUNNING, "游戏未能及时退出，请手动关闭后重试");
+    }
+
+    private enum ProcessState {
+        STOPPED,
+        RUNNING,
+        UNKNOWN,
+    }
+
+    private ProcessState gameProcessState(Context context) {
+        ActivityManager activityManager = context.getSystemService(ActivityManager.class);
+        if (activityManager == null) return ProcessState.UNKNOWN;
+        if (activityManager.getRunningAppProcesses() == null) return ProcessState.UNKNOWN;
+        return gameProcess(context) == null ? ProcessState.STOPPED : ProcessState.RUNNING;
+    }
+
+    private ActivityManager.RunningAppProcessInfo gameProcess(Context context) {
+        ActivityManager activityManager = context.getSystemService(ActivityManager.class);
+        if (activityManager == null) return null;
+        java.util.List<ActivityManager.RunningAppProcessInfo> processes = activityManager.getRunningAppProcesses();
+        if (processes == null) return null;
+        String processName = context.getPackageName();
+        for (ActivityManager.RunningAppProcessInfo process : processes) {
+            if (process.pid != Process.myPid() && processName.equals(process.processName)) return process;
+        }
+        return null;
+    }
+
+    private static void closeQuietly(ParcelFileDescriptor descriptor) {
+        if (descriptor == null) return;
+        try {
+            descriptor.close();
+        } catch (IOException ignored) {
+        }
     }
 
     private boolean hasExternalMods() {

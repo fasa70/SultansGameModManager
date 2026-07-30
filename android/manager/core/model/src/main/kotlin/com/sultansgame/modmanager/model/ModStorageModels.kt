@@ -9,6 +9,7 @@ object ModStorageCall {
     const val STATUS = "status"
     const val LIST = "list"
     const val SYNC_SNAPSHOT = "syncSnapshot"
+    const val STOP_GAME_FOR_SYNC = "stopGameForSync"
     const val REVOKE_AUTHORIZATION = "revokeAuthorization"
 
     const val KEY_PROTOCOL_VERSION = "protocolVersion"
@@ -23,6 +24,7 @@ object ModStorageCall {
 enum class ModStorageAvailability {
     Available,
     ProviderMissing,
+    ProviderUnavailable,
     Unauthorized,
     Incompatible,
     GameRunning,
@@ -32,6 +34,7 @@ enum class ModStorageAvailability {
 enum class ModStorageFailureCode {
     None,
     ProviderMissing,
+    ProviderUnavailable,
     ProviderAccessDenied,
     Unauthorized,
     ProtocolMismatch,
