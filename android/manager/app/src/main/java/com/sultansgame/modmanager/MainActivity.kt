@@ -926,7 +926,6 @@ private fun WorkshopScreen(
     var guardCode by remember { mutableStateOf("") }
     var rememberSession by rememberSaveable { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf(state.workshopBrowse.query.searchText) }
-    var publishedFileId by rememberSaveable { mutableStateOf("") }
     var showSteamLogin by rememberSaveable { mutableStateOf(false) }
     var showAdvancedFilters by rememberSaveable { mutableStateOf(false) }
     var filterDraft by remember { mutableStateOf(state.workshopBrowse.query) }
@@ -1026,15 +1025,6 @@ private fun WorkshopScreen(
             }
         }
 
-        item {
-            Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(18.dp)) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("按 PublishedFileId 查询", fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                    WorkshopTextField(publishedFileId, { publishedFileId = it.filter(Char::isDigit) }, "PublishedFileId", numeric = true)
-                    PrimaryButton("查询详情", publishedFileId.isNotEmpty()) { onLookup(publishedFileId) }
-                }
-            }
-        }
         when (val workshop = state.workshop) {
             WorkshopUiState.Idle -> Unit
             WorkshopUiState.Loading -> item { LoadingPanel("正在读取 Workshop 详情…") }
