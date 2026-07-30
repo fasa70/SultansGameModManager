@@ -21,21 +21,31 @@ class ZipModImporter(
     private val context: Context,
     private val cache: AndroidPrivateModCache,
 ) {
-    fun importZip(uri: Uri): CachedMod = context.contentResolver.openInputStream(uri)?.use(::importZipStream)
+    fun importZip(uri: Uri): List<CachedMod> = context.contentResolver.openInputStream(uri)
+        ?.use { source -> importZipStream(source, allowMultipleRoots = true) }
         ?: throw ImportValidationException("无法读取所选 ZIP")
 
     fun importDownloadedZip(file: File): CachedMod {
         if (!file.isFile) throw ImportValidationException("下载的 ZIP 不可读")
-        return FileInputStream(file).use(::importZipStream)
+        return FileInputStream(file).use { source ->
+            importZipStream(source, allowMultipleRoots = false).single()
+        }
     }
 
-    private fun importZipStream(source: InputStream): CachedMod {
+    private fun importZipStream(source: InputStream, allowMultipleRoots: Boolean): List<CachedMod> {
         val stagingRoot = File(context.filesDir, "mod-cache")
         if (!stagingRoot.mkdirs() && !stagingRoot.isDirectory) throw ImportValidationException("无法创建私有导入目录")
         val staging = File(stagingRoot, ".${UUID.randomUUID()}.partial")
         try {
             extractZip(source, staging)
-            return cache.importDirectory(resolveModRoot(staging), CacheSource.SafArchive)
+            val roots = resolveModRoots(staging)
+            if (!allowMultipleRoots && roots.size != 1) {
+                throw ImportValidationException("下载的 ZIP 必须只包含一个 Mod 根目录")
+            }
+            roots.forEach(cache::validateDirectory)
+            return roots.map { root ->
+                cache.importDirectory(root, CacheSource.SafArchive)
+            }
         } finally {
             staging.deleteRecursively()
         }
@@ -70,7 +80,7 @@ class ZipModImporter(
                             val count = zip.read(buffer)
                             if (count < 0) break
                             fileSize += count
-                            if (!ModPathPolicy.isSupportedSize(fileSize)) throw ImportValidationException("ZIP 文件大小超出限制")
+                            if (!ModPathPolicy.isSupportedSize(fileSize, normalized)) throw ImportValidationException("ZIP 文件大小超出限制")
                             totalSize = Math.addExact(totalSize, count.toLong())
                             if (totalSize > MAXIMUM_MOD_TOTAL_SIZE_BYTES) throw ImportValidationException("ZIP 总大小超出限制")
                             output.write(buffer, 0, count)
@@ -92,12 +102,12 @@ class ZipModImporter(
         return components.joinToString("/")
     }
 
-    private fun resolveModRoot(staging: File): File {
-        if (hasManifest(staging)) return staging
+    private fun resolveModRoots(staging: File): List<File> {
+        if (hasManifest(staging)) return listOf(staging)
         val entries = staging.listFiles() ?: throw ImportValidationException("无法读取 ZIP 内容")
-        val roots = entries.filter(File::isDirectory)
-        if (roots.size == 1 && entries.size == 1 && hasManifest(roots.single())) return roots.single()
-        throw ImportValidationException("ZIP 必须包含唯一的 Mod 根目录和 Info.json")
+        val roots = entries.filter(File::isDirectory).sortedBy(File::getName)
+        if (roots.isNotEmpty() && roots.size == entries.size && roots.all(::hasManifest)) return roots
+        throw ImportValidationException("ZIP 必须包含 Info.json，或仅包含多个各自带有 Info.json 的 Mod 根目录")
     }
 
     private fun hasManifest(directory: File): Boolean = directory.listFiles()

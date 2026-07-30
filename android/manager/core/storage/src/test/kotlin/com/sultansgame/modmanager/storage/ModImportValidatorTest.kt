@@ -1,8 +1,12 @@
 package com.sultansgame.modmanager.storage
 
 import com.sultansgame.modmanager.model.CacheSource
+import com.sultansgame.modmanager.model.MAXIMUM_MOD_FILE_SIZE_BYTES
+import com.sultansgame.modmanager.model.MAXIMUM_MOD_MEDIA_FILE_SIZE_BYTES
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -35,6 +39,25 @@ class ModImportValidatorTest {
         assertThrows(ImportValidationException::class.java) {
             ModImportValidator().validate(root)
         }
+    }
+
+    @Test
+    fun `accepts media larger than the configuration size limit`() {
+        val root = temporaryFolder.newFolder("sample").toPath()
+        root.resolve("info.json").writeText("{\"name\":\"Sample\"}")
+        val audio = root.resolve("bgm").createDirectories().resolve("theme.wav")
+        Files.write(audio, ByteArray((MAXIMUM_MOD_FILE_SIZE_BYTES + 1).toInt()))
+
+        val validated = ModImportValidator().validate(root)
+        assertTrue(validated.sizeBytes > MAXIMUM_MOD_FILE_SIZE_BYTES)
+        assertEquals("bgm/theme.wav", validated.files.single { it.relativePath == "bgm/theme.wav" }.relativePath)
+    }
+
+    @Test
+    fun `keeps media and non-media size limits distinct`() {
+        assertTrue(ModPathPolicy.isSupportedSize(MAXIMUM_MOD_FILE_SIZE_BYTES + 1, "bgm/theme.wav"))
+        assertFalse(ModPathPolicy.isSupportedSize(MAXIMUM_MOD_FILE_SIZE_BYTES + 1, "config/cards.json"))
+        assertFalse(ModPathPolicy.isSupportedSize(MAXIMUM_MOD_MEDIA_FILE_SIZE_BYTES + 1, "image/card.png"))
     }
 
     @Test
