@@ -19,6 +19,7 @@ data class ManagerUiState(
     val gameModStorage: GameModStorageStatus? = null,
     val deploymentPlan: List<DeploymentEntry> = emptyList(),
     val deploymentInProgress: Boolean = false,
+    val cachedModDeletionInProgress: Boolean = false,
     val cachedMods: List<CachedMod> = emptyList(),
     val workshop: WorkshopUiState = WorkshopUiState.Idle,
     val workshopBrowse: WorkshopBrowseUiState = WorkshopBrowseUiState(),

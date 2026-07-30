@@ -96,6 +96,7 @@ private sealed interface DialogKind {
     data object Privacy : DialogKind
     data object License : DialogKind
     data object ClearCache : DialogKind
+    data class DeleteCachedMod(val cacheKey: String) : DialogKind
     data object SyncMods : DialogKind
     data object PatchWarning : DialogKind
     data class PatchCleanup(val transactionId: String) : DialogKind
@@ -177,6 +178,7 @@ class MainActivity : ComponentActivity() {
                     onDiscardWorkshopArtifact = viewModel::discardWorkshopArtifact,
                     onAcceptNotice = viewModel::acceptLegalNotice,
                     onClearModCache = viewModel::clearModCache,
+                    onDeleteCachedMod = viewModel::deleteCachedMod,
                     onRefreshGameMods = viewModel::refreshGameModStorage,
                     onSetModEnabled = viewModel::setModEnabled,
                     onMoveMod = viewModel::moveMod,
@@ -233,6 +235,7 @@ private fun ManagerApp(
     onDiscardWorkshopArtifact: (String) -> Unit,
     onAcceptNotice: () -> Unit,
     onClearModCache: () -> Unit,
+    onDeleteCachedMod: (String) -> Unit,
     onRefreshGameMods: () -> Unit,
     onSetModEnabled: (String, Boolean) -> Unit,
     onMoveMod: (String, Int) -> Unit,
@@ -360,6 +363,20 @@ private fun ManagerApp(
             onConfirm = { onClearModCache(); dialog = null },
             onDismiss = { dialog = null },
         )
+        is DialogKind.DeleteCachedMod -> {
+            val entry = state.deploymentPlan.firstOrNull { it.cacheKey == activeDialog.cacheKey }
+            if (entry == null || state.deploymentInProgress || state.cachedModDeletionInProgress) {
+                LaunchedEffect(activeDialog.cacheKey) { dialog = null }
+            } else {
+                ConfirmDialog(
+                    title = "删除 ${entry.displayName}？",
+                    body = "将删除此 Mod 在 Manager 私有目录中的缓存，并从部署计划移除。不会自动同步，也不会修改游戏目录中已同步的 Mod；如需让游戏移除该 Mod，请之后手动同步。此操作无法撤销。",
+                    confirmLabel = "删除私有缓存",
+                    onConfirm = { onDeleteCachedMod(entry.cacheKey); dialog = null },
+                    onDismiss = { dialog = null },
+                )
+            }
+        }
         DialogKind.PatchWarning -> TextDialog(
             title = "安装补丁前的重要说明",
             body = "这是一项非官方修改，可能需要 Android 系统安装确认，并可能因游戏版本、签名或系统限制而失败。请在继续前自行确认存档与兼容性风险。\n\n给小米/MIUI/澎湃系统用户的说明：由于这些系统对 Android API 的改动，可能会产生无法预知的情况导致安装失败。如果遇到该问题，您大概率可以通过在系统设置的开发者选项中关闭 MIUI 优化/系统优化来修复。应用不会自动修改任何系统设置。",
@@ -539,6 +556,7 @@ private fun ContentArea(
                 onRefreshGame = onRefreshGameMods,
                 onSetEnabled = onSetModEnabled,
                 onMove = onMoveMod,
+                onRequestDelete = { onShowDialog(DialogKind.DeleteCachedMod(it)) },
                 onSync = { onShowDialog(DialogKind.SyncMods) },
             )
             Destination.Workshop -> WorkshopNavigation(
@@ -603,6 +621,7 @@ private fun ModsScreen(
     onRefreshGame: () -> Unit,
     onSetEnabled: (String, Boolean) -> Unit,
     onMove: (String, Int) -> Unit,
+    onRequestDelete: (String) -> Unit,
     onSync: () -> Unit,
 ) {
     val storage = state.gameModStorage
@@ -638,9 +657,11 @@ private fun ModsScreen(
                         StatusPill(if (entry.enabled) "已启用" else "未启用")
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        SmallAction("${if (entry.enabled) "停用" else "启用"}") { onSetEnabled(entry.cacheKey, !entry.enabled) }
-                        SmallAction("上移", entry.order > 0) { onMove(entry.cacheKey, -1) }
-                        SmallAction("下移") { onMove(entry.cacheKey, 1) }
+                        val actionsEnabled = !state.deploymentInProgress && !state.cachedModDeletionInProgress
+                        SmallAction("${if (entry.enabled) "停用" else "启用"}", actionsEnabled) { onSetEnabled(entry.cacheKey, !entry.enabled) }
+                        SmallAction("上移", actionsEnabled && entry.order > 0) { onMove(entry.cacheKey, -1) }
+                        SmallAction("下移", actionsEnabled) { onMove(entry.cacheKey, 1) }
+                        SmallAction("删除", actionsEnabled) { onRequestDelete(entry.cacheKey) }
                     }
                 }
             }
@@ -648,7 +669,7 @@ private fun ModsScreen(
         item {
             PrimaryButton(
                 label = if (state.deploymentInProgress) "正在同步…" else "同步启用的 Mod 到游戏",
-                enabled = !state.deploymentInProgress,
+                enabled = !state.deploymentInProgress && !state.cachedModDeletionInProgress,
                 onClick = onSync,
             )
         }

@@ -22,6 +22,13 @@ data class AndroidValidatedMod(
     val sizeBytes: Long,
 )
 
+sealed interface CachedModDeletionResult {
+    data object Deleted : CachedModDeletionResult
+    data object NotFound : CachedModDeletionResult
+    data class Rejected(val reason: String) : CachedModDeletionResult
+    data class Failed(val reason: String) : CachedModDeletionResult
+}
+
 class AndroidPrivateModCache(private val cacheRoot: File) {
     private val manifestValidator = InfoJsonValidator()
 
@@ -49,6 +56,30 @@ class AndroidPrivateModCache(private val cacheRoot: File) {
 
     fun clear() {
         cacheRoot.deleteRecursively()
+    }
+
+    fun deleteCached(cacheKey: String): CachedModDeletionResult {
+        if (!cacheKey.matches(CACHE_KEY_REGEX)) return CachedModDeletionResult.Rejected("Mod 缓存标识无效。")
+        if (cacheRoot.exists() && isSymbolicLink(cacheRoot)) return CachedModDeletionResult.Rejected("私有缓存目录不可安全访问。")
+        val target = File(cacheRoot, cacheKey)
+        if (!target.exists()) return CachedModDeletionResult.NotFound
+        if (!target.isDirectory || isSymbolicLink(target)) {
+            return CachedModDeletionResult.Rejected("Mod 缓存目录不可安全访问。")
+        }
+        if (containsSymbolicLink(target)) {
+            return CachedModDeletionResult.Rejected("Mod 缓存包含不安全链接。")
+        }
+        return try {
+            if (!deleteRecursivelyWithoutLinks(target) || target.exists()) {
+                CachedModDeletionResult.Failed("无法完全删除私有缓存目录。")
+            } else {
+                CachedModDeletionResult.Deleted
+            }
+        } catch (error: SecurityException) {
+            CachedModDeletionResult.Failed("没有删除私有缓存的权限。")
+        } catch (error: Exception) {
+            CachedModDeletionResult.Failed(error.message ?: "无法删除私有缓存目录。")
+        }
     }
 
     fun recoverInterruptedImports() {
@@ -136,6 +167,33 @@ class AndroidPrivateModCache(private val cacheRoot: File) {
         val digest = MessageDigest.getInstance("SHA-256").digest(entries.sorted().joinToString("\n").toByteArray())
             .joinToString("") { "%02x".format(it) }
         return AndroidValidatedMod(parsedManifest.name, digest, total)
+    }
+
+    private fun containsSymbolicLink(directory: File): Boolean {
+        if (isSymbolicLink(directory)) return true
+        val children = directory.listFiles() ?: return true
+        return children.any { child ->
+            isSymbolicLink(child) || (child.isDirectory && containsSymbolicLink(child))
+        }
+    }
+
+    private fun deleteRecursivelyWithoutLinks(directory: File): Boolean {
+        if (isSymbolicLink(directory)) return false
+        val children = directory.listFiles() ?: return false
+        for (child in children) {
+            val deleted = when {
+                isSymbolicLink(child) -> child.delete()
+                child.isDirectory -> deleteRecursivelyWithoutLinks(child)
+                child.isFile -> child.delete()
+                else -> false
+            }
+            if (!deleted) return false
+        }
+        return directory.delete()
+    }
+
+    private companion object {
+        val CACHE_KEY_REGEX = Regex("[0-9a-f]{64}")
     }
 
     private fun sha256(file: File): String {

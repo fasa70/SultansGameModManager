@@ -39,6 +39,7 @@ import com.sultansgame.modmanager.platform.game.GameProbeResult
 import com.sultansgame.modmanager.platform.game.PackageManagerGameProbe
 import com.sultansgame.modmanager.platform.saf.ZipModImporter
 import com.sultansgame.modmanager.platform.storage.AndroidPrivateModCache
+import com.sultansgame.modmanager.platform.storage.CachedModDeletionResult
 import com.sultansgame.modmanager.platform.storage.DeploymentPlanStore
 import com.sultansgame.modmanager.platform.workshop.SteamPublicMetadataTransport
 import com.sultansgame.modmanager.platform.workshop.SteamCommunityWorkshopDetailTransport
@@ -182,18 +183,71 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun setModEnabled(cacheKey: String, enabled: Boolean) {
+        if (mutableState.value.deploymentInProgress || mutableState.value.cachedModDeletionInProgress) return
         deploymentPlan.setEnabled(cacheKey, enabled, mutableState.value.cachedMods)
         refreshDeploymentPlan()
     }
 
     fun moveMod(cacheKey: String, delta: Int) {
+        if (mutableState.value.deploymentInProgress || mutableState.value.cachedModDeletionInProgress) return
         deploymentPlan.move(cacheKey, delta, mutableState.value.cachedMods)
         refreshDeploymentPlan()
     }
 
-    fun syncMods(allowExternalReplacement: Boolean) {
+    fun deleteCachedMod(cacheKey: String) {
+        if (mutableState.value.deploymentInProgress) {
+            mutableState.value = mutableState.value.copy(
+                feedback = FeedbackMessage("正在同步 Mod 到游戏，暂时不能删除。", isError = true),
+            )
+            return
+        }
+        if (mutableState.value.cachedModDeletionInProgress) return
+        val cachedModsBeforeDeletion = mutableState.value.cachedMods
+        val target = cachedModsBeforeDeletion.firstOrNull { it.cacheKey == cacheKey } ?: return
+        mutableState.value = mutableState.value.copy(cachedModDeletionInProgress = true)
         viewModelScope.launch {
-            mutableState.value = mutableState.value.copy(deploymentInProgress = true, feedback = null)
+            try {
+                if (mutableState.value.deploymentInProgress) {
+                    mutableState.value = mutableState.value.copy(
+                        feedback = FeedbackMessage("正在同步 Mod 到游戏，暂时不能删除。", isError = true),
+                    )
+                    return@launch
+                }
+                when (val result = withContext(Dispatchers.IO) { privateModCache.deleteCached(target.cacheKey) }) {
+                    CachedModDeletionResult.Deleted,
+                    CachedModDeletionResult.NotFound -> {
+                        deploymentPlan.remove(target.cacheKey, cachedModsBeforeDeletion)
+                        val remainingCachedMods = cachedModsBeforeDeletion.filterNot { it.cacheKey == target.cacheKey }
+                        mutableState.value = mutableState.value.copy(
+                            cachedMods = remainingCachedMods,
+                            deploymentPlan = deploymentPlan.entries(remainingCachedMods),
+                            feedback = FeedbackMessage(
+                                "已删除 ${target.displayName} 的 Manager 私有缓存和部署计划；游戏内现有 Mod 未改变，如需移除请手动同步。",
+                            ),
+                        )
+                    }
+                    is CachedModDeletionResult.Rejected -> mutableState.value = mutableState.value.copy(
+                        feedback = FeedbackMessage("删除 ${target.displayName} 失败：${result.reason}", isError = true),
+                    )
+                    is CachedModDeletionResult.Failed -> mutableState.value = mutableState.value.copy(
+                        feedback = FeedbackMessage("删除 ${target.displayName} 失败：${result.reason}", isError = true),
+                    )
+                }
+            } finally {
+                mutableState.value = mutableState.value.copy(cachedModDeletionInProgress = false)
+            }
+        }
+    }
+
+    fun syncMods(allowExternalReplacement: Boolean) {
+        if (mutableState.value.cachedModDeletionInProgress) {
+            mutableState.value = mutableState.value.copy(
+                feedback = FeedbackMessage("正在删除本地 Mod 缓存，请稍候。", isError = true),
+            )
+            return
+        }
+        mutableState.value = mutableState.value.copy(deploymentInProgress = true, feedback = null)
+        viewModelScope.launch {
             try {
                 val snapshot = deploymentPlan.snapshot(mutableState.value.cachedMods, allowExternalReplacement)
                 when (val result = withContext(Dispatchers.IO) { loaderBridge.requestApply(ApplyRequest(snapshot)) }) {
