@@ -106,8 +106,8 @@ class MainActivity : ComponentActivity() {
     }
     private val confirmPackageInstall = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { }
     private var pendingApksExportTransactionId: String? = null
-    private val createApksDocument = registerForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
-        pendingApksExportTransactionId?.let { transactionId -> uri?.let { viewModel.writePreparedApks(transactionId, it) } }
+    private val createApksDocument = registerForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+        pendingApksExportTransactionId?.let { transactionId -> viewModel.writePreparedApks(transactionId, uri) }
         pendingApksExportTransactionId = null
     }
 
@@ -1256,6 +1256,7 @@ private fun PatchScreen(
         com.sultansgame.modmanager.model.DeviceSigningKeyState.MissingAfterMigration -> "已丢失"
         null -> "正在检查"
     }
+    val exportInProgress = state.apksExport !is ApksExportUiState.Idle
     ScreenList(wide) {
         item {
             HeroPanel(
@@ -1350,25 +1351,25 @@ private fun PatchScreen(
                 item { SectionLabel("步骤 3", "卸载原版") }
                 item { NoticeStrip("工件已准备", patch.summary) }
                 when (patch.gameState) {
-                    is GameProbeResult.Found -> item { PrimaryButton("打开系统卸载界面") { onRequestUninstall(patch.transactionId) } }
-                    is GameProbeResult.Failed, null -> item { PrimaryButton("重新检查卸载状态", onClick = onRefreshPending) }
-                    GameProbeResult.NotInstalled -> item { PrimaryButton("重新检查卸载状态", onClick = onRefreshPending) }
+                    is GameProbeResult.Found -> item { PrimaryButton("打开系统卸载界面", !exportInProgress) { onRequestUninstall(patch.transactionId) } }
+                    is GameProbeResult.Failed, null -> item { PrimaryButton("重新检查卸载状态", !exportInProgress, onRefreshPending) }
+                    GameProbeResult.NotInstalled -> item { PrimaryButton("重新检查卸载状态", !exportInProgress, onRefreshPending) }
                 }
-                item { PrimaryButton("导出 APKS 自行安装") { onExportPreparedApks(patch.transactionId) } }
+                item { ApksExportAction(state.apksExport, patch.transactionId, onExportPreparedApks) }
             }
             is PatchUiState.ReadyToInstall -> {
                 item { SectionLabel("步骤 4", "安装已准备工件") }
                 item { NoticeStrip("原版已卸载", patch.summary) }
-                item { PrimaryButton("调用系统安装器") { onInstallPrepared(patch.transactionId) } }
-                item { PrimaryButton("导出 APKS 自行安装") { onExportPreparedApks(patch.transactionId) } }
+                item { PrimaryButton("调用系统安装器", !exportInProgress) { onInstallPrepared(patch.transactionId) } }
+                item { ApksExportAction(state.apksExport, patch.transactionId, onExportPreparedApks) }
             }
             is PatchUiState.SubmittingInstall -> item { LoadingPanel("正在提交已准备的 APK 集合…") }
             is PatchUiState.AwaitingInstallPermission -> {
                 item { SectionLabel("步骤 4", "需要安装授权") }
                 item { NoticeStrip("授权后不会自动安装", "请在系统设置中允许 Manager 安装未知应用；返回后将显示独立的安装按钮。") }
-                item { PrimaryButton("前往安装授权设置", onClick = onOpenUnknownSourcesSettings) }
+                item { PrimaryButton("前往安装授权设置", !exportInProgress, onOpenUnknownSourcesSettings) }
                 patch.transactionId?.let { transactionId ->
-                    item { PrimaryButton("导出 APKS 自行安装") { onExportPreparedApks(transactionId) } }
+                    item { ApksExportAction(state.apksExport, transactionId, onExportPreparedApks) }
                 }
             }
             is PatchUiState.AwaitingSystemInstall -> {
@@ -1521,6 +1522,59 @@ private fun NoticeStrip(title: String, body: String) {
 private fun StatusPill(text: String) {
     Box(Modifier.clip(RoundedCornerShape(50)).background(MiuixTheme.colorScheme.surfaceVariant).padding(horizontal = 9.dp, vertical = 5.dp)) {
         Text(text, fontSize = 11.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+    }
+}
+
+@Composable
+private fun ApksExportAction(
+    export: ApksExportUiState,
+    transactionId: String,
+    onExport: (String) -> Unit,
+) {
+    when (export) {
+        ApksExportUiState.Idle -> PrimaryButton("导出 APKS 自行安装") { onExport(transactionId) }
+        is ApksExportUiState.SelectingDestination -> {
+            if (export.transactionId == transactionId) LoadingPanel("正在选择 APKS 导出位置…")
+            else PrimaryButton("导出 APKS 自行安装", enabled = false) {}
+        }
+        is ApksExportUiState.Validating -> {
+            if (export.transactionId == transactionId) LoadingPanel("正在校验已签名 APK…")
+            else PrimaryButton("导出 APKS 自行安装", enabled = false) {}
+        }
+        is ApksExportUiState.Writing -> {
+            if (export.transactionId == transactionId) {
+                val progress = if (export.totalBytes > 0L) {
+                    (export.writtenBytes.toFloat() / export.totalBytes.toFloat()).coerceIn(0f, 1f)
+                } else {
+                    0f
+                }
+                Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(16.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            "正在导出 ${export.completedArtifacts}/${export.artifactCount}：${export.artifactName}",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            "${formatBytes(export.writtenBytes)} / ${formatBytes(export.totalBytes)} · ${(progress * 100).toInt()}%",
+                            fontSize = 12.sp,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        )
+                        Box(
+                            Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp))
+                                .background(MiuixTheme.colorScheme.surfaceVariant),
+                        ) {
+                            Box(
+                                Modifier.fillMaxWidth(progress).height(6.dp)
+                                    .background(MiuixTheme.colorScheme.primary),
+                            )
+                        }
+                    }
+                }
+            } else {
+                PrimaryButton("导出 APKS 自行安装", enabled = false) {}
+            }
+        }
     }
 }
 

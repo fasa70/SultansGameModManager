@@ -13,6 +13,7 @@ import com.sultansgame.modmanager.model.PatchConfirmation
 import com.sultansgame.modmanager.model.PatchSource
 import com.sultansgame.modmanager.platform.patch.AndroidApkArchiveInspector
 import com.sultansgame.modmanager.platform.patch.ApksExporter
+import com.sultansgame.modmanager.platform.patch.ApksExportProgress
 import com.sultansgame.modmanager.platform.patch.AndroidKeystoreApkSigner
 import com.sultansgame.modmanager.platform.patch.AndroidLoaderSplitArtifactFactory
 import com.sultansgame.modmanager.platform.patch.DeviceSigningKeyStore
@@ -550,35 +551,101 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun exportPreparedApks(transactionId: String) {
-        val current = mutableState.value.patch
-        if (current !is PatchUiState.AwaitingOriginalUninstall &&
-            current !is PatchUiState.ReadyToInstall &&
-            current !is PatchUiState.AwaitingInstallPermission
-        ) return
+        if (!canExportPreparedApks(transactionId) || mutableState.value.apksExport !is ApksExportUiState.Idle) return
+        mutableState.value = mutableState.value.copy(
+            apksExport = ApksExportUiState.SelectingDestination(transactionId),
+        )
         val suggestedName = "sultans-game-patched-${transactionId.take(8)}.apks"
-        uiEventChannel.trySend(ManagerUiEvent.CreateApksExport(transactionId, suggestedName))
+        if (uiEventChannel.trySend(ManagerUiEvent.CreateApksExport(transactionId, suggestedName)).isFailure) {
+            mutableState.value = mutableState.value.copy(apksExport = ApksExportUiState.Idle)
+        }
     }
 
-    fun writePreparedApks(transactionId: String, uri: Uri) {
+    fun cancelPreparedApksExport(transactionId: String) {
+        if (mutableState.value.apksExport.transactionIdOrNull() == transactionId) {
+            mutableState.value = mutableState.value.copy(apksExport = ApksExportUiState.Idle)
+        }
+    }
+
+    fun writePreparedApks(transactionId: String, uri: Uri?) {
+        if (uri == null) {
+            cancelPreparedApksExport(transactionId)
+            return
+        }
+        if (!canExportPreparedApks(transactionId) ||
+            mutableState.value.apksExport !is ApksExportUiState.SelectingDestination
+        ) return
+        mutableState.value = mutableState.value.copy(apksExport = ApksExportUiState.Validating(transactionId))
         viewModelScope.launch {
-            runCatching {
+            try {
                 withContext(Dispatchers.IO) {
-                    requireNotNull(getApplication<Application>().contentResolver.openOutputStream(uri)) {
+                    val application = getApplication<Application>()
+                    val displayName = application.contentResolver.query(
+                        uri,
+                        arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
+                        null,
+                        null,
+                        null,
+                    )?.use { cursor ->
+                        cursor.takeIf { it.moveToFirst() }
+                            ?.getString(cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME))
+                    } ?: uri.lastPathSegment
+                    require(!displayName.isNullOrBlank() && displayName.endsWith(".apks", ignoreCase = true)) {
+                        "所选文件名必须以 .apks 结尾；请在文件选择器中修改名称后重试。"
+                    }
+                    requireNotNull(application.contentResolver.openOutputStream(uri)) {
                         "无法写入所选导出位置。"
                     }.use { output ->
-                        ApksExporter(transactions).export(transactionId, output)
+                        ApksExporter(transactions).export(transactionId, output) { progress ->
+                            mutableState.value = mutableState.value.copy(
+                                apksExport = progress.toUiState(transactionId),
+                            )
+                        }
                     }
                 }
-            }.onSuccess {
                 mutableState.value = mutableState.value.copy(
+                    apksExport = ApksExportUiState.Idle,
                     feedback = FeedbackMessage("已导出修补 APKS；请使用支持 APKS 的安装工具安装。"),
                 )
-            }.onFailure { error ->
+            } catch (error: CancellationException) {
+                mutableState.value = mutableState.value.copy(apksExport = ApksExportUiState.Idle)
+                throw error
+            } catch (error: Throwable) {
                 mutableState.value = mutableState.value.copy(
-                    feedback = FeedbackMessage("导出 APKS 失败：${error.message ?: "无法写入文件"}", isError = true),
+                    apksExport = ApksExportUiState.Idle,
+                    feedback = FeedbackMessage(
+                        "导出 APKS 失败：${error.message ?: "无法写入文件"}；目标位置可能留下不完整文件，请勿安装。",
+                        isError = true,
+                    ),
                 )
             }
         }
+    }
+
+    private fun canExportPreparedApks(transactionId: String): Boolean = when (val current = mutableState.value.patch) {
+        is PatchUiState.AwaitingOriginalUninstall -> current.transactionId == transactionId
+        is PatchUiState.ReadyToInstall -> current.transactionId == transactionId
+        is PatchUiState.AwaitingInstallPermission -> current.transactionId == transactionId
+        else -> false
+    }
+
+    private fun ApksExportUiState.transactionIdOrNull(): String? = when (this) {
+        ApksExportUiState.Idle -> null
+        is ApksExportUiState.SelectingDestination -> transactionId
+        is ApksExportUiState.Validating -> transactionId
+        is ApksExportUiState.Writing -> transactionId
+    }
+
+    private fun ApksExportProgress.toUiState(transactionId: String): ApksExportUiState = when (this) {
+        ApksExportProgress.Validating -> ApksExportUiState.Validating(transactionId)
+        is ApksExportProgress.Writing -> ApksExportUiState.Writing(
+            transactionId = transactionId,
+            artifactName = artifactName,
+            completedArtifacts = artifactIndex + 1,
+            artifactCount = artifactCount,
+            writtenBytes = writtenBytes,
+            totalBytes = totalBytes,
+        )
     }
 
     fun refreshPendingPatchState() {        when (mutableState.value.patch) {
@@ -594,6 +661,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun installPreparedArtifacts(transactionId: String) {
+        if (mutableState.value.apksExport !is ApksExportUiState.Idle) return
         val current = mutableState.value.patch as? PatchUiState.ReadyToInstall ?: return
         if (current.transactionId != transactionId) return
         viewModelScope.launch {

@@ -27,6 +27,7 @@ data class ManagerUiState(
     val deviceSigningKeyState: DeviceSigningKeyState? = null,
     val patch: PatchUiState = PatchUiState.ChooseSource,
     val preparedPatchRecovery: PreparedPatchRecovery? = null,
+    val apksExport: ApksExportUiState = ApksExportUiState.Idle,
     val noticeAccepted: Boolean? = null,
     val feedback: FeedbackMessage? = null,
 )
@@ -71,6 +72,23 @@ sealed interface PatchUiState {
     data class AwaitingSystemInstall(val transactionId: String) : PatchUiState
     data class Completed(val transactionId: String) : PatchUiState
     data class Failed(val reason: String, val transactionId: String? = null) : PatchUiState
+}
+
+sealed interface ApksExportUiState {
+    data object Idle : ApksExportUiState
+
+    data class SelectingDestination(val transactionId: String) : ApksExportUiState
+
+    data class Validating(val transactionId: String) : ApksExportUiState
+
+    data class Writing(
+        val transactionId: String,
+        val artifactName: String,
+        val completedArtifacts: Int,
+        val artifactCount: Int,
+        val writtenBytes: Long,
+        val totalBytes: Long,
+    ) : ApksExportUiState
 }
 
 data class FeedbackMessage(

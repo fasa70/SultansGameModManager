@@ -21,8 +21,16 @@ internal data class PatchTransaction(
     val failure: String? = null,
 )
 
-internal class PatchTransactionStore(context: Context) {
-    private val root = File(context.filesDir, "patch-staging")
+internal class PatchTransactionStore {
+    private val root: File
+
+    constructor(context: Context) {
+        root = File(context.filesDir, "patch-staging")
+    }
+
+    internal constructor(root: File) {
+        this.root = root
+    }
 
     fun root(transactionId: String): File = File(root, transactionId)
 
