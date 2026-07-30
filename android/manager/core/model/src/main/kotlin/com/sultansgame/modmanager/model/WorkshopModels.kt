@@ -26,6 +26,91 @@ enum class WorkshopAvailability {
     Unavailable,
 }
 
+data class WorkshopDateRangeFilter(
+    val startEpochSeconds: Long = 0L,
+    val endEpochSeconds: Long = 0L,
+) {
+    val isActive: Boolean
+        get() = startEpochSeconds > 0L || endEpochSeconds > 0L
+
+    fun normalized(): WorkshopDateRangeFilter {
+        val start = startEpochSeconds.coerceAtLeast(0L)
+        val end = endEpochSeconds.coerceAtLeast(0L)
+        return if (start > 0L && end > 0L && start > end) {
+            copy(startEpochSeconds = end, endEpochSeconds = start)
+        } else {
+            copy(startEpochSeconds = start, endEpochSeconds = end)
+        }
+    }
+}
+
+data class WorkshopBrowseQuery(
+    val sectionKey: String = SECTION_ITEMS,
+    val sortKey: String = SORT_TREND,
+    val periodDays: Int = 7,
+    val searchText: String = "",
+    val requiredTags: Set<String> = emptySet(),
+    val excludedTags: Set<String> = emptySet(),
+    val showIncompatible: Boolean = false,
+    val createdDateRange: WorkshopDateRangeFilter = WorkshopDateRangeFilter(),
+    val updatedDateRange: WorkshopDateRangeFilter = WorkshopDateRangeFilter(),
+    val page: Int = 1,
+    val pageSize: Int = DEFAULT_PAGE_SIZE,
+) {
+    fun normalized(): WorkshopBrowseQuery = copy(
+        sectionKey = sectionKey.trim().ifBlank { SECTION_ITEMS },
+        sortKey = sortKey.trim().ifBlank { SORT_TREND },
+        searchText = searchText.trim(),
+        requiredTags = requiredTags.map(String::trim).filter(String::isNotBlank).toSortedSet(),
+        excludedTags = excludedTags.map(String::trim).filter(String::isNotBlank).toSortedSet(),
+        createdDateRange = createdDateRange.normalized(),
+        updatedDateRange = updatedDateRange.normalized(),
+        page = page.coerceAtLeast(1),
+        pageSize = normalizePageSize(pageSize),
+    )
+
+    companion object {
+        const val DEFAULT_PAGE_SIZE = 9
+        val PAGE_SIZE_OPTIONS = listOf(9, 18, 30)
+        const val SECTION_ITEMS = "readytouseitems"
+        const val SECTION_MY_SUBSCRIPTIONS = "mysubscriptions"
+        const val SORT_TREND = "trend"
+        const val SORT_TOP_RATED = "toprated"
+        const val SORT_MOST_RECENT = "mostrecent"
+        const val SORT_LAST_UPDATED = "lastupdated"
+        const val SORT_TOTAL_UNIQUE_SUBSCRIBERS = "totaluniquesubscribers"
+
+        fun normalizePageSize(pageSize: Int): Int =
+            pageSize.takeIf { it in PAGE_SIZE_OPTIONS } ?: DEFAULT_PAGE_SIZE
+    }
+}
+
+data class WorkshopBrowsePage(
+    val items: List<WorkshopItem>,
+    val totalCount: Int,
+    val page: Int,
+    val hasMore: Boolean,
+    val sectionOptions: List<WorkshopBrowseSectionOption>,
+    val sortOptions: List<WorkshopBrowseSortOption>,
+    val periodOptions: List<WorkshopBrowsePeriodOption>,
+    val tagGroups: List<WorkshopBrowseTagGroup>,
+    val supportsIncompatibleFilter: Boolean,
+)
+
+data class WorkshopBrowseSectionOption(val key: String, val label: String)
+data class WorkshopBrowseSortOption(val key: String, val label: String, val supportsPeriod: Boolean)
+data class WorkshopBrowsePeriodOption(val days: Int, val label: String)
+
+enum class WorkshopBrowseTagGroupSelectionMode { IncludeExclude, SingleSelect }
+
+data class WorkshopBrowseTagGroup(
+    val label: String,
+    val tags: List<WorkshopBrowseTagOption>,
+    val selectionMode: WorkshopBrowseTagGroupSelectionMode = WorkshopBrowseTagGroupSelectionMode.IncludeExclude,
+)
+
+data class WorkshopBrowseTagOption(val value: String, val label: String)
+
 data class WorkshopItem(
     val appId: UInt,
     val publishedFileId: PublishedFileId,
@@ -37,8 +122,23 @@ data class WorkshopItem(
     val availability: WorkshopAvailability,
     val description: String = "",
     val authorName: String = "",
-)
+    val shortDescription: String = "",
+    val authorProfileUrl: String? = null,
+    val detailUrl: String? = null,
+    val createdAtEpochSeconds: Long? = null,
+    val subscriptions: Int? = null,
+    val creatorSteamId: ULong? = null,
+    val contentManifestId: ULong? = null,
+    val childPublishedFileIds: List<PublishedFileId> = emptyList(),
+    val tags: List<String> = emptyList(),
+    val isDownloadInfoResolved: Boolean = false,
+) {
+    val canDirectDownload: Boolean get() = !fileUrl.isNullOrBlank()
+    val canSteamContentDownload: Boolean get() = contentManifestId != null && contentManifestId > 0u
+    val canDownload: Boolean get() = canDirectDownload || canSteamContentDownload
+}
 
+@Deprecated("Use WorkshopBrowsePage")
 data class WorkshopSearchPage(
     val items: List<WorkshopItem>,
     val page: Int,

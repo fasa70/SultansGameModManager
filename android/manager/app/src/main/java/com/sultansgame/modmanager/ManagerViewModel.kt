@@ -35,6 +35,7 @@ import com.sultansgame.modmanager.platform.game.PackageManagerGameProbe
 import com.sultansgame.modmanager.platform.saf.ZipModImporter
 import com.sultansgame.modmanager.platform.storage.AndroidPrivateModCache
 import com.sultansgame.modmanager.platform.storage.DeploymentPlanStore
+import com.sultansgame.modmanager.platform.workshop.SteamCommunityWorkshopBrowser
 import com.sultansgame.modmanager.platform.workshop.SteamPublicMetadataTransport
 import com.sultansgame.modmanager.platform.workshop.SultanWorkshopCatalog
 import com.sultansgame.modmanager.platform.workshop.WorkshopArtifactImporter
@@ -70,6 +71,11 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     private val steamAuthProvider = SteamCmAuthProvider(application)
     private val steamAuth: SteamAuthProvider = steamAuthProvider
     private val catalog = SultanWorkshopCatalog()
+    private val workshopProvider = SteamPublicWorkshopProvider(SteamPublicMetadataTransport())
+    private val communityWorkshopBrowser = SteamCommunityWorkshopBrowser(
+        client = top.apricityx.workshop.steam.protocol.newDefaultOkHttpClient(),
+        metadataProvider = workshopProvider,
+    )
     private val gameProbe = PackageManagerGameProbe(application)
     private val deviceSigningKeyStore = DeviceSigningKeyStore(application)
     private val archiveInspector = AndroidApkArchiveInspector(application)
@@ -89,7 +95,6 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             AndroidLoaderSplitArtifactFactory(application, nativeDigest)
         },
     )
-    private val workshopProvider = SteamPublicWorkshopProvider(SteamPublicMetadataTransport())
     private val loaderBridge: LoaderBridge = AndroidModStorageLoaderBridge(application, File(application.filesDir, "mod-cache"))
     private val legalNotice = LegalNoticeRepository(application)
 
@@ -284,6 +289,44 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch { handleAuthResult(steamAuth.logout()) }
     }
 
+    fun browseWorkshop(query: com.sultansgame.modmanager.model.WorkshopBrowseQuery = com.sultansgame.modmanager.model.WorkshopBrowseQuery()) {
+        val normalizedQuery = query.normalized()
+        viewModelScope.launch {
+            mutableState.value = mutableState.value.copy(
+                workshopBrowse = mutableState.value.workshopBrowse.copy(
+                    query = normalizedQuery,
+                    isLoading = true,
+                    error = null,
+                ),
+            )
+            runCatching { withContext(Dispatchers.IO) { communityWorkshopBrowser.browse(normalizedQuery) } }
+                .onSuccess { page ->
+                    mutableState.value = mutableState.value.copy(
+                        workshopBrowse = WorkshopBrowseUiState(
+                            query = normalizedQuery,
+                            items = page.items,
+                            totalCount = page.totalCount,
+                            hasMore = page.hasMore,
+                            sectionOptions = page.sectionOptions,
+                            sortOptions = page.sortOptions,
+                            periodOptions = page.periodOptions,
+                            tagGroups = page.tagGroups,
+                            supportsIncompatibleFilter = page.supportsIncompatibleFilter,
+                        ),
+                    )
+                }
+                .onFailure { error ->
+                    val current = mutableState.value.workshopBrowse
+                    mutableState.value = mutableState.value.copy(
+                        workshopBrowse = current.copy(
+                            query = normalizedQuery,
+                            isLoading = false,
+                            error = error.message ?: "无法读取 Steam 创意工坊。",
+                        ),
+                    )
+                }
+        }
+    }
     fun searchWorkshop(query: String, page: Int = 1) {
         val account = steamAuthProvider.activeSession()
         if (account == null) {

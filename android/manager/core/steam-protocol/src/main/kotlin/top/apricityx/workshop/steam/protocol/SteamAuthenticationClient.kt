@@ -225,18 +225,22 @@ class SteamCredentialAuthSession internal constructor(
         }
     }
 
-    suspend fun awaitResult(): SteamAuthPollResult {
-        debugLogger.log("Protocol: waiting for auth result pollIntervalMs=$pollingIntervalMillis.")
-        var attempts = 0
-        while (true) {
-            attempts += 1
-            debugLogger.log("Protocol: auth poll attempt=$attempts.")
+    suspend fun awaitResult(maxAttempts: Int = 30): SteamAuthPollResult {
+        require(maxAttempts > 0) { "maxAttempts must be positive" }
+        debugLogger.log("Protocol: waiting for auth result pollIntervalMs=$pollingIntervalMillis maxAttempts=$maxAttempts.")
+        repeat(maxAttempts) { index ->
+            val attempt = index + 1
+            debugLogger.log("Protocol: auth poll attempt=$attempt.")
             pollStatus()?.let { result ->
-                debugLogger.log("Protocol: auth result received after $attempts poll attempt(s).")
+                debugLogger.log("Protocol: auth result received after $attempt poll attempt(s).")
                 return result
             }
-            delay(pollingIntervalMillis)
+            if (attempt < maxAttempts) delay(pollingIntervalMillis)
         }
+        throw SteamAuthenticationException(
+            resultCode = 16,
+            message = "等待 Steam 登录确认超时，请重新输入验证码或重新登录。",
+        )
     }
 
     override fun close() {

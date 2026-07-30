@@ -12,6 +12,8 @@ datastore = "1.2.1"
 androidxCore = "1.18.0"
 junit = "4.13.2"
 serialization = "1.8.1"
+jsoup = "1.18.3"
+jspecify = "1.0.0"
 okhttp = "5.3.2"
 protobuf = "4.29.1"
 protobufPlugin = "0.9.4"
@@ -32,6 +34,8 @@ miuix-icons = { module = "top.yukonga.miuix.kmp:miuix-icons", version.ref = "miu
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
+jsoup = { module = "org.jsoup:jsoup", version.ref = "jsoup" }
+jspecify = { module = "org.jspecify:jspecify", version.ref = "jspecify" }
 okhttp-bom = { module = "com.squareup.okhttp3:okhttp-bom", version.ref = "okhttp" }
 okhttp = { module = "com.squareup.okhttp3:okhttp" }
 okio = { module = "com.squareup.okio:okio", version.ref = "okio" }

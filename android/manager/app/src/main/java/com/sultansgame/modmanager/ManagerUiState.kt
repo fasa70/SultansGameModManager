@@ -21,6 +21,7 @@ data class ManagerUiState(
     val deploymentInProgress: Boolean = false,
     val cachedMods: List<CachedMod> = emptyList(),
     val workshop: WorkshopUiState = WorkshopUiState.Idle,
+    val workshopBrowse: WorkshopBrowseUiState = WorkshopBrowseUiState(),
     val workshopSearch: WorkshopSearchUiState = WorkshopSearchUiState.Idle,
     val downloadTasks: List<DownloadTask> = emptyList(),
     val steamAuthState: SteamAuthState = SteamAuthState.SignedOut,
@@ -70,6 +71,20 @@ sealed interface PatchUiState {
 data class FeedbackMessage(
     val text: String,
     val isError: Boolean = false,
+)
+
+data class WorkshopBrowseUiState(
+    val query: com.sultansgame.modmanager.model.WorkshopBrowseQuery = com.sultansgame.modmanager.model.WorkshopBrowseQuery(),
+    val items: List<WorkshopItem> = emptyList(),
+    val totalCount: Int = 0,
+    val hasMore: Boolean = false,
+    val sectionOptions: List<com.sultansgame.modmanager.model.WorkshopBrowseSectionOption> = emptyList(),
+    val sortOptions: List<com.sultansgame.modmanager.model.WorkshopBrowseSortOption> = emptyList(),
+    val periodOptions: List<com.sultansgame.modmanager.model.WorkshopBrowsePeriodOption> = emptyList(),
+    val tagGroups: List<com.sultansgame.modmanager.model.WorkshopBrowseTagGroup> = emptyList(),
+    val supportsIncompatibleFilter: Boolean = false,
+    val isLoading: Boolean = false,
+    val error: String? = null,
 )
 
 sealed interface WorkshopUiState {

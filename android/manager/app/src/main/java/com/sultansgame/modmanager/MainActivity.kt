@@ -33,6 +33,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -134,6 +135,7 @@ class MainActivity : ComponentActivity() {
                     onSubmitSteamGuard = viewModel::submitSteamGuard,
                     onLogoutSteam = viewModel::logoutSteam,
                     onSearchWorkshop = viewModel::searchWorkshop,
+                    onBrowseWorkshop = viewModel::browseWorkshop,
                     onQueueWorkshopDownload = viewModel::queueWorkshopDownload,
                     onRetryWorkshopDownload = viewModel::retryWorkshopDownload,
                     onCancelWorkshopDownload = viewModel::cancelWorkshopDownload,
@@ -183,6 +185,7 @@ private fun ManagerApp(
     onSubmitSteamGuard: (String) -> Unit,
     onLogoutSteam: () -> Unit,
     onSearchWorkshop: (String, Int) -> Unit,
+    onBrowseWorkshop: (com.sultansgame.modmanager.model.WorkshopBrowseQuery) -> Unit,
     onQueueWorkshopDownload: (com.sultansgame.modmanager.model.WorkshopItem) -> Unit,
     onRetryWorkshopDownload: (String) -> Unit,
     onCancelWorkshopDownload: (String) -> Unit,
@@ -218,6 +221,7 @@ private fun ManagerApp(
                     onSubmitSteamGuard = onSubmitSteamGuard,
                     onLogoutSteam = onLogoutSteam,
                     onSearchWorkshop = onSearchWorkshop,
+                    onBrowseWorkshop = onBrowseWorkshop,
                     onQueueWorkshopDownload = onQueueWorkshopDownload,
                     onRetryWorkshopDownload = onRetryWorkshopDownload,
                     onCancelWorkshopDownload = onCancelWorkshopDownload,
@@ -255,6 +259,7 @@ private fun ManagerApp(
                     onSubmitSteamGuard = onSubmitSteamGuard,
                     onLogoutSteam = onLogoutSteam,
                     onSearchWorkshop = onSearchWorkshop,
+                    onBrowseWorkshop = onBrowseWorkshop,
                     onQueueWorkshopDownload = onQueueWorkshopDownload,
                     onRetryWorkshopDownload = onRetryWorkshopDownload,
                     onCancelWorkshopDownload = onCancelWorkshopDownload,
@@ -426,6 +431,7 @@ private fun ContentArea(
     onSubmitSteamGuard: (String) -> Unit,
     onLogoutSteam: () -> Unit,
     onSearchWorkshop: (String, Int) -> Unit,
+    onBrowseWorkshop: (com.sultansgame.modmanager.model.WorkshopBrowseQuery) -> Unit,
     onQueueWorkshopDownload: (com.sultansgame.modmanager.model.WorkshopItem) -> Unit,
     onRetryWorkshopDownload: (String) -> Unit,
     onCancelWorkshopDownload: (String) -> Unit,
@@ -468,6 +474,7 @@ private fun ContentArea(
                 onSubmitSteamGuard = onSubmitSteamGuard,
                 onLogoutSteam = onLogoutSteam,
                 onSearch = onSearchWorkshop,
+                onBrowse = onBrowseWorkshop,
                 onQueueDownload = onQueueWorkshopDownload,
                 onRetryDownload = onRetryWorkshopDownload,
                 onCancelDownload = onCancelWorkshopDownload,
@@ -626,6 +633,7 @@ private fun WorkshopScreen(
     onSubmitSteamGuard: (String) -> Unit,
     onLogoutSteam: () -> Unit,
     onSearch: (String, Int) -> Unit,
+    onBrowse: (com.sultansgame.modmanager.model.WorkshopBrowseQuery) -> Unit,
     onQueueDownload: (com.sultansgame.modmanager.model.WorkshopItem) -> Unit,
     onRetryDownload: (String) -> Unit,
     onCancelDownload: (String) -> Unit,
@@ -637,43 +645,32 @@ private fun WorkshopScreen(
     var guardCode by remember { mutableStateOf("") }
     var query by remember { mutableStateOf("") }
     var publishedFileId by remember { mutableStateOf("") }
+    var showSteamLogin by remember { mutableStateOf(false) }
     val signedIn = state.steamAuthState as? com.sultansgame.modmanager.model.SteamAuthState.SignedIn
+    LaunchedEffect(Unit) {
+        onBrowse(com.sultansgame.modmanager.model.WorkshopBrowseQuery())
+    }
 
     ScreenList(wide) {
         item {
-            HeroPanel(
-                eyebrow = "STEAM WORKSHOP · APPID 3117820",
-                title = "苏丹的游戏创意工坊",
-                body = "搜索、登录和下载仅面向《苏丹的游戏》。下载先进入私有暂存区，只有确认后才会校验并缓存 Mod；不会写入游戏目录。",
-            )
-        }
-        item {
-            Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(18.dp)) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    when (val auth = state.steamAuthState) {
-                        is com.sultansgame.modmanager.model.SteamAuthState.SignedIn -> {
-                            Text("已登录 Steam", fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                            Text("${auth.accountName} · ${auth.steamId}", fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
-                            PrimaryButton("退出 Steam", onClick = onLogoutSteam)
-                        }
-                        is com.sultansgame.modmanager.model.SteamAuthState.SteamGuardRequired -> {
-                            Text("需要 Steam Guard：${auth.challenge}", fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                            WorkshopTextField(guardCode, { guardCode = it }, "验证码", numeric = false)
-                            PrimaryButton("提交验证码", guardCode.isNotBlank()) { onSubmitSteamGuard(guardCode) }
-                        }
-                        is com.sultansgame.modmanager.model.SteamAuthState.AwaitingConfirmation -> {
-                            Text("请在 Steam 中完成确认：${auth.challenge}", fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                            NoticeStrip("等待确认", "完成确认后返回此页，再次登录即可刷新会话。")
-                        }
-                        com.sultansgame.modmanager.model.SteamAuthState.SigningIn -> LoadingPanel("正在连接 Steam…")
-                        else -> {
-                            Text("登录 Steam", fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                            Text("账号密码只用于本次认证；持久化的会话由 Android Keystore 加密保护。", fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
-                            WorkshopTextField(username, { username = it }, "Steam 账号")
-                            WorkshopTextField(password, { password = it }, "Steam 密码", password = true)
-                            PrimaryButton("登录 Steam", username.isNotBlank() && password.isNotEmpty()) {
-                                onBeginSteamLogin(username, password)
-                                password = ""
+            Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(22.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                        Text("STEAM WORKSHOP · APPID 3117820", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                        Text("苏丹的游戏创意工坊", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                        Text("匿名浏览公开 Mod；下载先进入私有暂存区，确认后才校验并导入，不会直接写入游戏目录。", fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                    }
+                    Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            signedIn?.accountName ?: "匿名浏览",
+                            fontSize = 12.sp,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        )
+                        SmallAction(if (signedIn == null) "登录 Steam" else "退出 Steam") {
+                            if (signedIn == null) {
+                                showSteamLogin = true
+                            } else {
+                                onLogoutSteam()
                             }
                         }
                     }
@@ -683,13 +680,45 @@ private fun WorkshopScreen(
         item {
             Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(18.dp)) {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("搜索创意工坊", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    Text("探索创意工坊", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    Text("无需登录即可浏览公开 Mod；登录仅用于账号受限内容。", fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                     WorkshopTextField(query, { query = it }, "关键词")
-                    PrimaryButton("搜索", query.isNotBlank() && signedIn != null) { onSearch(query, 1) }
-                    if (signedIn == null) Text("登录后可使用 Steam CM 搜索。", fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SmallAction("热门") { onBrowse(com.sultansgame.modmanager.model.WorkshopBrowseQuery(searchText = query)) }
+                        SmallAction("最新") { onBrowse(com.sultansgame.modmanager.model.WorkshopBrowseQuery(searchText = query, sortKey = com.sultansgame.modmanager.model.WorkshopBrowseQuery.SORT_MOST_RECENT)) }
+                        SmallAction("本周") { onBrowse(com.sultansgame.modmanager.model.WorkshopBrowseQuery(searchText = query, periodDays = 7)) }
+                    }
                 }
             }
         }
+        when (val browse = state.workshopBrowse) {
+            else -> {
+                if (browse.isLoading) item { LoadingPanel("正在浏览 Steam 创意工坊…") }
+                browse.error?.let { reason -> item { ErrorPanel(reason) } }
+                if (browse.items.isNotEmpty()) {
+                    item { SectionLabel("公开 Mod", "${browse.totalCount} 项") }
+                    items(browse.items, key = { it.publishedFileId.toString() }) { item ->
+                        ListPanel(
+                            item.title,
+                            listOfNotNull(
+                                item.authorName.takeIf(String::isNotBlank),
+                                item.declaredSizeBytes?.let(::formatBytes),
+                                item.tags.take(2).takeIf { it.isNotEmpty() }?.joinToString(),
+                            ).joinToString(" · ").ifBlank { "Steam 创意工坊条目" },
+                            if (item.canDownload) "查看详情" else "不可下载",
+                        ) { onLookup(item.publishedFileId.toString()) }
+                    }
+                    if (browse.hasMore) item {
+                        PrimaryButton("加载更多") {
+                            onBrowse(browse.query.copy(page = browse.query.page + 1))
+                        }
+                    }
+                } else if (!browse.isLoading && browse.error == null) {
+                    item { PrimaryButton("浏览热门 Mod") { onBrowse(com.sultansgame.modmanager.model.WorkshopBrowseQuery()) } }
+                }
+            }
+        }
+
         item {
             Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(18.dp)) {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -735,6 +764,42 @@ private fun WorkshopScreen(
                         } else if (task.stage !in setOf(com.sultansgame.modmanager.model.DownloadStage.Imported, com.sultansgame.modmanager.model.DownloadStage.Cancelled)) {
                             PrimaryButton("取消下载") { onCancelDownload(task.id) }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showSteamLogin) {
+        Dialog(onDismissRequest = { if (state.steamAuthState !is com.sultansgame.modmanager.model.SteamAuthState.SigningIn) showSteamLogin = false }) {
+            Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(22.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    when (val auth = state.steamAuthState) {
+                        is com.sultansgame.modmanager.model.SteamAuthState.SignedIn -> {
+                            Text("已登录 Steam", fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                            Text("${auth.accountName} · ${auth.steamId}", fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                            PrimaryButton("退出 Steam") { onLogoutSteam(); showSteamLogin = false }
+                        }
+                        is com.sultansgame.modmanager.model.SteamAuthState.SteamGuardRequired -> {
+                            Text("需要 ${auth.challenge}", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                            Text("输入验证码后可重试；若 Steam 要求在 App 中批准登录，请改用可输入的 Guard 或邮箱验证码。", fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                            WorkshopTextField(guardCode, { guardCode = it }, "验证码")
+                            PrimaryButton("提交验证码", guardCode.isNotBlank()) { onSubmitSteamGuard(guardCode); guardCode = "" }
+                        }
+                        com.sultansgame.modmanager.model.SteamAuthState.SigningIn -> LoadingPanel("正在连接 Steam…")
+                        else -> {
+                            Text("登录 Steam", fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                            Text("账号密码仅用于本次认证；刷新令牌由 Android Keystore 加密保存。", fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                            WorkshopTextField(username, { username = it }, "Steam 账号")
+                            WorkshopTextField(password, { password = it }, "Steam 密码", password = true)
+                            PrimaryButton("登录 Steam", username.isNotBlank() && password.isNotEmpty()) {
+                                onBeginSteamLogin(username, password)
+                                password = ""
+                            }
+                        }
+                    }
+                    if (state.steamAuthState !is com.sultansgame.modmanager.model.SteamAuthState.SigningIn) {
+                        Text("关闭", modifier = Modifier.fillMaxWidth().clickable { showSteamLogin = false }.padding(8.dp), fontSize = 13.sp)
                     }
                 }
             }
