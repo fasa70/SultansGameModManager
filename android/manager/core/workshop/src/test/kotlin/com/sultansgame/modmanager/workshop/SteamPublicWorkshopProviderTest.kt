@@ -118,6 +118,54 @@ class SteamPublicWorkshopProviderTest {
         assertFalse(WorkshopHttpPolicy.isAllowedPreviewImageUrl("https://127.0.0.1/preview.jpg"))
         assertNull(PublicWorkshopDetailParser.parse("<div>no usable detail</div>"))
     }
+
+    @Test
+    fun `normalizes only trusted default-port http preview urls`() {
+        assertEquals(
+            "https://images.akamai.steamusercontent.com/preview.jpg?size=large",
+            WorkshopHttpPolicy.normalizePreviewImageUrl(
+                "http://images.akamai.steamusercontent.com/preview.jpg?size=large#ignored",
+            ),
+        )
+        assertEquals(
+            "https://images.akamai.steamusercontent.com/preview.jpg",
+            WorkshopHttpPolicy.normalizePreviewImageUrl(
+                "https://images.akamai.steamusercontent.com/preview.jpg#ignored",
+            ),
+        )
+        assertNull(WorkshopHttpPolicy.normalizePreviewImageUrl("http://images.akamai.steamusercontent.com:8080/preview.jpg"))
+        assertNull(WorkshopHttpPolicy.normalizePreviewImageUrl("http://steamusercontent-a.akamaihd.net.evil.test/preview.jpg"))
+        assertNull(WorkshopHttpPolicy.normalizePreviewImageUrl("http://127.0.0.1/preview.jpg"))
+        assertNull(WorkshopHttpPolicy.normalizePreviewImageUrl("http://user@steamusercontent-a.akamaihd.net/preview.jpg"))
+    }
+
+    @Test
+    fun `uses normalized metadata preview before community detail preview`() {
+        val provider = SteamPublicWorkshopProvider(
+            transport = FakeTransport(
+                PublicWorkshopMetadata(
+                    consumerAppId = 3117820u,
+                    publishedFileId = itemId,
+                    resultCode = 1,
+                    title = "公开 Mod",
+                    fileUrl = "https://steamusercontent-a.akamaihd.net/workshop.zip",
+                    previewUrl = "http://steamusercontent-a.akamaihd.net/preview.jpg",
+                    updatedAtEpochSeconds = null,
+                    declaredSizeBytes = 10,
+                ),
+            ),
+            detailTransport = object : PublicWorkshopDetailTransport {
+                override fun getPublishedFileDetail(publishedFileId: PublishedFileId) = PublicWorkshopDetail(
+                    previewUrl = "https://images.akamai.steamusercontent.com/detail.jpg",
+                )
+            },
+        )
+
+        val item = (provider.getItemWithCommunityDetail(3117820u, itemId) as WorkshopLookupResult.Available).item
+
+        assertEquals("https://steamusercontent-a.akamaihd.net/preview.jpg", item.previewUrl)
+    }
+
     private class FakeTransport(private val result: PublicWorkshopMetadata) : PublicWorkshopMetadataTransport {
         override fun getPublishedFileDetails(appId: UInt, publishedFileId: PublishedFileId): PublicWorkshopMetadata = result
     }

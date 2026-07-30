@@ -101,7 +101,7 @@ class SteamCommunityWorkshopBrowser(
         return when (resolved) {
             is WorkshopLookupResult.Available -> resolved.item.copy(
                 title = resolved.item.title.ifBlank { skeleton.title.ifBlank { "Workshop 条目 $id" } },
-                previewUrl = resolved.item.previewUrl ?: skeleton.previewUrl?.takeIf(WorkshopHttpPolicy::isAllowedPreviewImageUrl),
+                previewUrl = resolved.item.previewUrl ?: WorkshopHttpPolicy.normalizePreviewImageUrl(skeleton.previewUrl),
                 authorName = resolved.item.authorName.ifBlank { skeleton.authorName },
                 isDownloadInfoResolved = true,
             )
@@ -111,7 +111,7 @@ class SteamCommunityWorkshopBrowser(
                 title = skeleton.title.ifBlank { "Workshop 条目 $id" },
                 updatedAtEpochSeconds = null,
                 fileUrl = null,
-                previewUrl = skeleton.previewUrl,
+                previewUrl = WorkshopHttpPolicy.normalizePreviewImageUrl(skeleton.previewUrl),
                 declaredSizeBytes = null,
                 availability = com.sultansgame.modmanager.model.WorkshopAvailability.Unavailable,
                 authorName = skeleton.authorName,

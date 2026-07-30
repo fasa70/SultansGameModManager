@@ -35,6 +35,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -837,7 +839,11 @@ private fun WorkshopDetailScreen(
                     Text("← 返回创意工坊", modifier = Modifier.clickable(onClick = onBack).padding(vertical = 4.dp), fontSize = 13.sp)
                     Text("WORKSHOP ITEM · ${item.publishedFileId}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                     Text(item.title, fontSize = 25.sp, fontWeight = FontWeight.Bold)
-                    WorkshopArtworkThumbnail(item, Modifier.fillMaxWidth().aspectRatio(16f / 9f))
+                    WorkshopArtworkThumbnail(
+                        item = item,
+                        modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+                        contentScale = ContentScale.Fit,
+                    )
                     Text("作者 · ${item.authorName.ifBlank { "未知作者" }}", fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                     item.shortDescription.takeIf(String::isNotBlank)?.let { Text(it, fontSize = 15.sp) }
                 }
@@ -914,11 +920,12 @@ private fun WorkshopScreen(
     var filterDraft by remember { mutableStateOf(state.workshopBrowse.query) }
     val signedIn = state.steamAuthState as? com.sultansgame.modmanager.model.SteamAuthState.SignedIn
     LaunchedEffect(state.workshopBrowse.query) { filterDraft = state.workshopBrowse.query }
-    LaunchedEffect(state.workshopBrowse.items.isEmpty(), state.workshopBrowse.error, state.workshopBrowse.isLoading) {
+    LaunchedEffect(state.workshopBrowse.items.isEmpty(), state.workshopBrowse.error, state.workshopBrowse.hasLoadedOnce, state.workshopBrowse.isRefreshing) {
         if (
             state.workshopBrowse.items.isEmpty() &&
             state.workshopBrowse.error == null &&
-            !state.workshopBrowse.isLoading
+            !state.workshopBrowse.hasLoadedOnce &&
+            !state.workshopBrowse.isRefreshing
         ) {
             onBrowse(com.sultansgame.modmanager.model.WorkshopBrowseQuery())
         }
@@ -957,9 +964,18 @@ private fun WorkshopScreen(
                     Text("无需登录即可浏览公开 Mod；登录仅用于账号受限内容。", fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                     WorkshopTextField(query, { query = it }, "关键词")
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        SmallAction("热门") { onBrowse(com.sultansgame.modmanager.model.WorkshopBrowseQuery(searchText = query)) }
-                        SmallAction("最新") { onBrowse(com.sultansgame.modmanager.model.WorkshopBrowseQuery(searchText = query, sortKey = com.sultansgame.modmanager.model.WorkshopBrowseQuery.SORT_MOST_RECENT)) }
-                        SmallAction("筛选") { showAdvancedFilters = true }
+                        SmallAction("热门", enabled = !state.workshopBrowse.isRefreshing) {
+                            onBrowse(com.sultansgame.modmanager.model.WorkshopBrowseQuery(searchText = query))
+                        }
+                        SmallAction("最新", enabled = !state.workshopBrowse.isRefreshing) {
+                            onBrowse(
+                                com.sultansgame.modmanager.model.WorkshopBrowseQuery(
+                                    searchText = query,
+                                    sortKey = com.sultansgame.modmanager.model.WorkshopBrowseQuery.SORT_MOST_RECENT,
+                                ),
+                            )
+                        }
+                        SmallAction("筛选", enabled = !state.workshopBrowse.isRefreshing) { showAdvancedFilters = true }
                         SmallAction("下载中心") { onOpenQueue() }
                     }
                 }
@@ -967,19 +983,32 @@ private fun WorkshopScreen(
         }
         when (val browse = state.workshopBrowse) {
             else -> {
-                if (browse.isLoading) item { LoadingPanel("正在浏览 Steam 创意工坊…") }
+                if (browse.items.isEmpty() && browse.isRefreshing) {
+                    item { WorkshopInitialLoadingPanel() }
+                }
                 browse.error?.let { reason -> item { ErrorPanel(reason) } }
                 if (browse.items.isNotEmpty()) {
-                    item { SectionLabel("公开 Mod", "${browse.totalCount} 项") }
+                    item {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            SectionLabel("公开 Mod", "${browse.totalCount} 项")
+                            if (browse.isRefreshing) WorkshopRefreshIndicator("正在更新结果…")
+                        }
+                    }
                     items(browse.items, key = { it.publishedFileId.toString() }) { item ->
                         WorkshopBrowseItemCard(item) { onLookup(item.publishedFileId.toString()) }
                     }
                     if (browse.hasMore) item {
-                        PrimaryButton("加载更多") {
-                            onBrowse(browse.query.copy(page = browse.query.page + 1))
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (browse.isLoadingMore) WorkshopRefreshIndicator("正在加载更多…")
+                            PrimaryButton(
+                                label = if (browse.isLoadingMore) "正在加载更多…" else "加载更多",
+                                enabled = !browse.isRefreshing && !browse.isLoadingMore,
+                            ) {
+                                onBrowse(browse.query.copy(page = browse.query.page + 1))
+                            }
                         }
                     }
-                } else if (!browse.isLoading && browse.error == null) {
+                } else if (browse.hasLoadedOnce && browse.error == null) {
                     item { PrimaryButton("浏览热门 Mod") { onBrowse(com.sultansgame.modmanager.model.WorkshopBrowseQuery()) } }
                 }
             }
@@ -1179,7 +1208,7 @@ private fun WorkshopScreen(
                             }
                         }
                     }
-                    PrimaryButton("应用筛选") {
+                    PrimaryButton("应用筛选", enabled = !state.workshopBrowse.isRefreshing) {
                         onBrowse(filterDraft.copy(searchText = query, page = 1).normalized())
                         showAdvancedFilters = false
                     }
@@ -1513,32 +1542,66 @@ private fun WorkshopBrowseItemCard(
 private fun WorkshopArtworkThumbnail(
     item: com.sultansgame.modmanager.model.WorkshopItem,
     modifier: Modifier = Modifier,
+    contentScale: ContentScale = ContentScale.Crop,
 ) {
-    val previewUrl = item.previewUrl?.takeIf(
-        com.sultansgame.modmanager.workshop.WorkshopHttpPolicy::isAllowedPreviewImageUrl,
-    )
+    val previewUrl = remember(item.previewUrl) {
+        com.sultansgame.modmanager.workshop.WorkshopHttpPolicy.normalizePreviewImageUrl(item.previewUrl)
+    }
+    var imageFailed by remember(previewUrl) { mutableStateOf(false) }
     Box(
         modifier.clip(RoundedCornerShape(12.dp)).background(MiuixTheme.colorScheme.surfaceVariant),
         contentAlignment = Alignment.Center,
     ) {
-        if (previewUrl == null) {
-            Text(
-                item.title.firstOrNull()?.uppercase() ?: "W",
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-            )
-        } else {
+        Text(
+            item.title.firstOrNull()?.uppercase() ?: "W",
+            fontSize = 24.sp,
+            fontWeight = FontWeight.Bold,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+        )
+        if (previewUrl != null && !imageFailed) {
             AsyncImage(
                 model = ImageRequest.Builder(androidx.compose.ui.platform.LocalContext.current)
                     .data(previewUrl)
                     .crossfade(true)
                     .build(),
                 contentDescription = "${item.title} 的创意工坊封面",
-                contentScale = ContentScale.Crop,
+                contentScale = contentScale,
                 modifier = Modifier.fillMaxSize(),
+                onError = { imageFailed = true },
             )
         }
+    }
+}
+
+@Composable
+private fun WorkshopInitialLoadingPanel() {
+    Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(20.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(28.dp),
+                color = MiuixTheme.colorScheme.primary,
+                strokeWidth = 3.dp,
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("正在浏览 Steam 创意工坊", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Text("正在获取公开 Mod 与封面信息…", fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkshopRefreshIndicator(label: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        Text(label, fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+        LinearProgressIndicator(
+            modifier = Modifier.fillMaxWidth(),
+            color = MiuixTheme.colorScheme.primary,
+        )
     }
 }
 

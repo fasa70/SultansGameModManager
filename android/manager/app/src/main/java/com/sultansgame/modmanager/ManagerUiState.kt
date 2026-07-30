@@ -114,7 +114,9 @@ data class WorkshopBrowseUiState(
     val periodOptions: List<com.sultansgame.modmanager.model.WorkshopBrowsePeriodOption> = emptyList(),
     val tagGroups: List<com.sultansgame.modmanager.model.WorkshopBrowseTagGroup> = emptyList(),
     val supportsIncompatibleFilter: Boolean = false,
-    val isLoading: Boolean = false,
+    val isRefreshing: Boolean = false,
+    val isLoadingMore: Boolean = false,
+    val hasLoadedOnce: Boolean = false,
     val error: String? = null,
 )
 

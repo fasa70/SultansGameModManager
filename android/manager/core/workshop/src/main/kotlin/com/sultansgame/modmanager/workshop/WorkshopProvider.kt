@@ -40,6 +40,41 @@ object WorkshopHttpPolicy {
 
     fun isAllowedPreviewImageUrl(url: String): Boolean = isAllowed(url, previewImageHosts)
 
+    /**
+     * Converts a Steam CDN preview URL to its canonical HTTPS form without
+     * broadening the set of hosts that may supply preview images.
+     */
+    fun normalizePreviewImageUrl(url: String?): String? {
+        val rawUrl = url?.trim().orEmpty()
+        if (rawUrl.isEmpty()) return null
+        return runCatching {
+            val uri = URI(rawUrl)
+            if (uri.userInfo != null || uri.host?.lowercase() !in previewImageHosts) return@runCatching null
+            val normalized = when {
+                uri.scheme.equals("https", ignoreCase = true) && uri.port in setOf(-1, 443) -> URI(
+                    "https",
+                    null,
+                    uri.host,
+                    -1,
+                    uri.rawPath,
+                    uri.rawQuery,
+                    null,
+                )
+                uri.scheme.equals("http", ignoreCase = true) && uri.port in setOf(-1, 80) -> URI(
+                    "https",
+                    null,
+                    uri.host,
+                    -1,
+                    uri.rawPath,
+                    uri.rawQuery,
+                    null,
+                )
+                else -> return@runCatching null
+            }
+            normalized.toString().takeIf(::isAllowedPreviewImageUrl)
+        }.getOrNull()
+    }
+
     fun isAllowedCommunityDetailUrl(url: String, publishedFileId: PublishedFileId): Boolean = runCatching {
         val uri = URI(url)
         isAllowed(uri, setOf("steamcommunity.com")) &&
