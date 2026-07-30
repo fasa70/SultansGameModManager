@@ -1,9 +1,9 @@
 package com.sultansgame.modmanager.platform.patch
 
+import android.content.pm.PackageManager
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.sultansgame.modmanager.model.DeviceSigningKeyState
-import com.sultansgame.modmanager.model.ApkInspection
 import com.sultansgame.modmanager.split.LoaderSplitRequest
 import com.sultansgame.modmanager.split.LoaderSplitResult
 import org.junit.Assert.assertEquals
@@ -53,6 +53,34 @@ class DeviceSigningKeyStoreTest {
         assertTrue(result.verifiedV2)
     }
 
+    @Test
+    fun frozenLoaderTemplateExportsUnrestrictedModStorageProvider() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val template = File(context.cacheDir, "modloader-template-manifest.apk").apply {
+            context.assets.open("release/modloader-template-10005.apk").use { input ->
+                outputStream().use(input::copyTo)
+            }
+        }
+        try {
+            val packageInfo = requireNotNull(
+                context.packageManager.getPackageArchiveInfo(
+                    template.absolutePath,
+                    PackageManager.GET_PROVIDERS,
+                ),
+            )
+            val provider = requireNotNull(packageInfo.providers?.singleOrNull {
+                it.authority == "com.gametree.sultan.pd.modstorage"
+            })
+
+            assertEquals("com.gametree.sultan.pd", packageInfo.packageName)
+            assertEquals("modloader", packageInfo.splitNames?.singleOrNull())
+            assertTrue(provider.exported)
+            assertEquals(null, provider.readPermission)
+            assertEquals(null, provider.writePermission)
+        } finally {
+            template.delete()
+        }
+    }
 
     @Test
     fun preparesSignedMigrationArtifactSet() {
@@ -78,7 +106,7 @@ class DeviceSigningKeyStoreTest {
         val loader = factory.build(
             LoaderSplitRequest(
                 targetApplicationId = "com.gametree.sultan.pd",
-                loaderTemplateSha256 = "f7cf7b49ff340a091b65bc6238cc109e9ea6047874be03f5a4aa436fc3d13517",
+                loaderTemplateSha256 = "57025fd43bba2e5b9e8e5cc6a42259d5794d12e350d5f9b42ccff3caa3c884b4",
                 target = extracted.base.inspection,
                 templateOutputPath = File(context.filesDir, "patch-staging/${java.util.UUID.randomUUID()}/template/modloader.apk").absolutePath,
             ),
