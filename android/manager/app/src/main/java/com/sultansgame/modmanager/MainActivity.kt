@@ -78,11 +78,10 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.ThemeController
 
 private enum class Destination(val titleRes: Int, val mark: String, val caption: String) {
-    Game(R.string.nav_game, "01", "安装状态"),
-    Mods(R.string.nav_mods, "02", "私有缓存"),
-    Workshop(R.string.nav_workshop, "03", "公开工件"),
-    Patch(R.string.nav_patch, "04", "安装迁移"),
-    Settings(R.string.nav_settings, "05", "安全与关于"),
+    Mods(R.string.nav_mods, "01", "私有缓存"),
+    Workshop(R.string.nav_workshop, "02", "公开工件"),
+    Patch(R.string.nav_patch, "03", "安装迁移"),
+    Settings(R.string.nav_settings, "04", "安全与关于"),
 }
 
 private enum class DialogKind { Notice, Privacy, License, ClearCache, SyncMods, PatchWarning }
@@ -136,7 +135,6 @@ class MainActivity : ComponentActivity() {
                 val state by viewModel.state.collectAsStateWithLifecycle()
                 ManagerApp(
                     state = state,
-                    onRefreshGame = viewModel::refreshGame,
                     onImportMod = { selectModZip.launch(arrayOf("application/zip", "application/x-zip-compressed")) },
                     onImportLocalApk = { selectLocalApk.launch(arrayOf("application/vnd.android.package-archive", "application/octet-stream")) },
                     onImportLocalApkSet = { selectLocalApkSet.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) },
@@ -189,7 +187,6 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun ManagerApp(
     state: ManagerUiState,
-    onRefreshGame: () -> Unit,
     onImportMod: () -> Unit,
     onImportLocalApk: () -> Unit,
     onImportLocalApkSet: () -> Unit,
@@ -225,15 +222,7 @@ private fun ManagerApp(
 ) {
     var destinationIndex by remember {
         mutableIntStateOf(
-            if (state.patch is PatchUiState.AwaitingOriginalUninstall ||
-                state.patch is PatchUiState.ReadyToInstall ||
-                state.patch is PatchUiState.AwaitingInstallPermission ||
-                state.preparedPatchRecovery != null
-            ) {
-                Destination.Patch.ordinal
-            } else {
-                Destination.Game.ordinal
-            },
+            Destination.Patch.ordinal,
         )
     }
     var dialog by remember { mutableStateOf<DialogKind?>(null) }
@@ -249,7 +238,6 @@ private fun ManagerApp(
                     destination = destination,
                     state = state,
                     wideLayout = true,
-                    onRefreshGame = onRefreshGame,
                     onImportMod = onImportMod,
                     onLookupWorkshop = onLookupWorkshop,
                     onBeginSteamLogin = onBeginSteamLogin,
@@ -290,7 +278,6 @@ private fun ManagerApp(
                     destination = destination,
                     state = state,
                     wideLayout = false,
-                    onRefreshGame = onRefreshGame,
                     onImportMod = onImportMod,
                     onLookupWorkshop = onLookupWorkshop,
                     onBeginSteamLogin = onBeginSteamLogin,
@@ -465,7 +452,6 @@ private fun ContentArea(
     destination: Destination,
     state: ManagerUiState,
     wideLayout: Boolean,
-    onRefreshGame: () -> Unit,
     onImportMod: () -> Unit,
     onLookupWorkshop: (String) -> Unit,
     onBeginSteamLogin: (String, String) -> Unit,
@@ -500,7 +486,6 @@ private fun ContentArea(
     Column(modifier) {
         if (wideLayout) ContentHeader(destination)
         when (destination) {
-            Destination.Game -> GameScreen(state, wideLayout, onRefreshGame)
             Destination.Mods -> ModsScreen(
                 state = state,
                 wide = wideLayout,
@@ -559,37 +544,6 @@ private fun ContentHeader(destination: Destination) {
             Text(destination.caption, fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
         }
         StatusPill("0.1.0")
-    }
-}
-
-@Composable
-private fun GameScreen(state: ManagerUiState, wide: Boolean, onRefresh: () -> Unit) {
-    val gameDetails = when (val result = state.gameProbeResult) {
-        null -> stringResource(R.string.status_reading_game)
-        GameProbeResult.NotInstalled -> stringResource(R.string.status_game_missing)
-        is GameProbeResult.Failed -> result.reason
-        is GameProbeResult.Found -> "${result.snapshot.packageName}\n版本 ${result.snapshot.versionName ?: result.snapshot.versionCode} · ${result.snapshot.signerDigestsSha256.size} 个签名摘要"
-    }
-    ScreenList(wide) {
-        item {
-            HeroPanel(
-                eyebrow = "安装检查",
-                title = if (state.gameProbeResult is GameProbeResult.Found) "已识别游戏安装" else "等待游戏安装信息",
-                body = "已安装游戏的包名、版本、ABI 与签名证书只读探测。安装迁移在「修补」页签操作。",
-                action = stringResource(R.string.action_refresh),
-                onAction = onRefresh,
-            )
-        }
-        item {
-            if (wide) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                MetricCard("游戏包", gameDetails, Modifier.weight(1f))
-                MetricCard("Loader", state.loaderStatus?.let { "${it.state}\n失败码：${it.failure}" } ?: stringResource(R.string.status_loader_pending), Modifier.weight(1f))
-            } else Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                MetricCard("游戏包", gameDetails, Modifier.fillMaxWidth())
-                MetricCard("Loader", state.loaderStatus?.let { "${it.state}\n失败码：${it.failure}" } ?: stringResource(R.string.status_loader_pending), Modifier.fillMaxWidth())
-            }
-        }
-        item { NoticeStrip("安全边界", stringResource(R.string.game_read_only)) }
     }
 }
 
@@ -1452,16 +1406,6 @@ private fun HeroPanel(eyebrow: String, title: String, body: String, action: Stri
                 Spacer(Modifier.height(4.dp))
                 PrimaryButton(action, !muted, onAction)
             }
-        }
-    }
-}
-
-@Composable
-private fun MetricCard(title: String, body: String, modifier: Modifier) {
-    Card(modifier, insideMargin = PaddingValues(18.dp)) {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(title, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
-            Text(body, fontSize = 15.sp)
         }
     }
 }

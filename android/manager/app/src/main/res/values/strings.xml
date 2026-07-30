@@ -1,11 +1,9 @@
 <resources>
     <string name="app_name">苏丹的游戏 Mod 管理器</string>
-    <string name="nav_game">游戏</string>
     <string name="nav_mods">Mod</string>
     <string name="nav_workshop">创意工坊</string>
     <string name="nav_patch">修补</string>
     <string name="nav_settings">设置</string>
-    <string name="action_refresh">重新探测</string>
     <string name="action_import_zip">导入 ZIP Mod</string>
     <string name="action_lookup">查询公开条目</string>
     <string name="action_download">下载原始工件</string>
@@ -17,19 +15,11 @@
     <string name="action_view_privacy">隐私与数据流</string>
     <string name="action_view_license">开源许可</string>
     <string name="action_understood">我已阅读并理解</string>
-    <string name="home_title">游戏与运行环境</string>
     <string name="mods_title">本地 Mod</string>
     <string name="workshop_title">创意工坊</string>
     <string name="patch_title">修补与安装</string>
     <string name="settings_title">设置与关于</string>
-    <string name="status_reading_game">正在读取已安装游戏…</string>
     <string name="status_preparing">正在准备使用须知…</string>
-    <string name="status_game_missing">未检测到官方游戏包</string>
-    <string name="status_game_found">已发现 %1$s\n版本 %2$s · %3$d 个签名摘要\n%4$s</string>
-    <string name="status_loader">Loader 状态：%1$s · 失败码：%2$s</string>
-    <string name="status_loader_pending">Loader 状态尚未读取</string>
-    <string name="game_read_only">当前只读探测不会重签、安装、生成 split 或写入游戏目录。</string>
-    <string name="game_refresh_hint">重新读取已安装游戏信息与签名摘要。</string>
     <string name="mods_intro">仅接受 ZIP 格式 Mod 包。导入内容会在 Manager 私有目录中解压、校验和缓存。</string>
     <string name="mods_empty">尚无已缓存 Mod</string>
     <string name="mods_item">%1$s\n%2$s · %3$s · 尚未同步到游戏</string>
