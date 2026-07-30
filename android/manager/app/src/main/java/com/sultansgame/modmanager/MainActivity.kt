@@ -99,6 +99,7 @@ private sealed interface DialogKind {
     data object SyncMods : DialogKind
     data object PatchWarning : DialogKind
     data class PatchCleanup(val transactionId: String) : DialogKind
+    data class WorkshopTaskRemoval(val taskId: String) : DialogKind
 }
 
 class MainActivity : ComponentActivity() {
@@ -175,6 +176,7 @@ class MainActivity : ComponentActivity() {
                     onCancelWorkshopDownload = viewModel::cancelWorkshopDownload,
                     onConfirmWorkshopImport = viewModel::confirmWorkshopImport,
                     onDiscardWorkshopArtifact = viewModel::discardWorkshopArtifact,
+                    onRemoveWorkshopDownload = viewModel::removeWorkshopDownload,
                     onAcceptNotice = viewModel::acceptLegalNotice,
                     onClearModCache = viewModel::clearModCache,
                     onRefreshGameMods = viewModel::refreshGameModStorage,
@@ -231,6 +233,7 @@ private fun ManagerApp(
     onCancelWorkshopDownload: (String) -> Unit,
     onConfirmWorkshopImport: (String) -> Unit,
     onDiscardWorkshopArtifact: (String) -> Unit,
+    onRemoveWorkshopDownload: (String) -> Unit,
     onAcceptNotice: () -> Unit,
     onClearModCache: () -> Unit,
     onRefreshGameMods: () -> Unit,
@@ -278,6 +281,7 @@ private fun ManagerApp(
                     onCancelWorkshopDownload = onCancelWorkshopDownload,
                     onConfirmWorkshopImport = onConfirmWorkshopImport,
                     onDiscardWorkshopArtifact = onDiscardWorkshopArtifact,
+                    onRemoveWorkshopDownload = { dialog = DialogKind.WorkshopTaskRemoval(it) },
                     onRefreshGameMods = onRefreshGameMods,
                     onSetModEnabled = onSetModEnabled,
                     onMoveMod = onMoveMod,
@@ -320,6 +324,7 @@ private fun ManagerApp(
                     onCancelWorkshopDownload = onCancelWorkshopDownload,
                     onConfirmWorkshopImport = onConfirmWorkshopImport,
                     onDiscardWorkshopArtifact = onDiscardWorkshopArtifact,
+                    onRemoveWorkshopDownload = { dialog = DialogKind.WorkshopTaskRemoval(it) },
                     onRefreshGameMods = onRefreshGameMods,
                     onSetModEnabled = onSetModEnabled,
                     onMoveMod = onMoveMod,
@@ -378,6 +383,20 @@ private fun ManagerApp(
                 onConfirm = { onSyncMods(externalMods.isNotEmpty()); dialog = null },
                 onDismiss = { dialog = null },
             )
+        }
+        is DialogKind.WorkshopTaskRemoval -> {
+            val task = state.downloadTasks.firstOrNull { it.id == activeDialog.taskId }
+            if (task == null) {
+                LaunchedEffect(activeDialog.taskId) { dialog = null }
+            } else {
+                ConfirmDialog(
+                    title = "删除下载任务并释放空间？",
+                    body = "将停止该任务、删除下载记录及 Manager 私有暂存内容。已导入的 Mod 缓存、游戏目录和存档不会受到影响。等待导入的内容也会被放弃。",
+                    confirmLabel = "删除任务并清理暂存",
+                    onConfirm = { onRemoveWorkshopDownload(task.id); dialog = null },
+                    onDismiss = { dialog = null },
+                )
+            }
         }
         is DialogKind.PatchCleanup -> {
             val candidate = state.patchCleanup?.takeIf { it.transactionId == activeDialog.transactionId }
@@ -510,6 +529,7 @@ private fun ContentArea(
     onCancelWorkshopDownload: (String) -> Unit,
     onConfirmWorkshopImport: (String) -> Unit,
     onDiscardWorkshopArtifact: (String) -> Unit,
+    onRemoveWorkshopDownload: (String) -> Unit,
     onRefreshGameMods: () -> Unit,
     onSetModEnabled: (String, Boolean) -> Unit,
     onMoveMod: (String, Int) -> Unit,
@@ -557,6 +577,7 @@ private fun ContentArea(
                 onCancelDownload = onCancelWorkshopDownload,
                 onConfirmImport = onConfirmWorkshopImport,
                 onDiscardArtifact = onDiscardWorkshopArtifact,
+                onRemoveDownload = onRemoveWorkshopDownload,
             )
             Destination.Patch -> PatchScreen(
                 wide = wideLayout,
@@ -673,6 +694,35 @@ private fun SmallAction(label: String, enabled: Boolean = true, onClick: () -> U
     }
 }
 
+private enum class FilterOptionState { Default, Selected, Excluded }
+
+@Composable
+private fun FilterOptionAction(
+    label: String,
+    state: FilterOptionState,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    val background = when {
+        !enabled -> MiuixTheme.colorScheme.surfaceVariant
+        state == FilterOptionState.Selected -> MiuixTheme.colorScheme.primary
+        state == FilterOptionState.Excluded -> MiuixTheme.colorScheme.errorContainer
+        else -> MiuixTheme.colorScheme.surfaceVariant
+    }
+    val textColor = when {
+        !enabled -> MiuixTheme.colorScheme.onSurfaceVariantSummary
+        state == FilterOptionState.Selected -> MiuixTheme.colorScheme.onPrimary
+        else -> MiuixTheme.colorScheme.onSurface
+    }
+    Box(
+        Modifier.clip(RoundedCornerShape(10.dp)).background(background)
+            .border(if (state == FilterOptionState.Default) 1.dp else 0.dp, MiuixTheme.colorScheme.outline, RoundedCornerShape(10.dp))
+            .clickable(enabled = enabled, onClick = onClick).padding(horizontal = 11.dp, vertical = 7.dp),
+    ) {
+        Text(label, fontSize = 12.sp, fontWeight = if (state == FilterOptionState.Default) FontWeight.Normal else FontWeight.Bold, color = textColor)
+    }
+}
+
 
 @Composable
 private fun WorkshopNavigation(
@@ -691,6 +741,7 @@ private fun WorkshopNavigation(
     onCancelDownload: (String) -> Unit,
     onConfirmImport: (String) -> Unit,
     onDiscardArtifact: (String) -> Unit,
+    onRemoveDownload: (String) -> Unit,
 ) {
     val navController = rememberNavController()
     NavHost(navController = navController, startDestination = "browse") {
@@ -715,6 +766,7 @@ private fun WorkshopNavigation(
                 onCancelDownload = onCancelDownload,
                 onConfirmImport = onConfirmImport,
                 onDiscardArtifact = onDiscardArtifact,
+                onRemoveDownload = onRemoveDownload,
             )
         }
         composable(
@@ -739,6 +791,8 @@ private fun WorkshopNavigation(
                         navController.popBackStack()
                     },
                     onQueueDownload = onQueueDownload,
+                    downloadTasks = state.downloadTasks,
+                    onOpenQueue = { navController.navigate("queue") },
                 )
                 state.workshop is WorkshopUiState.Error -> ScreenList(wide) {
                     item { ErrorPanel((state.workshop).reason) }
@@ -757,6 +811,7 @@ private fun WorkshopNavigation(
                 onCancelDownload = onCancelDownload,
                 onConfirmImport = onConfirmImport,
                 onDiscardArtifact = onDiscardArtifact,
+                onRemoveDownload = onRemoveDownload,
                 onBack = { navController.popBackStack() },
             )
         }
@@ -772,6 +827,7 @@ private fun WorkshopQueueScreen(
     onCancelDownload: (String) -> Unit,
     onConfirmImport: (String) -> Unit,
     onDiscardArtifact: (String) -> Unit,
+    onRemoveDownload: (String) -> Unit,
     onBack: () -> Unit,
 ) {
     ScreenList(wide) {
@@ -788,7 +844,7 @@ private fun WorkshopQueueScreen(
             item { EmptyPanel("下载队列为空", "从 Workshop 条目详情选择“加入下载队列”后，任务将显示在此处。") }
         } else {
             items(state.downloadTasks, key = { it.id }) { task ->
-                WorkshopDownloadTaskCard(task, onRetryDownload, onPauseDownload, onResumeDownload, onCancelDownload, onConfirmImport, onDiscardArtifact)
+                WorkshopDownloadTaskCard(task, onRetryDownload, onPauseDownload, onResumeDownload, onCancelDownload, onConfirmImport, onDiscardArtifact, onRemoveDownload)
             }
         }
     }
@@ -803,11 +859,12 @@ private fun WorkshopDownloadTaskCard(
     onCancelDownload: (String) -> Unit,
     onConfirmImport: (String) -> Unit,
     onDiscardArtifact: (String) -> Unit,
+    onRemoveDownload: (String) -> Unit,
 ) {
     Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(16.dp)) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(task.title.ifBlank { "Workshop ${task.publishedFileId}" }, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-            Text("${task.stage} · ${formatBytes(task.downloadedBytes)}${task.totalBytes?.let { " / ${formatBytes(it)}" } ?: ""}", fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+            Text(workshopDownloadStatus(task), fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
             when (task.stage) {
                 com.sultansgame.modmanager.model.DownloadStage.AwaitingImportConfirmation -> {
                     PrimaryButton("检查并导入 Mod") { onConfirmImport(task.id) }
@@ -829,6 +886,9 @@ private fun WorkshopDownloadTaskCard(
                     PrimaryButton("取消下载") { onCancelDownload(task.id) }
                 }
             }
+            if (task.stage != com.sultansgame.modmanager.model.DownloadStage.Importing) {
+                SmallAction("删除任务并释放暂存空间") { onRemoveDownload(task.id) }
+            }
         }
     }
 }
@@ -839,6 +899,8 @@ private fun WorkshopDetailScreen(
     wide: Boolean,
     onBack: () -> Unit,
     onQueueDownload: (com.sultansgame.modmanager.model.WorkshopItem) -> Unit,
+    downloadTasks: List<com.sultansgame.modmanager.model.DownloadTask>,
+    onOpenQueue: () -> Unit,
 ) {
     ScreenList(wide) {
         item {
@@ -847,11 +909,7 @@ private fun WorkshopDetailScreen(
                     Text("← 返回创意工坊", modifier = Modifier.clickable(onClick = onBack).padding(vertical = 4.dp), fontSize = 13.sp)
                     Text("WORKSHOP ITEM · ${item.publishedFileId}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                     Text(item.title, fontSize = 25.sp, fontWeight = FontWeight.Bold)
-                    WorkshopArtworkThumbnail(
-                        item = item,
-                        modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
-                        contentScale = ContentScale.Fit,
-                    )
+                    WorkshopArtworkThumbnail(item, Modifier.fillMaxWidth().aspectRatio(16f / 9f), ContentScale.Fit)
                     Text("作者 · ${item.authorName.ifBlank { "未知作者" }}", fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                     item.shortDescription.takeIf(String::isNotBlank)?.let { Text(it, fontSize = 15.sp) }
                 }
@@ -861,11 +919,7 @@ private fun WorkshopDetailScreen(
             Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(20.dp)) {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("说明", fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                    Text(
-                        item.description.ifBlank { "Steam 未提供该条目的详细说明。" },
-                        fontSize = 14.sp,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                    )
+                    Text(item.description.ifBlank { "Steam 未提供该条目的详细说明。" }, fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                     Text(
                         listOfNotNull(
                             item.declaredSizeBytes?.let(::formatBytes),
@@ -879,20 +933,28 @@ private fun WorkshopDetailScreen(
                 }
             }
         }
-        if (item.tags.isNotEmpty()) {
-            item {
-                Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(20.dp)) {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("标签", fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                        Text(item.tags.joinToString(" · "), fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
-                    }
+        if (item.tags.isNotEmpty()) item {
+            Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(20.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("标签", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Text(item.tags.joinToString(" · "), fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                 }
             }
         }
         item {
-            if (item.canDownload) {
+            val activeTask = downloadTasks.firstOrNull {
+                it.publishedFileId == item.publishedFileId && it.stage !in setOf(
+                    com.sultansgame.modmanager.model.DownloadStage.Imported,
+                    com.sultansgame.modmanager.model.DownloadStage.Cancelled,
+                    com.sultansgame.modmanager.model.DownloadStage.Failed,
+                )
+            }
+            if (activeTask != null) {
+                NoticeStrip("已在下载队列中", workshopDownloadStatus(activeTask))
+                PrimaryButton("查看下载中心", onClick = onOpenQueue)
+            } else if (item.canDownload) {
                 item.contentManifestId?.takeIf { item.fileUrl == null }?.let {
-                    NoticeStrip("Steam 内容下载可用", "Steam 未提供公开直链；加入队列后将通过 Steam 内容服务获取该条目。")
+                    NoticeStrip("Steam 内容下载可用", "Steam 未提供公开直链；加入队列后将通过已保存的 Steam 登录状态获取该条目。")
                 }
                 PrimaryButton("加入下载队列") { onQueueDownload(item) }
             } else {
@@ -920,6 +982,7 @@ private fun WorkshopScreen(
     onCancelDownload: (String) -> Unit,
     onConfirmImport: (String) -> Unit,
     onDiscardArtifact: (String) -> Unit,
+    onRemoveDownload: (String) -> Unit,
 ) {
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -973,16 +1036,25 @@ private fun WorkshopScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("探索创意工坊", fontSize = 15.sp, fontWeight = FontWeight.Bold)
                     Text("无需登录即可浏览公开 Mod；登录仅用于账号受限内容。", fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
-                    WorkshopTextField(query, { query = it }, "关键词")
+                    val submitSearch = {
+                        onBrowse(state.workshopBrowse.query.copy(searchText = query, page = 1).normalized())
+                    }
+                    WorkshopTextField(query, { query = it }, "关键词", onSubmit = submitSearch)
+                    PrimaryButton("搜索", enabled = !state.workshopBrowse.isRefreshing, onClick = submitSearch)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         SmallAction("热门", enabled = !state.workshopBrowse.isRefreshing) {
-                            onBrowse(com.sultansgame.modmanager.model.WorkshopBrowseQuery(searchText = query))
+                            onBrowse(state.workshopBrowse.query.copy(
+                                searchText = query,
+                                sortKey = com.sultansgame.modmanager.model.WorkshopBrowseQuery.SORT_TREND,
+                                page = 1,
+                            ))
                         }
                         SmallAction("最新", enabled = !state.workshopBrowse.isRefreshing) {
                             onBrowse(
-                                com.sultansgame.modmanager.model.WorkshopBrowseQuery(
+                                state.workshopBrowse.query.copy(
                                     searchText = query,
                                     sortKey = com.sultansgame.modmanager.model.WorkshopBrowseQuery.SORT_MOST_RECENT,
+                                    page = 1,
                                 ),
                             )
                         }
@@ -1034,24 +1106,7 @@ private fun WorkshopScreen(
         if (state.downloadTasks.isNotEmpty()) {
             item { SectionLabel("下载队列", "${state.downloadTasks.size} 项") }
             items(state.downloadTasks, key = { it.id }) { task ->
-                Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(16.dp)) {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(task.title.ifBlank { "Workshop ${task.publishedFileId}" }, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                        Text("${task.stage} · ${formatBytes(task.downloadedBytes)}${task.totalBytes?.let { " / ${formatBytes(it)}" } ?: ""}", fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
-                        if (task.stage == com.sultansgame.modmanager.model.DownloadStage.AwaitingImportConfirmation) {
-                            Text("已下载 ${task.completedFileCount} 个文件，SHA-256 ${task.rawArtifactDigestSha256?.take(12) ?: "未知"}…", fontSize = 12.sp)
-                            PrimaryButton("检查并导入 Mod") { onConfirmImport(task.id) }
-                            PrimaryButton("丢弃下载内容") { onDiscardArtifact(task.id) }
-                        } else if (task.stage == com.sultansgame.modmanager.model.DownloadStage.Paused) {
-                            PrimaryButton("继续下载") { onResumeDownload(task.id) }
-                        } else if (task.stage == com.sultansgame.modmanager.model.DownloadStage.Failed || task.stage == com.sultansgame.modmanager.model.DownloadStage.NeedsLogin) {
-                            PrimaryButton("重试") { onRetryDownload(task.id) }
-                        } else if (task.stage !in setOf(com.sultansgame.modmanager.model.DownloadStage.Imported, com.sultansgame.modmanager.model.DownloadStage.Cancelled)) {
-                            PrimaryButton("暂停下载") { onPauseDownload(task.id) }
-                            PrimaryButton("取消下载") { onCancelDownload(task.id) }
-                        }
-                    }
-                }
+                WorkshopDownloadTaskCard(task, onRetryDownload, onPauseDownload, onResumeDownload, onCancelDownload, onConfirmImport, onDiscardArtifact, onRemoveDownload)
             }
         }
     }
@@ -1131,8 +1186,9 @@ private fun WorkshopScreen(
                         Text("分类", fontSize = 14.sp, fontWeight = FontWeight.Bold)
                         state.workshopBrowse.sectionOptions.forEach { section ->
                             val requiresAccount = section.key == com.sultansgame.modmanager.model.WorkshopBrowseQuery.SECTION_MY_SUBSCRIPTIONS && signedIn == null
-                            SmallAction(
+                            FilterOptionAction(
                                 if (filterDraft.sectionKey == section.key) "✓ ${section.label}" else section.label,
+                                if (filterDraft.sectionKey == section.key) FilterOptionState.Selected else FilterOptionState.Default,
                                 enabled = !requiresAccount,
                             ) {
                                 filterDraft = filterDraft.copy(sectionKey = section.key)
@@ -1144,7 +1200,10 @@ private fun WorkshopScreen(
                     if (state.workshopBrowse.sortOptions.isNotEmpty()) {
                         Text("排序", fontSize = 14.sp, fontWeight = FontWeight.Bold)
                         state.workshopBrowse.sortOptions.forEach { option ->
-                            SmallAction(if (filterDraft.sortKey == option.key) "✓ ${option.label}" else option.label) {
+                            FilterOptionAction(
+                                if (filterDraft.sortKey == option.key) "✓ ${option.label}" else option.label,
+                                if (filterDraft.sortKey == option.key) FilterOptionState.Selected else FilterOptionState.Default,
+                            ) {
                                 filterDraft = filterDraft.copy(sortKey = option.key)
                             }
                         }
@@ -1152,20 +1211,29 @@ private fun WorkshopScreen(
                     if (currentSort?.supportsPeriod == true && state.workshopBrowse.periodOptions.isNotEmpty()) {
                         Text("热门时间范围", fontSize = 14.sp, fontWeight = FontWeight.Bold)
                         state.workshopBrowse.periodOptions.forEach { option ->
-                            SmallAction(if (filterDraft.periodDays == option.days) "✓ ${option.label}" else option.label) {
+                            FilterOptionAction(
+                                if (filterDraft.periodDays == option.days) "✓ ${option.label}" else option.label,
+                                if (filterDraft.periodDays == option.days) FilterOptionState.Selected else FilterOptionState.Default,
+                            ) {
                                 filterDraft = filterDraft.copy(periodDays = option.days)
                             }
                         }
                     }
                     if (state.workshopBrowse.supportsIncompatibleFilter) {
-                        SmallAction(if (filterDraft.showIncompatible) "✓ 显示不兼容项" else "显示不兼容项") {
+                        FilterOptionAction(
+                            if (filterDraft.showIncompatible) "✓ 显示不兼容项" else "显示不兼容项",
+                            if (filterDraft.showIncompatible) FilterOptionState.Selected else FilterOptionState.Default,
+                        ) {
                             filterDraft = filterDraft.copy(showIncompatible = !filterDraft.showIncompatible)
                         }
                     }
 
                     Text("每页条目数", fontSize = 14.sp, fontWeight = FontWeight.Bold)
                     com.sultansgame.modmanager.model.WorkshopBrowseQuery.PAGE_SIZE_OPTIONS.forEach { pageSize ->
-                        SmallAction(if (filterDraft.pageSize == pageSize) "✓ $pageSize" else "$pageSize") {
+                        FilterOptionAction(
+                            if (filterDraft.pageSize == pageSize) "✓ $pageSize" else "$pageSize",
+                            if (filterDraft.pageSize == pageSize) FilterOptionState.Selected else FilterOptionState.Default,
+                        ) {
                             filterDraft = filterDraft.copy(pageSize = pageSize)
                         }
                     }
@@ -1187,7 +1255,10 @@ private fun WorkshopScreen(
                             when (group.selectionMode) {
                                 com.sultansgame.modmanager.model.WorkshopBrowseTagGroupSelectionMode.SingleSelect -> {
                                     val selected = tag.value in filterDraft.requiredTags
-                                    SmallAction(if (selected) "✓ ${tag.label}" else tag.label) {
+                                    FilterOptionAction(
+                                        if (selected) "✓ ${tag.label}" else tag.label,
+                                        if (selected) FilterOptionState.Selected else FilterOptionState.Default,
+                                    ) {
                                         val groupValues = group.tags.map { it.value }.toSet()
                                         filterDraft = filterDraft.copy(
                                             requiredTags = (filterDraft.requiredTags - groupValues) + tag.value,
@@ -1203,7 +1274,14 @@ private fun WorkshopScreen(
                                         exclusion -> "− 排除 ${tag.label}"
                                         else -> tag.label
                                     }
-                                    SmallAction(label) {
+                                    FilterOptionAction(
+                                        label,
+                                        when {
+                                            inclusion -> FilterOptionState.Selected
+                                            exclusion -> FilterOptionState.Excluded
+                                            else -> FilterOptionState.Default
+                                        },
+                                    ) {
                                         filterDraft = when {
                                             !inclusion && !exclusion -> filterDraft.copy(
                                                 requiredTags = filterDraft.requiredTags + tag.value,
@@ -1259,6 +1337,7 @@ private fun WorkshopTextField(
     hint: String,
     numeric: Boolean = false,
     password: Boolean = false,
+    onSubmit: (() -> Unit)? = null,
 ) {
     BasicTextField(
         value = value,
@@ -1268,6 +1347,7 @@ private fun WorkshopTextField(
         singleLine = true,
         visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+        keyboardActions = KeyboardActions(onDone = { onSubmit?.invoke() }),
         decorationBox = { inner ->
             if (value.isEmpty()) Text(hint, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
             inner()
@@ -1841,6 +1921,34 @@ private fun ConfirmDialog(title: String, body: String, confirmLabel: String, onC
             }
         }
     }
+}
+
+private fun workshopDownloadStatus(task: com.sultansgame.modmanager.model.DownloadTask): String {
+    val stage = when (task.stage) {
+        com.sultansgame.modmanager.model.DownloadStage.Queued -> "已加入下载队列"
+        com.sultansgame.modmanager.model.DownloadStage.ResolvingMetadata -> "正在解析创意工坊信息"
+        com.sultansgame.modmanager.model.DownloadStage.AwaitingPublicUrl -> "正在等待下载地址"
+        com.sultansgame.modmanager.model.DownloadStage.Downloading -> "正在下载"
+        com.sultansgame.modmanager.model.DownloadStage.Paused -> "已暂停"
+        com.sultansgame.modmanager.model.DownloadStage.Verifying -> "正在校验下载内容"
+        com.sultansgame.modmanager.model.DownloadStage.AwaitingImportConfirmation -> "下载完成，等待导入确认"
+        com.sultansgame.modmanager.model.DownloadStage.Importing -> "正在导入 Mod"
+        com.sultansgame.modmanager.model.DownloadStage.Imported -> "已导入 Mod"
+        com.sultansgame.modmanager.model.DownloadStage.NeedsLogin -> "需要重新登录 Steam"
+        com.sultansgame.modmanager.model.DownloadStage.Failed -> "下载失败"
+        com.sultansgame.modmanager.model.DownloadStage.Cancelled -> "已取消"
+    }
+    val progress = "${formatBytes(task.downloadedBytes)}${task.totalBytes?.let { " / ${formatBytes(it)}" }.orEmpty()}"
+    val failure = task.failure?.let {
+        when (it) {
+            com.sultansgame.modmanager.model.DownloadFailureCode.LoginRequired -> "：需要 Steam 登录"
+            com.sultansgame.modmanager.model.DownloadFailureCode.NotOwnedOrUnavailable -> "：账号无权访问或内容不可用"
+            com.sultansgame.modmanager.model.DownloadFailureCode.MetadataUnavailable -> "：无法读取条目信息"
+            com.sultansgame.modmanager.model.DownloadFailureCode.InvalidArtifact -> "：下载内容无效"
+            else -> "：${it.name}"
+        }
+    }.orEmpty()
+    return "$stage · $progress$failure"
 }
 
 private fun formatBytes(bytes: Long): String = when {

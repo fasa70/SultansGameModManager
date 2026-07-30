@@ -9,6 +9,7 @@ import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.RoomDatabase
+import androidx.room.Transaction
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.sultansgame.modmanager.model.DownloadFailureCode
@@ -235,8 +236,14 @@ interface WorkshopDownloadTaskDao {
     """)
     suspend fun invalidateArtifact(id: String, updatedAtEpochMillis: Long): Int
 
-    @Query("DELETE FROM workshop_download_tasks WHERE id = :id")
-    suspend fun remove(id: String)
+    @Query("DELETE FROM workshop_download_tasks WHERE id = :id AND stage != 'Importing'")
+    suspend fun removeUnlessImporting(id: String): Int
+
+    @Transaction
+    suspend fun takeAndRemoveUnlessImporting(id: String): WorkshopDownloadTaskEntity? {
+        val task = get(id) ?: return null
+        return task.takeIf { removeUnlessImporting(id) == 1 }
+    }
 }
 
 @Database(

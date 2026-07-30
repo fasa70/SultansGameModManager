@@ -137,6 +137,33 @@ class WorkshopDownloadTaskDaoTest {
         assertTrue(current.rawArtifactDigestSha256?.matches(Regex("[0-9a-f]{64}")) == true)
     }
 
+
+    @Test
+    fun deletionRemovesNonImportingTaskAndPreventsWorkerWriteback() = runBlocking {
+        dao.insert(task(stage = DownloadStage.Downloading).toEntity())
+
+        val removed = dao.takeAndRemoveUnlessImporting(TASK_ID)
+
+        assertEquals(TASK_ID, removed?.id)
+        assertNull(dao.get(TASK_ID))
+        assertEquals(0, dao.updateActiveProgress(
+            id = TASK_ID,
+            attemptGeneration = 1L,
+            stage = DownloadStage.Downloading.name,
+            downloadedBytes = 1024L,
+            totalBytes = 2048L,
+            updatedAtEpochMillis = 20L,
+        ))
+    }
+
+    @Test
+    fun importingTaskCannotBeDeleted() = runBlocking {
+        dao.insert(task(stage = DownloadStage.Importing).toEntity())
+
+        assertNull(dao.takeAndRemoveUnlessImporting(TASK_ID))
+        assertEquals(DownloadStage.Importing, requireNotNull(dao.get(TASK_ID)?.toModel()).stage)
+    }
+
     private fun task(stage: DownloadStage, generation: Long = 1L): DownloadTask = DownloadTask(
         id = TASK_ID,
         appId = SULTANS_GAME_APP_ID,

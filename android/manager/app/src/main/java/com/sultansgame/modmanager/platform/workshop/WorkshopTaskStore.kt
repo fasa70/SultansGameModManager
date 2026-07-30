@@ -80,6 +80,12 @@ class WorkshopTaskStore(context: Context) {
         return dao.get(id)?.toModel()
     }
 
+    /** Atomically removes a non-importing task and returns its staging cleanup snapshot. */
+    suspend fun takeForDeletion(id: String): DownloadTask? {
+        initialization.await()
+        return dao.takeAndRemoveUnlessImporting(id)?.toModel()
+    }
+
     suspend fun updateActiveState(
         id: String,
         attemptGeneration: Long,

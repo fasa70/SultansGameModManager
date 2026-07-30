@@ -7,6 +7,7 @@ import com.sultansgame.modmanager.model.DownloadFailureCode
 import com.sultansgame.modmanager.model.DownloadStage
 import com.sultansgame.modmanager.model.SULTANS_GAME_APP_ID
 import com.sultansgame.modmanager.platform.auth.SteamCmAuthProvider
+import com.sultansgame.modmanager.platform.auth.steamAccountBindingHash
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.takeWhile
@@ -15,7 +16,6 @@ import top.apricityx.workshop.workshop.DownloadEvent
 import top.apricityx.workshop.workshop.WorkshopDownloadEngine
 import top.apricityx.workshop.workshop.WorkshopDownloadRequest
 import java.io.File
-import java.security.MessageDigest
 
 class WorkshopDownloadWorker(
     context: Context,
@@ -71,7 +71,7 @@ class WorkshopDownloadWorker(
         if (
             task.accessMode == com.sultansgame.modmanager.model.WorkshopAccessMode.Account &&
             task.boundAccountHash != null &&
-            task.boundAccountHash != accountHash(account!!)
+            task.boundAccountHash != steamAccountBindingHash(account!!.steamId)
         ) {
             store.updateActiveState(
                 taskId,
@@ -169,11 +169,6 @@ class WorkshopDownloadWorker(
                 account?.let { session.connectWithRefreshToken(servers, it) } ?: session.connectAnonymous(servers)
             },
         )
-
-    private fun accountHash(account: top.apricityx.workshop.steam.protocol.SteamAccountSession): String =
-        MessageDigest.getInstance("SHA-256")
-            .digest(account.steamId.toString().toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
 
     private fun failureFor(failure: top.apricityx.workshop.workshop.DownloadFailure): DownloadFailureCode = when (failure) {
         top.apricityx.workshop.workshop.DownloadFailure.MetadataUnavailable -> DownloadFailureCode.MetadataUnavailable

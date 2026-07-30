@@ -34,6 +34,7 @@ import com.sultansgame.modmanager.model.WorkshopItem
 import com.sultansgame.modmanager.platform.auth.SteamAuthProvider
 import com.sultansgame.modmanager.platform.auth.SteamCmAuthProvider
 import com.sultansgame.modmanager.platform.auth.SteamCredentials
+import com.sultansgame.modmanager.platform.auth.steamAccountBindingHash
 import com.sultansgame.modmanager.platform.game.AndroidModStorageLoaderBridge
 import com.sultansgame.modmanager.platform.game.GameProbeResult
 import com.sultansgame.modmanager.platform.game.PackageManagerGameProbe
@@ -450,7 +451,6 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         }
         viewModelScope.launch {
             mutableState.value = mutableState.value.copy(workshop = WorkshopUiState.Loading)
-        val accessMode = WorkshopAccessMode.Anonymous
             val lookup = withContext(Dispatchers.IO) {
                 workshopProvider.getItemWithCommunityDetail(SULTANS_GAME_APP_ID, id)
             }
@@ -468,12 +468,23 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             mutableState.value = mutableState.value.copy(feedback = FeedbackMessage("只允许下载《苏丹的游戏》创意工坊条目。", isError = true))
             return
         }
-        val accessMode = WorkshopAccessMode.Anonymous
+        if (mutableState.value.downloadTasks.any { it.publishedFileId == item.publishedFileId && it.stage in NON_DUPLICABLE_DOWNLOAD_STAGES }) {
+            mutableState.value = mutableState.value.copy(feedback = FeedbackMessage("该条目已在下载队列中，请前往下载中心查看状态。"))
+            return
+        }
+        val account = steamAuthProvider.persistentSession()
+        if (account == null) {
+            mutableState.value = mutableState.value.copy(
+                feedback = FeedbackMessage("下载创意工坊内容需要已保存的 Steam 登录状态；请登录并勾选“记住登录状态”。", isError = true),
+            )
+            return
+        }
         val task = DownloadTask(
             id = UUID.randomUUID().toString(),
             appId = SULTANS_GAME_APP_ID,
             publishedFileId = item.publishedFileId,
-            accessMode = accessMode,
+            accessMode = WorkshopAccessMode.Account,
+            boundAccountHash = steamAccountBindingHash(account.steamId),
             stage = DownloadStage.Queued,
             title = item.title,
             totalBytes = item.declaredSizeBytes,
@@ -484,7 +495,15 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                 return@launch
             }
             downloadScheduler.enqueue(requireNotNull(taskStore.getPersisted(task.id)))
-            mutableState.value = mutableState.value.copy(feedback = FeedbackMessage("已将 ${item.title} 加入下载队列。"))
+            mutableState.value = mutableState.value.copy(
+                feedback = FeedbackMessage(
+                    if (task.accessMode == WorkshopAccessMode.Account) {
+                        "已使用已保存的 Steam 登录状态将 ${item.title} 加入下载队列。"
+                    } else {
+                        "已将 ${item.title} 加入下载队列。"
+                    },
+                ),
+            )
         }
     }
 
@@ -513,6 +532,36 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             if (taskStore.requestCancel(taskId)) {
                 downloadScheduler.cancel(taskId)
             }
+        }
+    }
+
+    fun removeWorkshopDownload(taskId: String) {
+        viewModelScope.launch {
+            val task = taskStore.getPersisted(taskId)
+            if (task == null) {
+                mutableState.value = mutableState.value.copy(feedback = FeedbackMessage("下载任务已不存在。", isError = true))
+                return@launch
+            }
+            if (task.stage == DownloadStage.Importing) {
+                mutableState.value = mutableState.value.copy(feedback = FeedbackMessage("正在导入 Mod，暂时不能删除下载任务。", isError = true))
+                return@launch
+            }
+            taskStore.requestCancel(taskId)
+            downloadScheduler.cancel(taskId)
+            val removed = taskStore.takeForDeletion(taskId)
+            if (removed == null) {
+                mutableState.value = mutableState.value.copy(feedback = FeedbackMessage("下载任务状态已变化，未删除。", isError = true))
+                return@launch
+            }
+            runCatching { withContext(Dispatchers.IO) { artifactImporter.discard(removed) } }
+                .onSuccess {
+                    mutableState.value = mutableState.value.copy(feedback = FeedbackMessage("已删除下载任务并清理私有暂存内容。"))
+                }
+                .onFailure { error ->
+                    mutableState.value = mutableState.value.copy(
+                        feedback = FeedbackMessage("下载任务已删除，但清理私有暂存内容失败：${error.message ?: "请稍后重试。"}", isError = true),
+                    )
+                }
         }
     }
 
@@ -926,6 +975,17 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     )
 
     private companion object {
+        val NON_DUPLICABLE_DOWNLOAD_STAGES = setOf(
+            DownloadStage.Queued,
+            DownloadStage.ResolvingMetadata,
+            DownloadStage.AwaitingPublicUrl,
+            DownloadStage.Downloading,
+            DownloadStage.Paused,
+            DownloadStage.Verifying,
+            DownloadStage.AwaitingImportConfirmation,
+            DownloadStage.Importing,
+            DownloadStage.NeedsLogin,
+        )
         val DOWNLOAD_STAGES_TO_RESCHEDULE = setOf(
             DownloadStage.Queued,
             DownloadStage.ResolvingMetadata,
