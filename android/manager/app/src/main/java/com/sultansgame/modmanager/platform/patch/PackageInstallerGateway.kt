@@ -45,7 +45,8 @@ class PackageInstallerGateway(private val context: Context) {
             .setAction(PatchInstallReceiver.ACTION_INSTALL_RESULT)
             .setPackage(context.packageName)
             .putExtra(EXTRA_TRANSACTION_ID, transactionId)
-        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
         return PendingIntent.getBroadcast(
             context,
             transactionId.hashCode(),

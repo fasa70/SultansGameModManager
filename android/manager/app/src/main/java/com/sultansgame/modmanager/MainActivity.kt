@@ -135,6 +135,8 @@ class MainActivity : ComponentActivity() {
                     onUpdatePatchConfirmation = viewModel::updatePatchConfirmation,
                     onConfirmInstallPermissionExplanation = viewModel::confirmInstallPermissionExplanation,
                     onDismissInstallPermissionExplanation = viewModel::dismissInstallPermissionExplanation,
+                    onConfirmGameUninstallExplanation = viewModel::confirmGameUninstallExplanation,
+                    onDismissGameUninstallExplanation = viewModel::dismissGameUninstallExplanation,
                 )
             }
         }
@@ -167,6 +169,8 @@ private fun ManagerApp(
     onUpdatePatchConfirmation: (PatchConfirmation) -> Unit,
     onConfirmInstallPermissionExplanation: () -> Unit,
     onDismissInstallPermissionExplanation: () -> Unit,
+    onConfirmGameUninstallExplanation: () -> Unit,
+    onDismissGameUninstallExplanation: () -> Unit,
 ) {
     var destinationIndex by remember { mutableIntStateOf(0) }
     var dialog by remember { mutableStateOf<DialogKind?>(null) }
@@ -239,6 +243,16 @@ private fun ManagerApp(
 
     if (state.noticeAccepted == null) PreparingNoticeDialog()
     else if (state.noticeAccepted == false) LegalNoticeDialog(onAcceptNotice)
+
+    if (state.showGameUninstallExplanation) {
+        ConfirmDialog(
+            title = "需要先卸载原版游戏",
+            body = "原版游戏与修补版本的签名不同，Android 不允许直接覆盖安装。Manager 已将重签的游戏 base APK、原有 split 和 loader split 安全暂存。继续会打开 Android 系统卸载界面，必须由你在系统界面确认卸载原版游戏；系统确认卸载成功后，Manager 才会继续安装修补版本。取消不会卸载游戏或删除已暂存的修补产物。",
+            confirmLabel = "打开系统卸载界面",
+            onConfirm = onConfirmGameUninstallExplanation,
+            onDismiss = onDismissGameUninstallExplanation,
+        )
+    }
 
     if (state.showInstallPermissionExplanation) {
         ConfirmDialog(

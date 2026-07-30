@@ -31,6 +31,7 @@ data class ManagerUiState(
     val patchStatus: String? = null,
     val patchTransactionId: String? = null,
     val showInstallPermissionExplanation: Boolean = false,
+    val showGameUninstallExplanation: Boolean = false,
     val patchInProgress: Boolean = false,
     val noticeAccepted: Boolean? = null,
     val feedback: FeedbackMessage? = null,

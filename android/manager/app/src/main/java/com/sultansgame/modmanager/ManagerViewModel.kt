@@ -505,7 +505,30 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun requestGameUninstall(transactionId: String) {
-        uiEventChannel.trySend(ManagerUiEvent.OpenGameUninstall(transactionId))
+        val current = mutableState.value
+        if (
+            current.patchStage != PatchStage.AwaitingGameUninstall ||
+            current.patchTransactionId != transactionId ||
+            current.gameProbeResult !is GameProbeResult.Found
+        ) return
+        mutableState.value = current.copy(showGameUninstallExplanation = true)
+    }
+
+    fun confirmGameUninstallExplanation() {
+        val current = mutableState.value
+        val transactionId = current.patchTransactionId
+        mutableState.value = current.copy(showGameUninstallExplanation = false)
+        if (
+            transactionId != null &&
+            current.patchStage == PatchStage.AwaitingGameUninstall &&
+            current.gameProbeResult is GameProbeResult.Found
+        ) {
+            uiEventChannel.trySend(ManagerUiEvent.OpenGameUninstall(transactionId))
+        }
+    }
+
+    fun dismissGameUninstallExplanation() {
+        mutableState.value = mutableState.value.copy(showGameUninstallExplanation = false)
     }
 
     private fun requestInstallPermission() {
