@@ -193,6 +193,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        viewModel.refreshGameModStorage()
+    }
+
     private fun displayNameFor(uri: Uri): String = contentResolver.query(
         uri,
         arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),

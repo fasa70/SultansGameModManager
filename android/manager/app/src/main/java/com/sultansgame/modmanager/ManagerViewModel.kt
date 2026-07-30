@@ -123,6 +123,8 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
 
     private var workshopBrowseJob: Job? = null
     private var workshopBrowseGeneration = 0L
+    private var gameModStorageRefreshJob: Job? = null
+    private var gameModStorageRefreshGeneration = 0L
 
     init {
         privateModCache.recoverInterruptedImports()
@@ -138,7 +140,6 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             patchCleanup = cleanupCandidate?.toCleanupUiModel(),
         )
         refreshGame()
-        refreshGameModStorage()
         viewModelScope.launch {
             loaderBridge.runtimeStatus().collect { loaderStatus ->
                 mutableState.value = mutableState.value.copy(loaderStatus = loaderStatus)
@@ -175,9 +176,13 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun refreshGameModStorage() {
-        viewModelScope.launch {
+        if (mutableState.value.deploymentInProgress || gameModStorageRefreshJob?.isActive == true) return
+        val generation = ++gameModStorageRefreshGeneration
+        gameModStorageRefreshJob = viewModelScope.launch {
             val storage = withContext(Dispatchers.IO) { loaderBridge.storageStatus() }
-            mutableState.value = mutableState.value.copy(gameModStorage = storage)
+            if (generation == gameModStorageRefreshGeneration && !mutableState.value.deploymentInProgress) {
+                mutableState.value = mutableState.value.copy(gameModStorage = storage)
+            }
         }
     }
 
