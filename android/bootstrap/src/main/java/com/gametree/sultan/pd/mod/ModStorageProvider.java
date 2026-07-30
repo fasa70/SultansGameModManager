@@ -45,6 +45,10 @@ public final class ModStorageProvider extends ContentProvider {
     private static final String RESULT_INCOMPATIBLE = "incompatible";
     private static final String RESULT_INVALID = "invalid";
     private static final String RESULT_FAILED = "failed";
+    private static final String RESULT_GAME_RUNNING = "gameRunning";
+    private static final String RESULT_EXTERNAL_CHANGES_DETECTED = "externalChangesDetected";
+    private static final String RESULT_VALIDATION_FAILED = "validationFailed";
+    private static final String RESULT_COMMIT_FAILED = "commitFailed";
     private static final int MAX_ENTRY_COUNT = 10_000;
     private static final long MAX_FILE_SIZE = 256L * 1024L * 1024L;
     private static final long MAX_TOTAL_SIZE = 1024L * 1024L * 1024L;
@@ -104,7 +108,7 @@ public final class ModStorageProvider extends ContentProvider {
         Context context = getContext();
         if (context == null) return result(RESULT_FAILED, "游戏存储不可用");
         if (isGameProcessRunning(context)) {
-            return result(RESULT_FAILED, "请完全退出游戏后再同步 Mod");
+            return result(RESULT_GAME_RUNNING, "请完全退出游戏后再同步 Mod");
         }
         File externalFiles = context.getExternalFilesDir(null);
         if (externalFiles == null) return result(RESULT_FAILED, "游戏外部存储不可用");
@@ -112,12 +116,21 @@ public final class ModStorageProvider extends ContentProvider {
         File active = new File(externalFiles, "Mod");
         File backup = new File(externalFiles, ".Mod-backup-" + revision);
         if (hasExternalMods() && !extras.getBoolean(KEY_ALLOW_EXTERNAL_REPLACEMENT, false)) {
-            return result(RESULT_INVALID, "游戏目录存在外部 Mod，请在 Manager 确认后再覆盖");
+            return result(RESULT_EXTERNAL_CHANGES_DETECTED, "游戏目录存在外部 Mod，请在 Manager 确认后再覆盖");
         }
         if (staging.exists()) deleteRecursively(staging);
         try (DataInputStream stream = new DataInputStream(new BufferedInputStream(
                 new ParcelFileDescriptor.AutoCloseInputStream(input)))) {
             copySnapshot(stream, staging);
+        } catch (IOException error) {
+            deleteRecursively(staging);
+            return result(RESULT_VALIDATION_FAILED, error.getMessage() == null ? "Mod 数据校验失败" : error.getMessage());
+        } catch (Exception error) {
+            deleteRecursively(staging);
+            return result(RESULT_FAILED, error.getMessage() == null ? "同步失败" : error.getMessage());
+        }
+
+        try {
             if (backup.exists()) deleteRecursively(backup);
             if (active.exists() && !active.renameTo(backup)) throw new IOException("无法备份当前 Mod 目录");
             if (!staging.renameTo(active)) {
@@ -133,7 +146,7 @@ public final class ModStorageProvider extends ContentProvider {
         } catch (Exception error) {
             deleteRecursively(staging);
             if (!active.exists() && backup.exists()) backup.renameTo(active);
-            return result(RESULT_FAILED, error.getMessage() == null ? "同步失败" : error.getMessage());
+            return result(RESULT_COMMIT_FAILED, error.getMessage() == null ? "Mod 快照提交失败" : error.getMessage());
         }
     }
 
