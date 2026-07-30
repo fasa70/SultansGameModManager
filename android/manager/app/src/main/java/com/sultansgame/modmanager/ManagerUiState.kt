@@ -27,6 +27,9 @@ data class ManagerUiState(
     val deviceSigningKeyState: DeviceSigningKeyState? = null,
     val patch: PatchUiState = PatchUiState.ChooseSource,
     val preparedPatchRecovery: PreparedPatchRecovery? = null,
+    val patchCleanup: PatchCleanupUiModel? = null,
+    val patchCleanupInProgress: Boolean = false,
+    val patchCleanupConfirmation: PatchCleanupUiModel? = null,
     val apksExport: ApksExportUiState = ApksExportUiState.Idle,
     val noticeAccepted: Boolean? = null,
     val feedback: FeedbackMessage? = null,
@@ -35,6 +38,11 @@ data class ManagerUiState(
 data class PreparedPatchRecovery(
     val transactionId: String,
     val summary: String,
+)
+
+data class PatchCleanupUiModel(
+    val transactionId: String,
+    val sizeBytes: Long,
 )
 
 data class PatchInputUiModel(

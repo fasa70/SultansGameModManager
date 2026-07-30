@@ -80,6 +80,7 @@ class DeviceSigningKeyStoreTest {
                 targetApplicationId = "com.gametree.sultan.pd",
                 loaderTemplateSha256 = "f7cf7b49ff340a091b65bc6238cc109e9ea6047874be03f5a4aa436fc3d13517",
                 target = extracted.base.inspection,
+                templateOutputPath = File(context.filesDir, "patch-staging/${java.util.UUID.randomUUID()}/template/modloader.apk").absolutePath,
             ),
         )
         assertTrue((loader as? LoaderSplitResult.Unavailable)?.reason, loader is LoaderSplitResult.Built)

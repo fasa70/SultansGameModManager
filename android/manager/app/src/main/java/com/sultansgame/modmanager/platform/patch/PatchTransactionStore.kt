@@ -21,6 +21,19 @@ internal data class PatchTransaction(
     val failure: String? = null,
 )
 
+internal data class PatchArtifactCleanupCandidate(
+    val transactionId: String,
+    val sizeBytes: Long,
+    val stage: PatchStage,
+)
+
+internal sealed interface PatchArtifactCleanupResult {
+    data object Deleted : PatchArtifactCleanupResult
+    data object NotFound : PatchArtifactCleanupResult
+    data class Rejected(val reason: String) : PatchArtifactCleanupResult
+    data class Failed(val reason: String) : PatchArtifactCleanupResult
+}
+
 internal class PatchTransactionStore {
     private val root: File
 
@@ -44,6 +57,40 @@ internal class PatchTransactionStore {
         ?.first
 
     fun latestResumable(): PatchTransaction? = latestPreparedForRecovery()
+
+    fun latestCleanupCandidate(): PatchArtifactCleanupCandidate? = root.listFiles()
+        .orEmpty()
+        .asSequence()
+        .filter(File::isDirectory)
+        .mapNotNull { directory -> read(directory.name)?.let { transaction -> transaction to directory } }
+        .filter { (transaction, directory) -> transaction.isCleanupCandidate(directory) }
+        .maxByOrNull { (_, directory) -> File(directory, "transaction.properties").lastModified() }
+        ?.let { (transaction, directory) ->
+            PatchArtifactCleanupCandidate(
+                transactionId = transaction.id,
+                sizeBytes = directorySize(directory),
+                stage = transaction.stage,
+            )
+        }
+
+    fun deletePreparedArtifacts(transactionId: String): PatchArtifactCleanupResult {
+        if (!isSafeTransactionId(transactionId)) {
+            return PatchArtifactCleanupResult.Rejected("修补事务标识无效。")
+        }
+        val directory = root(transactionId)
+        if (!directory.exists()) return PatchArtifactCleanupResult.NotFound
+        val transaction = read(transactionId)
+            ?: return PatchArtifactCleanupResult.Rejected("修补事务记录无效，无法安全删除。")
+        if (!transaction.isCleanupCandidate(directory)) {
+            return PatchArtifactCleanupResult.Rejected("当前修补事务仍在安装或校验中，暂不能删除。")
+        }
+        return runCatching {
+            if (directory.deleteRecursively()) PatchArtifactCleanupResult.Deleted
+            else PatchArtifactCleanupResult.Failed("部分私有修补文件未能删除。")
+        }.getOrElse { error ->
+            PatchArtifactCleanupResult.Failed(error.message ?: "无法删除私有修补文件。")
+        }
+    }
 
     fun latestAwaitingGameUninstall(): PatchTransaction? = latestResumable()
         ?.takeIf { it.stage == PatchStage.AwaitingGameUninstall }
@@ -94,6 +141,22 @@ internal class PatchTransactionStore {
         }.getOrNull()
     }
 
+    private fun PatchTransaction.isCleanupCandidate(directory: File): Boolean =
+        stage in CLEANUP_STAGES &&
+            signedArtifactNames.isNotEmpty() &&
+            signedArtifactNames.distinct().size == signedArtifactNames.size &&
+            signedArtifactNames.all { it == File(it).name } &&
+            signedArtifactNames.all { name -> File(directory, "signed/$name").isFile }
+
+    private fun directorySize(directory: File): Long = directory.walkTopDown()
+        .filter(File::isFile)
+        .fold(0L) { total, file ->
+            if (Long.MAX_VALUE - total < file.length()) Long.MAX_VALUE else total + file.length()
+        }
+
+    private fun isSafeTransactionId(id: String): Boolean =
+        id.isNotBlank() && id == File(id).name && !id.contains("..")
+
     private fun PatchTransaction.isPreparedForRecovery(): Boolean =
         stage in RESUMABLE_STAGES &&
             signedArtifactNames.isNotEmpty() &&
@@ -107,6 +170,12 @@ internal class PatchTransactionStore {
         private val RESUMABLE_STAGES = setOf(
             PatchStage.AwaitingGameUninstall,
             PatchStage.AwaitingInstallPermission,
+        )
+        private val CLEANUP_STAGES = setOf(
+            PatchStage.AwaitingGameUninstall,
+            PatchStage.AwaitingInstallPermission,
+            PatchStage.Completed,
+            PatchStage.Failed,
         )
     }
 }

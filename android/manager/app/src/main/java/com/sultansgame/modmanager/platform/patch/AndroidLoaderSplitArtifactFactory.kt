@@ -22,10 +22,10 @@ internal class AndroidLoaderSplitArtifactFactory(
         require(request.targetApplicationId == GAME_PACKAGE) { "loader split 目标包名不匹配" }
         require(request.target.versionCode != null) { "目标 APK 缺少版本号" }
         require(request.loaderTemplateSha256 == TEMPLATE_SHA256) { "loader split 模板摘要不匹配" }
-        val destination = File(
-            context.filesDir,
-            "patch-staging/${java.util.UUID.randomUUID()}/template/modloader.apk",
-        )
+        val destination = File(request.templateOutputPath).canonicalFile
+        val stagingRoot = File(context.filesDir, "patch-staging").canonicalFile
+        require(destination.parentFile?.name == "template") { "loader split 模板暂存路径无效" }
+        require(destination.parentFile?.canonicalFile?.parentFile?.parentFile == stagingRoot) { "loader split 模板暂存路径无效" }
         destination.parentFile?.mkdirs()
         context.assets.open(TEMPLATE_ASSET).use { input ->
             FileOutputStream(destination).use { output ->

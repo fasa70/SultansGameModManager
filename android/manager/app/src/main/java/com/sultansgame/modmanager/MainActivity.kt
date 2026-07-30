@@ -84,7 +84,15 @@ private enum class Destination(val titleRes: Int, val mark: String, val caption:
     Settings(R.string.nav_settings, "04", "安全与关于"),
 }
 
-private enum class DialogKind { Notice, Privacy, License, ClearCache, SyncMods, PatchWarning }
+private sealed interface DialogKind {
+    data object Notice : DialogKind
+    data object Privacy : DialogKind
+    data object License : DialogKind
+    data object ClearCache : DialogKind
+    data object SyncMods : DialogKind
+    data object PatchWarning : DialogKind
+    data class PatchCleanup(val transactionId: String) : DialogKind
+}
 
 class MainActivity : ComponentActivity() {
     private val viewModel by lazy { ViewModelProvider(this)[ManagerViewModel::class.java] }
@@ -167,6 +175,9 @@ class MainActivity : ComponentActivity() {
                     onSyncMods = viewModel::syncMods,
                     onClearFeedback = viewModel::clearFeedback,
                     onUpdatePatchConfirmation = viewModel::updatePatchConfirmation,
+                    onRequestPatchCleanup = viewModel::requestPatchCleanupConfirmation,
+                    onConfirmPatchCleanup = viewModel::confirmPatchCleanup,
+                    onDismissPatchCleanup = viewModel::dismissPatchCleanupConfirmation,
                 )
             }
         }
@@ -219,6 +230,9 @@ private fun ManagerApp(
     onSyncMods: (Boolean) -> Unit,
     onClearFeedback: () -> Unit,
     onUpdatePatchConfirmation: (PatchConfirmation) -> Unit,
+    onRequestPatchCleanup: (String) -> Unit,
+    onConfirmPatchCleanup: (String) -> Unit,
+    onDismissPatchCleanup: () -> Unit,
 ) {
     var destinationIndex by remember {
         mutableIntStateOf(
@@ -226,6 +240,9 @@ private fun ManagerApp(
         )
     }
     var dialog by remember { mutableStateOf<DialogKind?>(null) }
+    LaunchedEffect(state.patchCleanupConfirmation?.transactionId) {
+        state.patchCleanupConfirmation?.let { cleanup -> dialog = DialogKind.PatchCleanup(cleanup.transactionId) }
+    }
     val destination = Destination.entries[destinationIndex]
 
     BoxWithConstraints(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)) {
@@ -268,6 +285,7 @@ private fun ManagerApp(
                     onRestartPatch = onRestartPatch,
                     onResumePreparedPatch = onResumePreparedPatch,
                     onUpdatePatchConfirmation = onUpdatePatchConfirmation,
+                    onRequestPatchCleanup = { onRequestPatchCleanup(it); dialog = DialogKind.PatchCleanup(it) },
                 )
             }
         } else {
@@ -308,6 +326,7 @@ private fun ManagerApp(
                     onRestartPatch = onRestartPatch,
                     onResumePreparedPatch = onResumePreparedPatch,
                     onUpdatePatchConfirmation = onUpdatePatchConfirmation,
+                    onRequestPatchCleanup = { onRequestPatchCleanup(it); dialog = DialogKind.PatchCleanup(it) },
                 )
                 CompactNavigation(destinationIndex) { destinationIndex = it }
             }
@@ -319,7 +338,7 @@ private fun ManagerApp(
     else if (state.noticeAccepted == false) LegalNoticeDialog(onAcceptNotice)
 
 
-    when (dialog) {
+    when (val activeDialog = dialog) {
         DialogKind.Notice -> LegalNoticeDialog(onAcceptNotice) { dialog = null }
         DialogKind.Privacy -> TextDialog(stringResource(R.string.privacy_title), stringResource(R.string.privacy_body)) { dialog = null }
         DialogKind.License -> TextDialog(stringResource(R.string.license_title), stringResource(R.string.license_body)) { dialog = null }
@@ -348,6 +367,20 @@ private fun ManagerApp(
                 onConfirm = { onSyncMods(externalMods.isNotEmpty()); dialog = null },
                 onDismiss = { dialog = null },
             )
+        }
+        is DialogKind.PatchCleanup -> {
+            val candidate = state.patchCleanup?.takeIf { it.transactionId == activeDialog.transactionId }
+            if (candidate == null) {
+                LaunchedEffect(activeDialog.transactionId) { dialog = null; onDismissPatchCleanup() }
+            } else {
+                ConfirmDialog(
+                    title = "删除已准备的修补 APK？",
+                    body = "将删除 Manager 私有目录内本次修补的输入、重签 APK、loader 模板和事务记录，释放约 ${formatBytes(candidate.sizeBytes)}。删除后无法继续本次安装或再次导出，需要重新选择来源。不会删除已导出的 APKS 文件、已安装游戏或存档。",
+                    confirmLabel = "删除私有修补文件",
+                    onConfirm = { onConfirmPatchCleanup(candidate.transactionId); dialog = null },
+                    onDismiss = { onDismissPatchCleanup(); dialog = null },
+                )
+            }
         }
         null -> Unit
     }
@@ -482,6 +515,7 @@ private fun ContentArea(
     onRestartPatch: () -> Unit,
     onResumePreparedPatch: (String) -> Unit,
     onUpdatePatchConfirmation: (PatchConfirmation) -> Unit,
+    onRequestPatchCleanup: (String) -> Unit,
 ) {
     Column(modifier) {
         if (wideLayout) ContentHeader(destination)
@@ -527,6 +561,7 @@ private fun ContentArea(
                 onRestart = onRestartPatch,
                 onResumePreparedPatch = onResumePreparedPatch,
                 onUpdateConfirmation = onUpdatePatchConfirmation,
+                onRequestPatchCleanup = onRequestPatchCleanup,
             )
             Destination.Settings -> SettingsScreen(state, wideLayout, onShowDialog)
         }
@@ -1203,6 +1238,7 @@ private fun PatchScreen(
     onRestart: () -> Unit,
     onResumePreparedPatch: (String) -> Unit,
     onUpdateConfirmation: (PatchConfirmation) -> Unit,
+    onRequestPatchCleanup: (String) -> Unit,
 ) {
     val keyStatus = when (state.deviceSigningKeyState) {
         com.sultansgame.modmanager.model.DeviceSigningKeyState.NotCreated -> "首次准备时创建"
@@ -1233,6 +1269,21 @@ private fun PatchScreen(
                         )
                     }
                     item { PrimaryButton("继续安装已准备工件") { onResumePreparedPatch(recovery.transactionId) } }
+                }
+                state.patchCleanup?.let { cleanup ->
+                    item { SectionLabel("私有修补文件", "约 ${formatBytes(cleanup.sizeBytes)}") }
+                    item {
+                        NoticeStrip(
+                            "可释放修补空间",
+                            "删除会放弃本次修补，移除私有输入、重签 APK 与 loader 模板；不会影响已导出的 APKS、已安装游戏或存档。",
+                        )
+                    }
+                    item {
+                        PrimaryButton(
+                            "删除私有修补文件",
+                            !state.patchCleanupInProgress && !exportInProgress,
+                        ) { onRequestPatchCleanup(cleanup.transactionId) }
+                    }
                 }
                 item { SectionLabel("步骤 1", "选择来源") }
                 item {

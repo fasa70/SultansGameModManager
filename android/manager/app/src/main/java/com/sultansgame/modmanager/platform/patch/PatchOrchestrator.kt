@@ -141,6 +141,7 @@ internal class PatchOrchestrator(
                 targetApplicationId = requireNotNull(extracted.base.inspection.packageName),
                 loaderTemplateSha256 = templateSha256,
                 target = extracted.base.inspection,
+                templateOutputPath = File(extracted.root.parentFile, "template/modloader.apk").absolutePath,
             ),
         )
         val loader = when (splitResult) {
