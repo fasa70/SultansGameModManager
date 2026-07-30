@@ -53,6 +53,16 @@ class SteamPublicMetadataTransport : PublicWorkshopMetadataTransport {
             previewUrl = detail.optString("preview_url").takeIf(String::isNotBlank),
             updatedAtEpochSeconds = detail.optLong("time_updated", -1).takeIf { it >= 0 },
             declaredSizeBytes = detail.optLong("file_size", -1).takeIf { it >= 0 },
+            description = detail.optString("description").takeIf(String::isNotBlank),
+            timeCreatedEpochSeconds = detail.optLong("time_created", -1).takeIf { it >= 0 },
+            creatorSteamId = detail.optString("creator").toULongOrNull(),
+            tags = detail.optJSONArray("tags")?.let { tags ->
+                buildList {
+                    for (index in 0 until tags.length()) {
+                        tags.optJSONObject(index)?.optString("tag")?.takeIf(String::isNotBlank)?.let(::add)
+                    }
+                }
+            }.orEmpty(),
         )
     }.getOrNull()
 

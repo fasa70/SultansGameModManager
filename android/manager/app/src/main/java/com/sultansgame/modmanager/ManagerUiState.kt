@@ -22,7 +22,6 @@ data class ManagerUiState(
     val cachedMods: List<CachedMod> = emptyList(),
     val workshop: WorkshopUiState = WorkshopUiState.Idle,
     val workshopBrowse: WorkshopBrowseUiState = WorkshopBrowseUiState(),
-    val workshopSearch: WorkshopSearchUiState = WorkshopSearchUiState.Idle,
     val downloadTasks: List<DownloadTask> = emptyList(),
     val steamAuthState: SteamAuthState = SteamAuthState.SignedOut,
     val deviceSigningKeyState: DeviceSigningKeyState? = null,
@@ -92,15 +91,4 @@ sealed interface WorkshopUiState {
     data object Loading : WorkshopUiState
     data class Item(val item: WorkshopItem) : WorkshopUiState
     data class Error(val reason: String) : WorkshopUiState
-}
-
-sealed interface WorkshopSearchUiState {
-    data object Idle : WorkshopSearchUiState
-    data object Loading : WorkshopSearchUiState
-    data class Results(
-        val items: List<WorkshopItem>,
-        val page: Int,
-        val hasNextPage: Boolean,
-    ) : WorkshopSearchUiState
-    data class Error(val reason: String) : WorkshopSearchUiState
 }

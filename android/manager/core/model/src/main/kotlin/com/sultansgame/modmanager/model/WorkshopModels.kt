@@ -138,13 +138,6 @@ data class WorkshopItem(
     val canDownload: Boolean get() = canDirectDownload || canSteamContentDownload
 }
 
-@Deprecated("Use WorkshopBrowsePage")
-data class WorkshopSearchPage(
-    val items: List<WorkshopItem>,
-    val page: Int,
-    val hasNextPage: Boolean,
-)
-
 enum class DownloadStage {
     Queued,
     ResolvingMetadata,
@@ -181,6 +174,7 @@ data class DownloadTask(
     val appId: UInt,
     val publishedFileId: PublishedFileId,
     val accessMode: WorkshopAccessMode,
+    val boundAccountHash: String? = null,
     val stage: DownloadStage,
     val title: String = "",
     val downloadedBytes: Long = 0,
@@ -188,6 +182,7 @@ data class DownloadTask(
     val failure: DownloadFailureCode? = null,
     val rawArtifactDigestSha256: String? = null,
     val completedFileCount: Int = 0,
+    val pauseRequested: Boolean = false,
     val createdAtEpochMillis: Long = System.currentTimeMillis(),
     val updatedAtEpochMillis: Long = System.currentTimeMillis(),
 )

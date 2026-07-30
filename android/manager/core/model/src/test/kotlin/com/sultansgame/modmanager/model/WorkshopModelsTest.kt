@@ -29,4 +29,28 @@ class WorkshopModelsTest {
         assertEquals(DownloadStage.AwaitingImportConfirmation, task.stage)
         assertEquals(0, task.completedFileCount)
     }
+
+    @Test
+    fun `browse query normalizes filters dates and paging`() {
+        val normalized = WorkshopBrowseQuery(
+            sectionKey = "  ",
+            sortKey = " ",
+            searchText = "  Sultan  ",
+            requiredTags = setOf("  UI ", "", "UI"),
+            excludedTags = setOf("  NSFW "),
+            createdDateRange = WorkshopDateRangeFilter(20L, 10L),
+            page = 0,
+            pageSize = 10,
+        ).normalized()
+
+        assertEquals(WorkshopBrowseQuery.SECTION_ITEMS, normalized.sectionKey)
+        assertEquals(WorkshopBrowseQuery.SORT_TREND, normalized.sortKey)
+        assertEquals("Sultan", normalized.searchText)
+        assertEquals(setOf("UI"), normalized.requiredTags)
+        assertEquals(setOf("NSFW"), normalized.excludedTags)
+        assertEquals(10L, normalized.createdDateRange.startEpochSeconds)
+        assertEquals(20L, normalized.createdDateRange.endEpochSeconds)
+        assertEquals(1, normalized.page)
+        assertEquals(WorkshopBrowseQuery.DEFAULT_PAGE_SIZE, normalized.pageSize)
+    }
 }

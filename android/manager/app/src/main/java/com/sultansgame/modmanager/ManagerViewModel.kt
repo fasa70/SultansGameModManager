@@ -25,6 +25,7 @@ import com.sultansgame.modmanager.platform.patch.PatchTransactionStore
 import com.sultansgame.modmanager.model.DownloadTask
 import com.sultansgame.modmanager.model.PublishedFileId
 import com.sultansgame.modmanager.model.SULTANS_GAME_APP_ID
+import com.sultansgame.modmanager.model.WorkshopAccessMode
 import com.sultansgame.modmanager.model.WorkshopItem
 import com.sultansgame.modmanager.platform.auth.SteamAuthProvider
 import com.sultansgame.modmanager.platform.auth.SteamCmAuthProvider
@@ -35,15 +36,15 @@ import com.sultansgame.modmanager.platform.game.PackageManagerGameProbe
 import com.sultansgame.modmanager.platform.saf.ZipModImporter
 import com.sultansgame.modmanager.platform.storage.AndroidPrivateModCache
 import com.sultansgame.modmanager.platform.storage.DeploymentPlanStore
-import com.sultansgame.modmanager.platform.workshop.SteamCommunityWorkshopBrowser
 import com.sultansgame.modmanager.platform.workshop.SteamPublicMetadataTransport
-import com.sultansgame.modmanager.platform.workshop.SultanWorkshopCatalog
+import com.sultansgame.modmanager.platform.workshop.SteamCommunityWorkshopBrowser
 import com.sultansgame.modmanager.platform.workshop.WorkshopArtifactImporter
 import com.sultansgame.modmanager.platform.workshop.WorkshopDownloadScheduler
 import com.sultansgame.modmanager.platform.workshop.WorkshopTaskStore
 import com.sultansgame.modmanager.workshop.SteamPublicWorkshopProvider
 import com.sultansgame.modmanager.workshop.WorkshopLookupResult
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -70,7 +71,6 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     private val downloadScheduler = WorkshopDownloadScheduler(application)
     private val steamAuthProvider = SteamCmAuthProvider(application)
     private val steamAuth: SteamAuthProvider = steamAuthProvider
-    private val catalog = SultanWorkshopCatalog()
     private val workshopProvider = SteamPublicWorkshopProvider(SteamPublicMetadataTransport())
     private val communityWorkshopBrowser = SteamCommunityWorkshopBrowser(
         client = top.apricityx.workshop.steam.protocol.newDefaultOkHttpClient(),
@@ -110,6 +110,9 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         val uiModel: PatchInputUiModel,
     )
 
+    private var workshopBrowseJob: Job? = null
+    private var workshopBrowseGeneration = 0L
+
     init {
         privateModCache.recoverInterruptedImports()
         val cachedMods = privateModCache.listCached()
@@ -137,6 +140,14 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             steamAuth.observeState().collect { authState ->
                 mutableState.value = mutableState.value.copy(steamAuthState = authState)
+            }
+        }
+        viewModelScope.launch {
+            taskStore.ready.collect { ready ->
+                if (!ready) return@collect
+                taskStore.tasks.value
+                    .filter { it.stage in DOWNLOAD_STAGES_TO_RESCHEDULE && !it.pauseRequested }
+                    .forEach(downloadScheduler::enqueue)
             }
         }
         viewModelScope.launch {
@@ -291,7 +302,9 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
 
     fun browseWorkshop(query: com.sultansgame.modmanager.model.WorkshopBrowseQuery = com.sultansgame.modmanager.model.WorkshopBrowseQuery()) {
         val normalizedQuery = query.normalized()
-        viewModelScope.launch {
+        workshopBrowseJob?.cancel()
+        val generation = ++workshopBrowseGeneration
+        workshopBrowseJob = viewModelScope.launch {
             mutableState.value = mutableState.value.copy(
                 workshopBrowse = mutableState.value.workshopBrowse.copy(
                     query = normalizedQuery,
@@ -301,10 +314,19 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             )
             runCatching { withContext(Dispatchers.IO) { communityWorkshopBrowser.browse(normalizedQuery) } }
                 .onSuccess { page ->
+                    if (generation != workshopBrowseGeneration) return@onSuccess
+                    val previous = mutableState.value.workshopBrowse
+                    val append = normalizedQuery.page > 1 &&
+                        previous.query.copy(page = 1) == normalizedQuery.copy(page = 1)
+                    val items = if (append) {
+                        (previous.items + page.items).distinctBy(WorkshopItem::publishedFileId)
+                    } else {
+                        page.items
+                    }
                     mutableState.value = mutableState.value.copy(
                         workshopBrowse = WorkshopBrowseUiState(
                             query = normalizedQuery,
-                            items = page.items,
+                            items = items,
                             totalCount = page.totalCount,
                             hasMore = page.hasMore,
                             sectionOptions = page.sectionOptions,
@@ -316,6 +338,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                     )
                 }
                 .onFailure { error ->
+                    if (generation != workshopBrowseGeneration || error is kotlinx.coroutines.CancellationException) return@onFailure
                     val current = mutableState.value.workshopBrowse
                     mutableState.value = mutableState.value.copy(
                         workshopBrowse = current.copy(
@@ -327,31 +350,11 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                 }
         }
     }
-    fun searchWorkshop(query: String, page: Int = 1) {
-        val account = steamAuthProvider.activeSession()
-        if (account == null) {
-            mutableState.value = mutableState.value.copy(
-                workshopSearch = WorkshopSearchUiState.Error("搜索需要登录 Steam 账号。"),
-            )
+    fun lookupWorkshop(rawId: String) {
+        if (rawId.isBlank()) {
+            mutableState.value = mutableState.value.copy(workshop = WorkshopUiState.Idle)
             return
         }
-        viewModelScope.launch {
-            mutableState.value = mutableState.value.copy(workshopSearch = WorkshopSearchUiState.Loading)
-            runCatching { withContext(Dispatchers.IO) { catalog.search(account, query, page) } }
-                .onSuccess { result ->
-                    mutableState.value = mutableState.value.copy(
-                        workshopSearch = WorkshopSearchUiState.Results(result.items, result.page, result.hasNextPage),
-                    )
-                }
-                .onFailure { error ->
-                    mutableState.value = mutableState.value.copy(
-                        workshopSearch = WorkshopSearchUiState.Error(error.message ?: "无法搜索 Steam 创意工坊。"),
-                    )
-                }
-        }
-    }
-
-    fun lookupWorkshop(rawId: String) {
         val id = PublishedFileId.parse(rawId)
         if (id == null) {
             mutableState.value = mutableState.value.copy(feedback = FeedbackMessage("PublishedFileId 必须是正整数。", isError = true))
@@ -359,7 +362,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         }
         viewModelScope.launch {
             mutableState.value = mutableState.value.copy(workshop = WorkshopUiState.Loading)
-            val accessMode = catalog.accessMode(steamAuthProvider.activeSession())
+        val accessMode = WorkshopAccessMode.Anonymous
             val lookup = withContext(Dispatchers.IO) {
                 workshopProvider.getItem(SULTANS_GAME_APP_ID, id, accessMode)
             }
@@ -377,7 +380,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             mutableState.value = mutableState.value.copy(feedback = FeedbackMessage("只允许下载《苏丹的游戏》创意工坊条目。", isError = true))
             return
         }
-        val accessMode = catalog.accessMode(steamAuthProvider.activeSession())
+        val accessMode = WorkshopAccessMode.Anonymous
         val task = DownloadTask(
             id = UUID.randomUUID().toString(),
             appId = SULTANS_GAME_APP_ID,
@@ -387,36 +390,75 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             title = item.title,
             totalBytes = item.declaredSizeBytes,
         )
-        taskStore.upsert(task)
-        downloadScheduler.enqueue(task)
+        viewModelScope.launch {
+            taskStore.upsert(task)
+            downloadScheduler.enqueue(task)
+        }
         mutableState.value = mutableState.value.copy(feedback = FeedbackMessage("已将 ${item.title} 加入下载队列。"))
     }
 
     fun retryWorkshopDownload(taskId: String) {
         val task = taskStore.get(taskId) ?: return
-        taskStore.update(taskId) { it.copy(stage = DownloadStage.Queued, failure = null) }
-        downloadScheduler.enqueue(task)
+        val queued = task.copy(
+            stage = DownloadStage.Queued,
+            failure = null,
+            pauseRequested = false,
+            updatedAtEpochMillis = System.currentTimeMillis(),
+        )
+        viewModelScope.launch {
+            taskStore.upsert(queued)
+            downloadScheduler.enqueue(queued)
+        }
+    }
+
+    fun pauseWorkshopDownload(taskId: String) {
+        if (taskStore.get(taskId) == null) return
+        downloadScheduler.cancel(taskId)
+        viewModelScope.launch {
+            taskStore.forceState(taskId, DownloadStage.Paused, pauseRequested = true)
+        }
+    }
+
+    fun resumeWorkshopDownload(taskId: String) {
+        val task = taskStore.get(taskId) ?: return
+        val resumed = task.copy(
+            stage = DownloadStage.Queued,
+            failure = null,
+            pauseRequested = false,
+            updatedAtEpochMillis = System.currentTimeMillis(),
+        )
+        viewModelScope.launch {
+            taskStore.upsert(resumed)
+            downloadScheduler.enqueue(resumed)
+        }
     }
 
     fun cancelWorkshopDownload(taskId: String) {
+        if (taskStore.get(taskId) == null) return
         downloadScheduler.cancel(taskId)
-        taskStore.update(taskId) { it.copy(stage = DownloadStage.Cancelled, failure = DownloadFailureCode.Cancelled) }
+        viewModelScope.launch {
+            taskStore.forceState(taskId, DownloadStage.Cancelled, failure = DownloadFailureCode.Cancelled)
+        }
     }
 
     fun confirmWorkshopImport(taskId: String) {
         val task = taskStore.get(taskId)?.takeIf { it.stage == DownloadStage.AwaitingImportConfirmation } ?: return
         viewModelScope.launch {
-            taskStore.update(taskId) { it.copy(stage = DownloadStage.Importing) }
+            taskStore.forceState(taskId, DownloadStage.Importing)
             runCatching { withContext(Dispatchers.IO) { artifactImporter.importConfirmed(task) } }
                 .onSuccess { cached ->
-                    taskStore.update(taskId) { it.copy(stage = DownloadStage.Imported, failure = null) }
+                    taskStore.forceState(taskId, DownloadStage.Imported)
                     mutableState.value = mutableState.value.copy(
                         cachedMods = (mutableState.value.cachedMods + cached).distinctBy { it.cacheKey },
                         feedback = FeedbackMessage("已安全缓存 ${cached.displayName}；尚未同步到游戏。"),
                     )
                 }
                 .onFailure { error ->
-                    taskStore.update(taskId) { it.copy(stage = DownloadStage.AwaitingImportConfirmation, failure = DownloadFailureCode.ImportFailed) }
+                    taskStore.forceState(
+                        taskId,
+                        DownloadStage.AwaitingImportConfirmation,
+                        failure = DownloadFailureCode.ImportFailed,
+                    )
                     mutableState.value = mutableState.value.copy(
                         feedback = FeedbackMessage("下载内容未能导入：${error.message ?: "无法验证内容"}", isError = true),
                     )
@@ -426,8 +468,10 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
 
     fun discardWorkshopArtifact(taskId: String) {
         val task = taskStore.get(taskId) ?: return
-        artifactImporter.discard(task)
-        taskStore.update(taskId) { it.copy(stage = DownloadStage.Cancelled, failure = DownloadFailureCode.Cancelled) }
+        viewModelScope.launch {
+            artifactImporter.discard(task)
+            taskStore.forceState(taskId, DownloadStage.Cancelled, failure = DownloadFailureCode.Cancelled)
+        }
     }
 
     fun updatePatchConfirmation(confirmation: PatchConfirmation) {
@@ -620,6 +664,16 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             deviceSigningKeyState = deviceSigningKeyStore.state(),
             feedback = (result as? PatchOrchestrationResult.Failed)?.let { FeedbackMessage("迁移失败：${it.reason}", isError = true) }
                 ?: mutableState.value.feedback,
+        )
+    }
+
+    private companion object {
+        val DOWNLOAD_STAGES_TO_RESCHEDULE = setOf(
+            DownloadStage.Queued,
+            DownloadStage.ResolvingMetadata,
+            DownloadStage.AwaitingPublicUrl,
+            DownloadStage.Downloading,
+            DownloadStage.Verifying,
         )
     }
 

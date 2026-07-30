@@ -16,6 +16,10 @@ data class PublicWorkshopMetadata(
     val previewUrl: String?,
     val updatedAtEpochSeconds: Long?,
     val declaredSizeBytes: Long?,
+    val description: String? = null,
+    val timeCreatedEpochSeconds: Long? = null,
+    val creatorSteamId: ULong? = null,
+    val tags: List<String> = emptyList(),
 )
 
 interface PublicWorkshopMetadataTransport {
@@ -51,6 +55,12 @@ class SteamPublicWorkshopProvider(
                 previewUrl = metadata.previewUrl?.takeIf(WorkshopHttpPolicy::isAllowedArtifactUrl),
                 declaredSizeBytes = metadata.declaredSizeBytes?.takeIf { it >= 0 },
                 availability = availability,
+                description = metadata.description.orEmpty(),
+                shortDescription = metadata.description.orEmpty(),
+                createdAtEpochSeconds = metadata.timeCreatedEpochSeconds,
+                creatorSteamId = metadata.creatorSteamId,
+                tags = metadata.tags,
+                isDownloadInfoResolved = true,
             ),
         )
     }
