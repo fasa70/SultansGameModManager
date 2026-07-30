@@ -26,6 +26,19 @@ internal class PatchTransactionStore(context: Context) {
 
     fun root(transactionId: String): File = File(root, transactionId)
 
+    fun latestAwaitingGameUninstall(): PatchTransaction? = root.listFiles()
+        .orEmpty()
+        .asSequence()
+        .filter(File::isDirectory)
+        .mapNotNull { directory -> read(directory.name)?.let { transaction -> transaction to directory } }
+        .filter { (transaction, _) ->
+            transaction.stage == PatchStage.AwaitingGameUninstall &&
+                transaction.signedArtifactNames.isNotEmpty() &&
+                transaction.signedArtifactNames.distinct().size == transaction.signedArtifactNames.size
+        }
+        .maxByOrNull { (_, directory) -> File(directory, "transaction.properties").lastModified() }
+        ?.first
+
     fun write(transaction: PatchTransaction) {
         val directory = File(root, transaction.id).apply { mkdirs() }
         val temporary = File(directory, "transaction.properties.tmp")

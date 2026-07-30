@@ -105,11 +105,15 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     init {
         privateModCache.recoverInterruptedImports()
         val cachedMods = privateModCache.listCached()
+        val pendingPatch = transactions.latestAwaitingGameUninstall()
         mutableState.value = mutableState.value.copy(
             cachedMods = cachedMods,
             deploymentPlan = deploymentPlan.entries(cachedMods),
             downloadTasks = taskStore.tasks.value,
             deviceSigningKeyState = deviceSigningKeyStore.state(),
+            patchStage = pendingPatch?.stage ?: PatchStage.Idle,
+            patchTransactionId = pendingPatch?.id,
+            patchStatus = pendingPatch?.let { "已恢复待安装事务；正在检查原版游戏状态…" },
         )
         refreshGame()
         refreshGameModStorage()
@@ -215,10 +219,21 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                         trustedDeviceCertificateSha256 = deviceSigningKeyStore.certificateSha256(),
                     )
                 }
+            val isPendingPatch = mutableState.value.patchStage == PatchStage.AwaitingGameUninstall &&
+                mutableState.value.patchTransactionId != null
+            val pendingStatus = if (isPendingPatch) {
+                when (result) {
+                    is GameProbeResult.Found -> "已恢复待安装事务；原版游戏仍已安装。"
+                    GameProbeResult.NotInstalled -> "检测到原版游戏已卸载；可继续安装已暂存产物。"
+                    is GameProbeResult.Failed -> "无法确认原版游戏状态；请重新探测后再继续。"
+                }
+            } else {
+                classification?.compatibility?.reasons?.joinToString()
+            }
             mutableState.value = mutableState.value.copy(
                 gameProbeResult = result,
                 patchClassification = classification,
-                patchStatus = classification?.compatibility?.reasons?.joinToString(),
+                patchStatus = pendingStatus,
             )
         }
     }
@@ -387,7 +402,12 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         val current = mutableState.value
         if (current.patchInProgress) return
         if (current.patchStage == PatchStage.AwaitingGameUninstall) {
-            current.patchTransactionId?.let(::requestGameUninstall)
+            val transactionId = current.patchTransactionId ?: return
+            when (current.gameProbeResult) {
+                GameProbeResult.NotInstalled -> continueAfterGameUninstall(transactionId)
+                is GameProbeResult.Found -> requestGameUninstall(transactionId)
+                else -> refreshGame()
+            }
             return
         }
         if (current.patchStage == PatchStage.AwaitingInstallPermission) {
@@ -439,7 +459,12 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
 
     fun refreshInstallPermission() {
         if (!packageInstaller.canRequestInstalls()) {
-            requestInstallPermission()
+            mutableState.value = mutableState.value.copy(
+                showInstallPermissionExplanation = false,
+                patchInProgress = false,
+                patchStage = PatchStage.AwaitingInstallPermission,
+                patchStatus = "尚未允许 Manager 安装未知应用；点击按钮可查看授权说明。",
+            )
             return
         }
         val transactionId = mutableState.value.patchTransactionId
@@ -448,9 +473,35 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             return
         }
         mutableState.value = mutableState.value.copy(
+            showInstallPermissionExplanation = false,
             patchStage = PatchStage.Idle,
             patchStatus = "已允许 Manager 安装未知应用；请开始迁移。",
         )
+    }
+
+    fun confirmInstallPermissionExplanation() {
+        mutableState.value = mutableState.value.copy(showInstallPermissionExplanation = false)
+        uiEventChannel.trySend(ManagerUiEvent.OpenUnknownSourcesSettings(packageInstaller.unknownSourcesSettingsIntent()))
+    }
+
+    fun dismissInstallPermissionExplanation() {
+        mutableState.value = mutableState.value.copy(showInstallPermissionExplanation = false)
+    }
+
+    fun onGameUninstallResult() {
+        val transactionId = mutableState.value.patchTransactionId ?: return
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) { gameProbe.probe() }
+            mutableState.value = mutableState.value.copy(
+                gameProbeResult = result,
+                patchStatus = when (result) {
+                    GameProbeResult.NotInstalled -> "原版游戏已卸载；点击继续安装已暂存产物。"
+                    is GameProbeResult.Found -> "系统卸载已取消或尚未完成；不会自动再次打开卸载界面。"
+                    is GameProbeResult.Failed -> "无法确认原版游戏状态；请重新探测后再继续。"
+                },
+            )
+            if (result == GameProbeResult.NotInstalled) continueAfterGameUninstall(transactionId)
+        }
     }
 
     fun requestGameUninstall(transactionId: String) {
@@ -462,8 +513,8 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             patchInProgress = false,
             patchStage = PatchStage.AwaitingInstallPermission,
             patchStatus = "需要允许 Manager 安装未知应用。",
+            showInstallPermissionExplanation = true,
         )
-        uiEventChannel.trySend(ManagerUiEvent.OpenUnknownSourcesSettings(packageInstaller.unknownSourcesSettingsIntent()))
     }
 
     private fun handleInstallResult(intent: android.content.Intent) {

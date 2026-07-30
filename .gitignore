@@ -35,6 +35,7 @@ __pycache__/
 .env
 .env.*
 local.properties
+scripts/build-release-local.sh
 
 # OS
 .DS_Store

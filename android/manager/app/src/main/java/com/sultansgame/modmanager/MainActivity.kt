@@ -84,7 +84,7 @@ class MainActivity : ComponentActivity() {
         uri?.let(viewModel::importZip)
     }
     private val uninstallOriginalGame = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        viewModel.state.value.patchTransactionId?.let(viewModel::continueAfterGameUninstall)
+        viewModel.onGameUninstallResult()
     }
     private val configureUnknownSources = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         viewModel.refreshInstallPermission()
@@ -98,7 +98,8 @@ class MainActivity : ComponentActivity() {
                 viewModel.uiEvents.collect { event ->
                     when (event) {
                         is ManagerUiEvent.OpenGameUninstall -> uninstallOriginalGame.launch(
-                            Intent(Intent.ACTION_DELETE, Uri.parse("package:com.gametree.sultan.pd")),
+                            Intent(Intent.ACTION_UNINSTALL_PACKAGE, Uri.parse("package:com.gametree.sultan.pd"))
+                                .putExtra(Intent.EXTRA_RETURN_RESULT, true),
                         )
                         is ManagerUiEvent.OpenUnknownSourcesSettings -> configureUnknownSources.launch(event.intent)
                         is ManagerUiEvent.ConfirmPackageInstall -> confirmPackageInstall.launch(event.intent)
@@ -132,6 +133,8 @@ class MainActivity : ComponentActivity() {
                     onClearFeedback = viewModel::clearFeedback,
                     onBeginPatching = viewModel::beginPatching,
                     onUpdatePatchConfirmation = viewModel::updatePatchConfirmation,
+                    onConfirmInstallPermissionExplanation = viewModel::confirmInstallPermissionExplanation,
+                    onDismissInstallPermissionExplanation = viewModel::dismissInstallPermissionExplanation,
                 )
             }
         }
@@ -162,6 +165,8 @@ private fun ManagerApp(
     onClearFeedback: () -> Unit,
     onBeginPatching: () -> Unit,
     onUpdatePatchConfirmation: (PatchConfirmation) -> Unit,
+    onConfirmInstallPermissionExplanation: () -> Unit,
+    onDismissInstallPermissionExplanation: () -> Unit,
 ) {
     var destinationIndex by remember { mutableIntStateOf(0) }
     var dialog by remember { mutableStateOf<DialogKind?>(null) }
@@ -234,6 +239,16 @@ private fun ManagerApp(
 
     if (state.noticeAccepted == null) PreparingNoticeDialog()
     else if (state.noticeAccepted == false) LegalNoticeDialog(onAcceptNotice)
+
+    if (state.showInstallPermissionExplanation) {
+        ConfirmDialog(
+            title = "需要允许安装未知应用",
+            body = "Manager 需要此 Android 系统授权，才能提交已重签的游戏 APK 与 loader split。授权只针对 Manager 这个来源；取消不会删除游戏、Mod 或已暂存的修补产物。完成授权后，系统仍会要求你确认安装。",
+            confirmLabel = "前往系统设置",
+            onConfirm = onConfirmInstallPermissionExplanation,
+            onDismiss = onDismissInstallPermissionExplanation,
+        )
+    }
 
     when (dialog) {
         DialogKind.Notice -> LegalNoticeDialog(onAcceptNotice) { dialog = null }
@@ -843,8 +858,12 @@ private fun PatchScreen(
         item {
             PrimaryButton(
                 label = when (patchStage) {
-                    com.sultansgame.modmanager.model.PatchStage.AwaitingGameUninstall -> "重新打开卸载界面"
-                    com.sultansgame.modmanager.model.PatchStage.AwaitingInstallPermission -> "打开安装权限设置"
+                    com.sultansgame.modmanager.model.PatchStage.AwaitingGameUninstall -> when (state.gameProbeResult) {
+                        com.sultansgame.modmanager.platform.game.GameProbeResult.NotInstalled -> "继续安装已暂存产物"
+                        is com.sultansgame.modmanager.platform.game.GameProbeResult.Failed -> "重新探测游戏状态"
+                        else -> "打开系统卸载界面"
+                    }
+                    com.sultansgame.modmanager.model.PatchStage.AwaitingInstallPermission -> "查看安装授权说明"
                     else -> "开始迁移"
                 },
                 enabled = canBegin || canResumePatch,
