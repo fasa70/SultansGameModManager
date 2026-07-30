@@ -1,5 +1,6 @@
 package top.apricityx.workshop.workshop
 
+import kotlinx.coroutines.CancellationException
 import top.apricityx.workshop.steam.protocol.CdnRequestEndpoint
 import top.apricityx.workshop.steam.protocol.CdnServer
 import okhttp3.HttpUrl
@@ -58,6 +59,8 @@ internal class SteamCdnTransport(
                     maximumBytes = maximumBytes,
                     resolveAuthToken = resolveAuthToken,
                 )
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: Throwable) {
                 lastError = error
             }

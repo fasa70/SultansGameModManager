@@ -39,7 +39,25 @@ sealed interface DownloadEvent {
     ) : DownloadEvent
     data class FileCompleted(val file: DownloadedFileInfo) : DownloadEvent
     data class Completed(val files: List<DownloadedFileInfo>) : DownloadEvent
-    data class Failed(val message: String) : DownloadEvent
+    data class Failed(
+        val message: String,
+        val failure: DownloadFailure,
+    ) : DownloadEvent
+}
+
+sealed interface DownloadFailure {
+    val retryable: Boolean
+
+    data object MetadataUnavailable : DownloadFailure { override val retryable = false }
+    data object NotOwnedOrUnavailable : DownloadFailure { override val retryable = false }
+    data object UnsafeOrInvalidContent : DownloadFailure { override val retryable = false }
+    data object ResponseTooLarge : DownloadFailure { override val retryable = false }
+    data object SizeMismatch : DownloadFailure { override val retryable = false }
+    data object ChecksumMismatch : DownloadFailure { override val retryable = false }
+    data class HttpFailure(val statusCode: Int?) : DownloadFailure {
+        override val retryable: Boolean = statusCode == 408 || statusCode == 429 || (statusCode != null && statusCode >= 500)
+    }
+    data object Network : DownloadFailure { override val retryable = true }
 }
 
 sealed interface ResolvedWorkshopItem {

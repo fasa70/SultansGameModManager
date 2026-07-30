@@ -37,7 +37,7 @@ class WorkshopModelsTest {
             sortKey = " ",
             searchText = "  Sultan  ",
             requiredTags = setOf("  UI ", "", "UI"),
-            excludedTags = setOf("  NSFW "),
+            excludedTags = setOf("  NSFW ", "UI"),
             createdDateRange = WorkshopDateRangeFilter(20L, 10L),
             page = 0,
             pageSize = 10,

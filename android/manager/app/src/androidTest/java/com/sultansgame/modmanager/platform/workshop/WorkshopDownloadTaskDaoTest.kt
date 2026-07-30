@@ -7,10 +7,14 @@ import com.sultansgame.modmanager.model.DownloadTask
 import com.sultansgame.modmanager.model.PublishedFileId
 import com.sultansgame.modmanager.model.SULTANS_GAME_APP_ID
 import com.sultansgame.modmanager.model.WorkshopAccessMode
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
@@ -33,80 +37,113 @@ class WorkshopDownloadTaskDaoTest {
     }
 
     @Test
-    fun `active progress never overwrites paused task`() = runBlocking {
-        dao.upsert(task(stage = DownloadStage.Downloading).toEntity())
-        dao.forceState(
-            id = TASK_ID,
-            stage = DownloadStage.Paused.name,
-            failure = null,
-            pauseRequested = true,
-            updatedAtEpochMillis = 20L,
-        )
+    fun `old generation cannot overwrite retried task`() = runBlocking {
+        dao.insert(task(stage = DownloadStage.Downloading, generation = 1L).toEntity())
 
-        val updatedRows = dao.updateActiveProgress(
+        assertEquals(1, dao.requestPause(TASK_ID, 20L))
+        assertEquals(1, dao.requestRetry(TASK_ID, 30L))
+        val current = requireNotNull(dao.get(TASK_ID)?.toModel())
+
+        assertEquals(2L, current.attemptGeneration)
+        assertEquals(0, dao.updateActiveProgress(
             id = TASK_ID,
+            attemptGeneration = 1L,
             stage = DownloadStage.Downloading.name,
             downloadedBytes = 1024L,
             totalBytes = 2048L,
-            updatedAtEpochMillis = 30L,
-        )
-        val current = requireNotNull(dao.get(TASK_ID)?.toModel())
+            updatedAtEpochMillis = 40L,
+        ))
+        assertEquals(0, dao.completeDownload(
+            id = TASK_ID,
+            attemptGeneration = 1L,
+            rawArtifactDigestSha256 = "a".repeat(64),
+            completedFileCount = 1,
+            updatedAtEpochMillis = 40L,
+        ))
 
-        assertEquals(0, updatedRows)
-        assertEquals(DownloadStage.Paused, current.stage)
-        assertEquals(0L, current.downloadedBytes)
-        assertEquals(true, current.pauseRequested)
+        val unchanged = requireNotNull(dao.get(TASK_ID)?.toModel())
+        assertEquals(DownloadStage.Queued, unchanged.stage)
+        assertEquals(2L, unchanged.attemptGeneration)
+        assertEquals(0L, unchanged.downloadedBytes)
     }
 
     @Test
-    fun `completion never overwrites a cancelled task`() = runBlocking {
-        dao.upsert(task(stage = DownloadStage.Downloading).toEntity())
-        dao.forceState(
-            id = TASK_ID,
-            stage = DownloadStage.Cancelled.name,
-            failure = "Cancelled",
-            pauseRequested = false,
-            updatedAtEpochMillis = 20L,
-        )
+    fun `completion cannot overwrite paused or cancelled task`() = runBlocking {
+        dao.insert(task(stage = DownloadStage.Downloading).toEntity())
+        assertEquals(1, dao.requestPause(TASK_ID, 20L))
 
-        val updatedRows = dao.completeDownload(
+        assertEquals(0, dao.completeDownload(
             id = TASK_ID,
+            attemptGeneration = 1L,
             rawArtifactDigestSha256 = "a".repeat(64),
             completedFileCount = 1,
             updatedAtEpochMillis = 30L,
-        )
-        val current = requireNotNull(dao.get(TASK_ID)?.toModel())
+        ))
+        assertEquals(DownloadStage.Paused, requireNotNull(dao.get(TASK_ID)?.toModel()).stage)
 
-        assertEquals(0, updatedRows)
-        assertEquals(DownloadStage.Cancelled, current.stage)
-        assertNull(current.rawArtifactDigestSha256)
-        assertEquals(0, current.completedFileCount)
+        assertEquals(1, dao.requestCancel(TASK_ID, 40L))
+        assertEquals(0, dao.completeDownload(
+            id = TASK_ID,
+            attemptGeneration = 1L,
+            rawArtifactDigestSha256 = "b".repeat(64),
+            completedFileCount = 1,
+            updatedAtEpochMillis = 50L,
+        ))
+        val cancelled = requireNotNull(dao.get(TASK_ID)?.toModel())
+        assertEquals(DownloadStage.Cancelled, cancelled.stage)
+        assertNull(cancelled.rawArtifactDigestSha256)
     }
 
     @Test
-    fun `valid download completion stores import summary`() = runBlocking {
-        dao.upsert(task(stage = DownloadStage.Verifying).toEntity())
-
-        val updatedRows = dao.completeDownload(
-            id = TASK_ID,
+    fun `only one caller claims import`() = runBlocking {
+        dao.insert(task(stage = DownloadStage.AwaitingImportConfirmation).copy(
             rawArtifactDigestSha256 = "b".repeat(64),
-            completedFileCount = 3,
-            updatedAtEpochMillis = 30L,
-        )
-        val current = requireNotNull(dao.get(TASK_ID)?.toModel())
+            completedFileCount = 1,
+        ).toEntity())
 
-        assertEquals(1, updatedRows)
-        assertEquals(DownloadStage.AwaitingImportConfirmation, current.stage)
-        assertEquals("b".repeat(64), current.rawArtifactDigestSha256)
-        assertEquals(3, current.completedFileCount)
+        val claims = listOf(
+            async { dao.beginImport(TASK_ID, 20L) },
+            async { dao.beginImport(TASK_ID, 20L) },
+        ).awaitAll()
+
+        assertEquals(1, claims.count { it == 1 })
+        assertEquals(DownloadStage.Importing, requireNotNull(dao.get(TASK_ID)?.toModel()).stage)
     }
 
-    private fun task(stage: DownloadStage): DownloadTask = DownloadTask(
+    @Test
+    fun `interrupted active task is requeued with new generation`() = runBlocking {
+        dao.insert(task(stage = DownloadStage.Downloading, generation = 4L).toEntity())
+
+        assertEquals(1, dao.requeueInterruptedDownloads(20L))
+        val current = requireNotNull(dao.get(TASK_ID)?.toModel())
+
+        assertEquals(DownloadStage.Queued, current.stage)
+        assertEquals(5L, current.attemptGeneration)
+        assertEquals(0L, current.downloadedBytes)
+        assertFalse(current.pauseRequested)
+    }
+
+    @Test
+    fun `interrupted import returns to explicit user confirmation`() = runBlocking {
+        dao.insert(task(stage = DownloadStage.Importing).copy(
+            rawArtifactDigestSha256 = "b".repeat(64),
+            completedFileCount = 3,
+        ).toEntity())
+
+        assertEquals(1, dao.restoreInterruptedImports(20L))
+        val current = requireNotNull(dao.get(TASK_ID)?.toModel())
+
+        assertEquals(DownloadStage.AwaitingImportConfirmation, current.stage)
+        assertTrue(current.rawArtifactDigestSha256?.matches(Regex("[0-9a-f]{64}")) == true)
+    }
+
+    private fun task(stage: DownloadStage, generation: Long = 1L): DownloadTask = DownloadTask(
         id = TASK_ID,
         appId = SULTANS_GAME_APP_ID,
         publishedFileId = PublishedFileId.parse("123")!!,
         accessMode = WorkshopAccessMode.Anonymous,
         stage = stage,
+        attemptGeneration = generation,
         createdAtEpochMillis = 10L,
         updatedAtEpochMillis = 10L,
     )

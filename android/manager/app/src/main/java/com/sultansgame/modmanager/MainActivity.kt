@@ -26,7 +26,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -38,6 +40,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,6 +61,11 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavType
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import kotlinx.coroutines.launch
 import com.sultansgame.modmanager.model.PatchConfirmation
 import com.sultansgame.modmanager.model.WorkshopAvailability
@@ -471,34 +479,22 @@ private fun ContentArea(
                 onMove = onMoveMod,
                 onSync = { onShowDialog(DialogKind.SyncMods) },
             )
-            Destination.Workshop -> {
-                val detail = (state.workshop as? WorkshopUiState.Item)?.item
-                if (detail != null) {
-                    WorkshopDetailScreen(
-                        item = detail,
-                        wide = wideLayout,
-                        onBack = { onLookupWorkshop("") },
-                        onQueueDownload = onQueueWorkshopDownload,
-                    )
-                } else {
-                    WorkshopScreen(
-                        state = state,
-                        wide = wideLayout,
-                        onLookup = onLookupWorkshop,
-                        onBeginSteamLogin = onBeginSteamLogin,
-                        onSubmitSteamGuard = onSubmitSteamGuard,
-                        onLogoutSteam = onLogoutSteam,
-                        onBrowse = onBrowseWorkshop,
-                        onQueueDownload = onQueueWorkshopDownload,
-                        onRetryDownload = onRetryWorkshopDownload,
-                        onPauseDownload = onPauseWorkshopDownload,
-                        onResumeDownload = onResumeWorkshopDownload,
-                        onCancelDownload = onCancelWorkshopDownload,
-                        onConfirmImport = onConfirmWorkshopImport,
-                        onDiscardArtifact = onDiscardWorkshopArtifact,
-                    )
-                }
-            }
+            Destination.Workshop -> WorkshopNavigation(
+                state = state,
+                wide = wideLayout,
+                onLookup = onLookupWorkshop,
+                onBeginSteamLogin = onBeginSteamLogin,
+                onSubmitSteamGuard = onSubmitSteamGuard,
+                onLogoutSteam = onLogoutSteam,
+                onBrowse = onBrowseWorkshop,
+                onQueueDownload = onQueueWorkshopDownload,
+                onRetryDownload = onRetryWorkshopDownload,
+                onPauseDownload = onPauseWorkshopDownload,
+                onResumeDownload = onResumeWorkshopDownload,
+                onCancelDownload = onCancelWorkshopDownload,
+                onConfirmImport = onConfirmWorkshopImport,
+                onDiscardArtifact = onDiscardWorkshopArtifact,
+            )
             Destination.Patch -> PatchScreen(
                 wide = wideLayout,
                 state = state,
@@ -644,6 +640,163 @@ private fun SmallAction(label: String, enabled: Boolean = true, onClick: () -> U
 
 
 @Composable
+private fun WorkshopNavigation(
+    state: ManagerUiState,
+    wide: Boolean,
+    onLookup: (String) -> Unit,
+    onBeginSteamLogin: (String, String) -> Unit,
+    onSubmitSteamGuard: (String) -> Unit,
+    onLogoutSteam: () -> Unit,
+    onBrowse: (com.sultansgame.modmanager.model.WorkshopBrowseQuery) -> Unit,
+    onQueueDownload: (com.sultansgame.modmanager.model.WorkshopItem) -> Unit,
+    onRetryDownload: (String) -> Unit,
+    onPauseDownload: (String) -> Unit,
+    onResumeDownload: (String) -> Unit,
+    onCancelDownload: (String) -> Unit,
+    onConfirmImport: (String) -> Unit,
+    onDiscardArtifact: (String) -> Unit,
+) {
+    val navController = rememberNavController()
+    NavHost(navController = navController, startDestination = "browse") {
+        composable("browse") {
+            WorkshopScreen(
+                state = state,
+                wide = wide,
+                onLookup = { id ->
+                    onLookup(id)
+                    navController.navigate("detail/$id")
+                },
+                onBeginSteamLogin = onBeginSteamLogin,
+                onSubmitSteamGuard = onSubmitSteamGuard,
+                onLogoutSteam = onLogoutSteam,
+                onBrowse = onBrowse,
+                onOpenQueue = { navController.navigate("queue") },
+                onQueueDownload = onQueueDownload,
+                onRetryDownload = onRetryDownload,
+                onPauseDownload = onPauseDownload,
+                onResumeDownload = onResumeDownload,
+                onCancelDownload = onCancelDownload,
+                onConfirmImport = onConfirmImport,
+                onDiscardArtifact = onDiscardArtifact,
+            )
+        }
+        composable(
+            route = "detail/{publishedFileId}",
+            arguments = listOf(navArgument("publishedFileId") { type = NavType.StringType }),
+        ) { entry ->
+            val routeId = entry.arguments?.getString("publishedFileId")
+            val detail = state.workshop as? WorkshopUiState.Item
+            LaunchedEffect(routeId) {
+                if (!routeId.isNullOrBlank() && detail?.item?.publishedFileId.toString() != routeId) {
+                    onLookup(routeId)
+                }
+            }
+            if (routeId.isNullOrBlank()) {
+                LaunchedEffect(Unit) { navController.popBackStack() }
+            } else when {
+                detail != null && detail.item.publishedFileId.toString() == routeId -> WorkshopDetailScreen(
+                    item = detail.item,
+                    wide = wide,
+                    onBack = {
+                        onLookup("")
+                        navController.popBackStack()
+                    },
+                    onQueueDownload = onQueueDownload,
+                )
+                state.workshop is WorkshopUiState.Error -> ScreenList(wide) {
+                    item { ErrorPanel((state.workshop).reason) }
+                    item { PrimaryButton("返回创意工坊") { navController.popBackStack() } }
+                }
+                else -> ScreenList(wide) { item { LoadingPanel("正在读取 Workshop 详情…") } }
+            }
+        }
+        composable("queue") {
+            WorkshopQueueScreen(
+                state = state,
+                wide = wide,
+                onRetryDownload = onRetryDownload,
+                onPauseDownload = onPauseDownload,
+                onResumeDownload = onResumeDownload,
+                onCancelDownload = onCancelDownload,
+                onConfirmImport = onConfirmImport,
+                onDiscardArtifact = onDiscardArtifact,
+                onBack = { navController.popBackStack() },
+            )
+        }
+    }
+}
+@Composable
+private fun WorkshopQueueScreen(
+    state: ManagerUiState,
+    wide: Boolean,
+    onRetryDownload: (String) -> Unit,
+    onPauseDownload: (String) -> Unit,
+    onResumeDownload: (String) -> Unit,
+    onCancelDownload: (String) -> Unit,
+    onConfirmImport: (String) -> Unit,
+    onDiscardArtifact: (String) -> Unit,
+    onBack: () -> Unit,
+) {
+    ScreenList(wide) {
+        item {
+            Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(20.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("下载中心", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                    Text("下载仅位于 Manager 私有暂存区；完成后仍需要确认并校验才会进入私有 Mod 缓存。", fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                    Text("← 返回创意工坊", modifier = Modifier.clickable(onClick = onBack).padding(vertical = 4.dp), fontSize = 13.sp)
+                }
+            }
+        }
+        if (state.downloadTasks.isEmpty()) {
+            item { EmptyPanel("下载队列为空", "从 Workshop 条目详情选择“加入下载队列”后，任务将显示在此处。") }
+        } else {
+            items(state.downloadTasks, key = { it.id }) { task ->
+                WorkshopDownloadTaskCard(task, onRetryDownload, onPauseDownload, onResumeDownload, onCancelDownload, onConfirmImport, onDiscardArtifact)
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkshopDownloadTaskCard(
+    task: com.sultansgame.modmanager.model.DownloadTask,
+    onRetryDownload: (String) -> Unit,
+    onPauseDownload: (String) -> Unit,
+    onResumeDownload: (String) -> Unit,
+    onCancelDownload: (String) -> Unit,
+    onConfirmImport: (String) -> Unit,
+    onDiscardArtifact: (String) -> Unit,
+) {
+    Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(16.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(task.title.ifBlank { "Workshop ${task.publishedFileId}" }, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            Text("${task.stage} · ${formatBytes(task.downloadedBytes)}${task.totalBytes?.let { " / ${formatBytes(it)}" } ?: ""}", fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+            when (task.stage) {
+                com.sultansgame.modmanager.model.DownloadStage.AwaitingImportConfirmation -> {
+                    PrimaryButton("检查并导入 Mod") { onConfirmImport(task.id) }
+                    PrimaryButton("丢弃下载内容") { onDiscardArtifact(task.id) }
+                }
+                com.sultansgame.modmanager.model.DownloadStage.Paused -> {
+                    PrimaryButton("继续下载") { onResumeDownload(task.id) }
+                    PrimaryButton("取消下载") { onCancelDownload(task.id) }
+                }
+                com.sultansgame.modmanager.model.DownloadStage.Failed,
+                com.sultansgame.modmanager.model.DownloadStage.NeedsLogin -> {
+                    PrimaryButton("重试") { onRetryDownload(task.id) }
+                    PrimaryButton("取消下载") { onCancelDownload(task.id) }
+                }
+                com.sultansgame.modmanager.model.DownloadStage.Imported,
+                com.sultansgame.modmanager.model.DownloadStage.Cancelled -> Unit
+                else -> {
+                    PrimaryButton("暂停下载") { onPauseDownload(task.id) }
+                    PrimaryButton("取消下载") { onCancelDownload(task.id) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun WorkshopDetailScreen(
     item: com.sultansgame.modmanager.model.WorkshopItem,
     wide: Boolean,
@@ -713,6 +866,7 @@ private fun WorkshopScreen(
     onSubmitSteamGuard: (String) -> Unit,
     onLogoutSteam: () -> Unit,
     onBrowse: (com.sultansgame.modmanager.model.WorkshopBrowseQuery) -> Unit,
+    onOpenQueue: () -> Unit,
     onQueueDownload: (com.sultansgame.modmanager.model.WorkshopItem) -> Unit,
     onRetryDownload: (String) -> Unit,
     onPauseDownload: (String) -> Unit,
@@ -724,10 +878,10 @@ private fun WorkshopScreen(
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var guardCode by remember { mutableStateOf("") }
-    var query by remember { mutableStateOf("") }
-    var publishedFileId by remember { mutableStateOf("") }
-    var showSteamLogin by remember { mutableStateOf(false) }
-    var showAdvancedFilters by remember { mutableStateOf(false) }
+    var query by rememberSaveable { mutableStateOf(state.workshopBrowse.query.searchText) }
+    var publishedFileId by rememberSaveable { mutableStateOf("") }
+    var showSteamLogin by rememberSaveable { mutableStateOf(false) }
+    var showAdvancedFilters by rememberSaveable { mutableStateOf(false) }
     var filterDraft by remember { mutableStateOf(state.workshopBrowse.query) }
     val signedIn = state.steamAuthState as? com.sultansgame.modmanager.model.SteamAuthState.SignedIn
     LaunchedEffect(state.workshopBrowse.query) { filterDraft = state.workshopBrowse.query }
@@ -777,6 +931,7 @@ private fun WorkshopScreen(
                         SmallAction("热门") { onBrowse(com.sultansgame.modmanager.model.WorkshopBrowseQuery(searchText = query)) }
                         SmallAction("最新") { onBrowse(com.sultansgame.modmanager.model.WorkshopBrowseQuery(searchText = query, sortKey = com.sultansgame.modmanager.model.WorkshopBrowseQuery.SORT_MOST_RECENT)) }
                         SmallAction("筛选") { showAdvancedFilters = true }
+                        SmallAction("下载中心") { onOpenQueue() }
                     }
                 }
             }
@@ -887,57 +1042,138 @@ private fun WorkshopScreen(
     if (showAdvancedFilters) {
         Dialog(onDismissRequest = { showAdvancedFilters = false }) {
             Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(22.dp)) {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    val currentSort = state.workshopBrowse.sortOptions
+                        .firstOrNull { it.key == filterDraft.sortKey }
                     Text("高级筛选", fontSize = 20.sp, fontWeight = FontWeight.Bold)
                     Text("筛选项由 Steam Community 页面动态提供；应用后会回到第一页。", fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
-                    Text("排序", fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        SmallAction("热门", filterDraft.sortKey != com.sultansgame.modmanager.model.WorkshopBrowseQuery.SORT_TREND) {
-                            filterDraft = filterDraft.copy(sortKey = com.sultansgame.modmanager.model.WorkshopBrowseQuery.SORT_TREND)
-                        }
-                        SmallAction("评分", filterDraft.sortKey != com.sultansgame.modmanager.model.WorkshopBrowseQuery.SORT_TOP_RATED) {
-                            filterDraft = filterDraft.copy(sortKey = com.sultansgame.modmanager.model.WorkshopBrowseQuery.SORT_TOP_RATED)
-                        }
-                        SmallAction("更新", filterDraft.sortKey != com.sultansgame.modmanager.model.WorkshopBrowseQuery.SORT_LAST_UPDATED) {
-                            filterDraft = filterDraft.copy(sortKey = com.sultansgame.modmanager.model.WorkshopBrowseQuery.SORT_LAST_UPDATED)
+
+                    if (state.workshopBrowse.sectionOptions.isNotEmpty()) {
+                        Text("分类", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        state.workshopBrowse.sectionOptions.forEach { section ->
+                            val requiresAccount = section.key == com.sultansgame.modmanager.model.WorkshopBrowseQuery.SECTION_MY_SUBSCRIPTIONS && signedIn == null
+                            SmallAction(
+                                if (filterDraft.sectionKey == section.key) "✓ ${section.label}" else section.label,
+                                enabled = !requiresAccount,
+                            ) {
+                                filterDraft = filterDraft.copy(sectionKey = section.key)
+                            }
+                            if (requiresAccount) Text("${section.label} 需要登录 Steam。", fontSize = 11.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                         }
                     }
-                    Text("热门时间范围", fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf(1 to "今天", 7 to "一周", 30 to "30 天", 365 to "一年").forEach { (days, label) ->
-                            SmallAction(label, filterDraft.periodDays != days) { filterDraft = filterDraft.copy(periodDays = days) }
+
+                    if (state.workshopBrowse.sortOptions.isNotEmpty()) {
+                        Text("排序", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        state.workshopBrowse.sortOptions.forEach { option ->
+                            SmallAction(if (filterDraft.sortKey == option.key) "✓ ${option.label}" else option.label) {
+                                filterDraft = filterDraft.copy(sortKey = option.key)
+                            }
+                        }
+                    }
+                    if (currentSort?.supportsPeriod == true && state.workshopBrowse.periodOptions.isNotEmpty()) {
+                        Text("热门时间范围", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        state.workshopBrowse.periodOptions.forEach { option ->
+                            SmallAction(if (filterDraft.periodDays == option.days) "✓ ${option.label}" else option.label) {
+                                filterDraft = filterDraft.copy(periodDays = option.days)
+                            }
                         }
                     }
                     if (state.workshopBrowse.supportsIncompatibleFilter) {
-                        SmallAction(if (filterDraft.showIncompatible) "已显示不兼容项" else "显示不兼容项") {
+                        SmallAction(if (filterDraft.showIncompatible) "✓ 显示不兼容项" else "显示不兼容项") {
                             filterDraft = filterDraft.copy(showIncompatible = !filterDraft.showIncompatible)
                         }
                     }
-                    state.workshopBrowse.tagGroups.take(2).forEach { group ->
+
+                    Text("每页条目数", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    com.sultansgame.modmanager.model.WorkshopBrowseQuery.PAGE_SIZE_OPTIONS.forEach { pageSize ->
+                        SmallAction(if (filterDraft.pageSize == pageSize) "✓ $pageSize" else "$pageSize") {
+                            filterDraft = filterDraft.copy(pageSize = pageSize)
+                        }
+                    }
+
+                    DateRangeFilterEditor(
+                        title = "创建时间（Unix 秒）",
+                        range = filterDraft.createdDateRange,
+                        onChange = { filterDraft = filterDraft.copy(createdDateRange = it) },
+                    )
+                    DateRangeFilterEditor(
+                        title = "更新时间（Unix 秒）",
+                        range = filterDraft.updatedDateRange,
+                        onChange = { filterDraft = filterDraft.copy(updatedDateRange = it) },
+                    )
+
+                    state.workshopBrowse.tagGroups.forEach { group ->
                         Text(group.label, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                        group.tags.take(8).forEach { tag ->
-                            val selected = tag.value in filterDraft.requiredTags
-                            SmallAction(if (selected) "✓ ${tag.label}" else tag.label) {
-                                filterDraft = filterDraft.copy(
-                                    requiredTags = filterDraft.requiredTags.toMutableSet().apply {
-                                        if (!add(tag.value)) remove(tag.value)
-                                    },
-                                    excludedTags = filterDraft.excludedTags - tag.value,
-                                )
+                        group.tags.forEach { tag ->
+                            when (group.selectionMode) {
+                                com.sultansgame.modmanager.model.WorkshopBrowseTagGroupSelectionMode.SingleSelect -> {
+                                    val selected = tag.value in filterDraft.requiredTags
+                                    SmallAction(if (selected) "✓ ${tag.label}" else tag.label) {
+                                        val groupValues = group.tags.map { it.value }.toSet()
+                                        filterDraft = filterDraft.copy(
+                                            requiredTags = (filterDraft.requiredTags - groupValues) + tag.value,
+                                            excludedTags = filterDraft.excludedTags - groupValues,
+                                        )
+                                    }
+                                }
+                                com.sultansgame.modmanager.model.WorkshopBrowseTagGroupSelectionMode.IncludeExclude -> {
+                                    val inclusion = tag.value in filterDraft.requiredTags
+                                    val exclusion = tag.value in filterDraft.excludedTags
+                                    val label = when {
+                                        inclusion -> "✓ 包含 ${tag.label}"
+                                        exclusion -> "− 排除 ${tag.label}"
+                                        else -> tag.label
+                                    }
+                                    SmallAction(label) {
+                                        filterDraft = when {
+                                            !inclusion && !exclusion -> filterDraft.copy(
+                                                requiredTags = filterDraft.requiredTags + tag.value,
+                                                excludedTags = filterDraft.excludedTags - tag.value,
+                                            )
+                                            inclusion -> filterDraft.copy(
+                                                requiredTags = filterDraft.requiredTags - tag.value,
+                                                excludedTags = filterDraft.excludedTags + tag.value,
+                                            )
+                                            else -> filterDraft.copy(excludedTags = filterDraft.excludedTags - tag.value)
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                     PrimaryButton("应用筛选") {
-                        onBrowse(filterDraft.copy(searchText = query, page = 1))
+                        onBrowse(filterDraft.copy(searchText = query, page = 1).normalized())
                         showAdvancedFilters = false
                     }
-                    Text("重置", modifier = Modifier.fillMaxWidth().clickable {
+                    Text("重置高级筛选", modifier = Modifier.fillMaxWidth().clickable {
                         filterDraft = com.sultansgame.modmanager.model.WorkshopBrowseQuery(searchText = query)
                     }.padding(8.dp), fontSize = 13.sp)
                 }
             }
         }
     }
+}
+
+@Composable
+private fun DateRangeFilterEditor(
+    title: String,
+    range: com.sultansgame.modmanager.model.WorkshopDateRangeFilter,
+    onChange: (com.sultansgame.modmanager.model.WorkshopDateRangeFilter) -> Unit,
+) {
+    var start by remember(range.startEpochSeconds) { mutableStateOf(range.startEpochSeconds.takeIf { it > 0L }?.toString().orEmpty()) }
+    var end by remember(range.endEpochSeconds) { mutableStateOf(range.endEpochSeconds.takeIf { it > 0L }?.toString().orEmpty()) }
+    Text(title, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+    WorkshopTextField(start, {
+        start = it.filter(Char::isDigit)
+        onChange(range.copy(startEpochSeconds = start.toLongOrNull() ?: 0L))
+    }, "开始（留空表示不限）", numeric = true)
+    WorkshopTextField(end, {
+        end = it.filter(Char::isDigit)
+        onChange(range.copy(endEpochSeconds = end.toLongOrNull() ?: 0L))
+    }, "结束（留空表示不限）", numeric = true)
 }
 
 @Composable

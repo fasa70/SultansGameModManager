@@ -20,9 +20,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Durable Room-backed task repository. A single safe, one-way import reads the
- * legacy SharedPreferences queue: unfinished entries are restarted instead of
- * trusting a partly downloaded artifact as complete.
+ * Durable Room-backed task repository. Every mutation is a conditional database
+ * transition: UI snapshots and superseded workers cannot overwrite user intent.
  */
 class WorkshopTaskStore(context: Context) {
     private val applicationContext = context.applicationContext
@@ -57,74 +56,108 @@ class WorkshopTaskStore(context: Context) {
         return dao.get(id)?.toModel()
     }
 
-    suspend fun upsert(task: DownloadTask) {
+    suspend fun create(task: DownloadTask): Boolean {
         initialization.await()
-        dao.upsert(task.toEntity())
+        return runCatching {
+            dao.insert(task.copy(attemptGeneration = task.attemptGeneration.coerceAtLeast(1L)).toEntity())
+            true
+        }.getOrDefault(false)
     }
 
-    suspend fun remove(id: String) {
+    suspend fun requestPause(id: String): Boolean {
         initialization.await()
-        dao.remove(id)
+        return dao.requestPause(id, now()) == 1
     }
 
-    suspend fun forceState(
-        id: String,
-        stage: DownloadStage,
-        failure: DownloadFailureCode? = null,
-        pauseRequested: Boolean = false,
-    ) {
+    suspend fun requestCancel(id: String): Boolean {
         initialization.await()
-        dao.forceState(
-            id = id,
-            stage = stage.name,
-            failure = failure?.name,
-            pauseRequested = pauseRequested,
-            updatedAtEpochMillis = System.currentTimeMillis(),
-        )
+        return dao.requestCancel(id, now()) == 1
+    }
+
+    suspend fun requestRetry(id: String): DownloadTask? {
+        initialization.await()
+        if (dao.requestRetry(id, now()) != 1) return null
+        return dao.get(id)?.toModel()
     }
 
     suspend fun updateActiveState(
         id: String,
+        attemptGeneration: Long,
         stage: DownloadStage,
         failure: DownloadFailureCode? = null,
-    ) {
+    ): Boolean {
         initialization.await()
-        dao.updateActiveState(
+        return dao.updateActiveState(
             id = id,
+            attemptGeneration = attemptGeneration,
             stage = stage.name,
             failure = failure?.name,
-            updatedAtEpochMillis = System.currentTimeMillis(),
-        )
+            updatedAtEpochMillis = now(),
+        ) == 1
     }
 
     suspend fun updateActiveProgress(
         id: String,
+        attemptGeneration: Long,
         stage: DownloadStage,
         downloadedBytes: Long,
         totalBytes: Long?,
-    ) {
+    ): Boolean {
         initialization.await()
-        dao.updateActiveProgress(
+        return dao.updateActiveProgress(
             id = id,
+            attemptGeneration = attemptGeneration,
             stage = stage.name,
             downloadedBytes = downloadedBytes.coerceAtLeast(0L),
             totalBytes = totalBytes?.takeIf { it >= 0L },
-            updatedAtEpochMillis = System.currentTimeMillis(),
-        )
+            updatedAtEpochMillis = now(),
+        ) == 1
     }
 
     suspend fun completeDownload(
         id: String,
+        attemptGeneration: Long,
         rawArtifactDigestSha256: String,
         completedFileCount: Int,
-    ) {
+    ): Boolean {
         initialization.await()
-        dao.completeDownload(
+        return dao.completeDownload(
             id = id,
+            attemptGeneration = attemptGeneration,
             rawArtifactDigestSha256 = rawArtifactDigestSha256,
             completedFileCount = completedFileCount.coerceAtLeast(0),
-            updatedAtEpochMillis = System.currentTimeMillis(),
-        )
+            updatedAtEpochMillis = now(),
+        ) == 1
+    }
+
+    suspend fun invalidateArtifact(id: String): Boolean {
+        initialization.await()
+        return dao.invalidateArtifact(id, now()) == 1
+    }
+
+    suspend fun beginImport(id: String): DownloadTask? {
+        initialization.await()
+        if (dao.beginImport(id, now()) != 1) return null
+        return dao.get(id)?.toModel()
+    }
+
+    suspend fun finishImport(id: String): Boolean {
+        initialization.await()
+        return dao.finishImport(id, now()) == 1
+    }
+
+    suspend fun failImport(id: String): Boolean {
+        initialization.await()
+        return dao.failImport(id, DownloadFailureCode.ImportFailed.name, now()) == 1
+    }
+
+    /** Resets only safely resumable task states after process death. */
+    suspend fun recoverInterruptedTasks(): List<DownloadTask> {
+        initialization.await()
+        dao.requeueInterruptedDownloads(now())
+        dao.invalidateUnverifiableImports(now())
+        dao.restoreInterruptedImports(now())
+        return dao.getAll().mapNotNull(WorkshopDownloadTaskEntity::toModel)
     }
 
     private suspend fun migrateLegacyTasksIfNeeded() {
@@ -142,7 +175,7 @@ class WorkshopTaskStore(context: Context) {
         }.getOrDefault(emptyList())
 
         for (task in migrated) {
-            dao.upsert(task.toEntity())
+            dao.upsertForMigration(task.toEntity())
         }
         preferences.edit()
             .remove(LEGACY_TASKS_KEY)
@@ -162,6 +195,7 @@ class WorkshopTaskStore(context: Context) {
         val safeStage = when {
             isVerifiedAwaitingImport -> DownloadStage.AwaitingImportConfirmation
             stage in setOf(DownloadStage.Importing, DownloadStage.Imported) -> DownloadStage.Failed
+            stage in ACTIVE_STAGES -> DownloadStage.Queued
             else -> stage
         }
         val safelyPreservedArtifact = safeStage == DownloadStage.AwaitingImportConfirmation
@@ -179,15 +213,25 @@ class WorkshopTaskStore(context: Context) {
             rawArtifactDigestSha256 = if (safelyPreservedArtifact) json.optString("digest") else null,
             completedFileCount = if (safelyPreservedArtifact) json.optInt("completedFileCount", 0) else 0,
             pauseRequested = json.optBoolean("pauseRequested", false),
-            createdAtEpochMillis = json.optLong("createdAt", System.currentTimeMillis()),
-            updatedAtEpochMillis = System.currentTimeMillis(),
+            attemptGeneration = 1L,
+            createdAtEpochMillis = json.optLong("createdAt", now()),
+            updatedAtEpochMillis = now(),
         )
     }
 
     private inline fun <reified T : Enum<T>> enumValueOrNull(value: String): T? =
         enumValues<T>().firstOrNull { it.name == value }
 
+    private fun now(): Long = System.currentTimeMillis()
+
     companion object {
+        private val ACTIVE_STAGES = setOf(
+            DownloadStage.Queued,
+            DownloadStage.ResolvingMetadata,
+            DownloadStage.AwaitingPublicUrl,
+            DownloadStage.Downloading,
+            DownloadStage.Verifying,
+        )
         private const val DATABASE_NAME = "workshop-downloads.db"
         private const val LEGACY_PREFERENCES_NAME = "workshop-download-queue"
         private const val LEGACY_TASKS_KEY = "tasks-v1"
@@ -201,7 +245,8 @@ class WorkshopTaskStore(context: Context) {
                 context.applicationContext,
                 WorkshopDownloadDatabase::class.java,
                 DATABASE_NAME,
-            ).build().also { sharedDatabase = it }
+            ).addMigrations(WorkshopDownloadDatabase.MIGRATION_1_2)
+                .build().also { sharedDatabase = it }
         }
     }
 }

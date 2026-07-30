@@ -15,13 +15,19 @@ class WorkshopArtifactImporter(
     private val cache: AndroidPrivateModCache,
     private val zipImporter: ZipModImporter,
 ) {
+    fun verifyPendingArtifact(task: DownloadTask) {
+        val staging = stagingDirectory(task.id)
+            ?.takeIf(File::isDirectory)
+            ?: throw ImportValidationException("下载内容已不可用")
+        WorkshopStagingArtifact.verify(staging, task)
+    }
+
     fun importConfirmed(task: DownloadTask): CachedMod {
         val staging = stagingDirectory(task.id)
             ?.takeIf(File::isDirectory)
             ?: throw ImportValidationException("下载内容已不可用")
-        val payloads = staging.listFiles()
-            ?.filter { it.name !in setOf("metadata.json", "download.log", ".chunks") && !it.name.endsWith(".part") }
-            .orEmpty()
+        WorkshopStagingArtifact.verify(staging, task)
+        val payloads = WorkshopStagingArtifact.payloadRoots(staging)
         if (payloads.size == 1 && payloads.single().isFile && isZip(payloads.single())) {
             return zipImporter.importDownloadedZip(payloads.single()).copy(
                 source = CacheSource.Workshop,

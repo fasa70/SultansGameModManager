@@ -1,5 +1,6 @@
 package top.apricityx.workshop.workshop
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -20,7 +21,7 @@ class DirectWorkshopDownloader(
         val partialFile = File(request.outputDir, "${outputFile.name}.part")
         outputFile.parentFile?.mkdirs()
         if (outputFile.isFile()) {
-            if (item.size == null || outputFile.length() == item.size) {
+            if (item.size != null && outputFile.length() == item.size) {
                 log("Reusing completed direct download ${outputFile.name}")
                 emit(
                     DownloadEvent.Progress(
@@ -123,12 +124,19 @@ class DirectWorkshopDownloader(
                 if (!partialFile.isFile) {
                     continue
                 }
+                if (item.size != null && partialFile.length() != item.size) {
+                    throw WorkshopDownloadException(
+                        "Direct download size mismatch: expected ${item.size} bytes, got ${partialFile.length()} bytes",
+                    )
+                }
                 if (!partialFile.renameTo(outputFile)) {
                     partialFile.copyTo(outputFile, overwrite = true)
                     partialFile.delete()
                 }
                 emitCompletedFile(outputFile, emit)
                 return@withContext
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: Throwable) {
                 lastError = error
                 log("Direct download attempt $attempt/$MAX_DIRECT_DOWNLOAD_ATTEMPTS failed: ${error.message}")

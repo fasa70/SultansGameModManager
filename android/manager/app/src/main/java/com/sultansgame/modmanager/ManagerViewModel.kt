@@ -43,6 +43,7 @@ import com.sultansgame.modmanager.platform.workshop.WorkshopDownloadScheduler
 import com.sultansgame.modmanager.platform.workshop.WorkshopTaskStore
 import com.sultansgame.modmanager.workshop.SteamPublicWorkshopProvider
 import com.sultansgame.modmanager.workshop.WorkshopLookupResult
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -145,7 +146,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             taskStore.ready.collect { ready ->
                 if (!ready) return@collect
-                taskStore.tasks.value
+                taskStore.recoverInterruptedTasks()
                     .filter { it.stage in DOWNLOAD_STAGES_TO_RESCHEDULE && !it.pauseRequested }
                     .forEach(downloadScheduler::enqueue)
             }
@@ -391,86 +392,85 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             totalBytes = item.declaredSizeBytes,
         )
         viewModelScope.launch {
-            taskStore.upsert(task)
-            downloadScheduler.enqueue(task)
+            if (!taskStore.create(task)) {
+                mutableState.value = mutableState.value.copy(feedback = FeedbackMessage("下载任务创建失败，请重试。", isError = true))
+                return@launch
+            }
+            downloadScheduler.enqueue(requireNotNull(taskStore.getPersisted(task.id)))
+            mutableState.value = mutableState.value.copy(feedback = FeedbackMessage("已将 ${item.title} 加入下载队列。"))
         }
-        mutableState.value = mutableState.value.copy(feedback = FeedbackMessage("已将 ${item.title} 加入下载队列。"))
     }
 
     fun retryWorkshopDownload(taskId: String) {
-        val task = taskStore.get(taskId) ?: return
-        val queued = task.copy(
-            stage = DownloadStage.Queued,
-            failure = null,
-            pauseRequested = false,
-            updatedAtEpochMillis = System.currentTimeMillis(),
-        )
         viewModelScope.launch {
-            taskStore.upsert(queued)
-            downloadScheduler.enqueue(queued)
+            taskStore.requestRetry(taskId)?.let(downloadScheduler::enqueue)
         }
     }
 
     fun pauseWorkshopDownload(taskId: String) {
-        if (taskStore.get(taskId) == null) return
-        downloadScheduler.cancel(taskId)
         viewModelScope.launch {
-            taskStore.forceState(taskId, DownloadStage.Paused, pauseRequested = true)
+            if (taskStore.requestPause(taskId)) {
+                downloadScheduler.cancel(taskId)
+            }
         }
     }
 
     fun resumeWorkshopDownload(taskId: String) {
-        val task = taskStore.get(taskId) ?: return
-        val resumed = task.copy(
-            stage = DownloadStage.Queued,
-            failure = null,
-            pauseRequested = false,
-            updatedAtEpochMillis = System.currentTimeMillis(),
-        )
         viewModelScope.launch {
-            taskStore.upsert(resumed)
-            downloadScheduler.enqueue(resumed)
+            taskStore.requestRetry(taskId)?.let(downloadScheduler::enqueue)
         }
     }
 
     fun cancelWorkshopDownload(taskId: String) {
-        if (taskStore.get(taskId) == null) return
-        downloadScheduler.cancel(taskId)
         viewModelScope.launch {
-            taskStore.forceState(taskId, DownloadStage.Cancelled, failure = DownloadFailureCode.Cancelled)
+            if (taskStore.requestCancel(taskId)) {
+                downloadScheduler.cancel(taskId)
+            }
         }
     }
 
     fun confirmWorkshopImport(taskId: String) {
-        val task = taskStore.get(taskId)?.takeIf { it.stage == DownloadStage.AwaitingImportConfirmation } ?: return
         viewModelScope.launch {
-            taskStore.forceState(taskId, DownloadStage.Importing)
-            runCatching { withContext(Dispatchers.IO) { artifactImporter.importConfirmed(task) } }
-                .onSuccess { cached ->
-                    taskStore.forceState(taskId, DownloadStage.Imported)
+            val pendingTask = taskStore.getPersisted(taskId) ?: return@launch
+            try {
+                withContext(Dispatchers.IO) { artifactImporter.verifyPendingArtifact(pendingTask) }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                taskStore.invalidateArtifact(taskId)
+                mutableState.value = mutableState.value.copy(
+                    feedback = FeedbackMessage("下载内容校验失败：${error.message ?: "必须重新下载"}", isError = true),
+                )
+                return@launch
+            }
+
+            val task = taskStore.beginImport(taskId) ?: return@launch
+            try {
+                val cached = withContext(Dispatchers.IO) { artifactImporter.importConfirmed(task) }
+                if (taskStore.finishImport(taskId)) {
+                    val cachedMods = (mutableState.value.cachedMods + cached).distinctBy { it.cacheKey }
                     mutableState.value = mutableState.value.copy(
-                        cachedMods = (mutableState.value.cachedMods + cached).distinctBy { it.cacheKey },
+                        cachedMods = cachedMods,
+                        deploymentPlan = deploymentPlan.entries(cachedMods),
                         feedback = FeedbackMessage("已安全缓存 ${cached.displayName}；尚未同步到游戏。"),
                     )
                 }
-                .onFailure { error ->
-                    taskStore.forceState(
-                        taskId,
-                        DownloadStage.AwaitingImportConfirmation,
-                        failure = DownloadFailureCode.ImportFailed,
-                    )
-                    mutableState.value = mutableState.value.copy(
-                        feedback = FeedbackMessage("下载内容未能导入：${error.message ?: "无法验证内容"}", isError = true),
-                    )
-                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                taskStore.failImport(taskId)
+                mutableState.value = mutableState.value.copy(
+                    feedback = FeedbackMessage("下载内容未能导入：${error.message ?: "无法验证内容"}", isError = true),
+                )
+            }
         }
     }
 
     fun discardWorkshopArtifact(taskId: String) {
-        val task = taskStore.get(taskId) ?: return
         viewModelScope.launch {
-            artifactImporter.discard(task)
-            taskStore.forceState(taskId, DownloadStage.Cancelled, failure = DownloadFailureCode.Cancelled)
+            val task = taskStore.getPersisted(taskId) ?: return@launch
+            if (task.stage != DownloadStage.AwaitingImportConfirmation || !taskStore.requestCancel(taskId)) return@launch
+            withContext(Dispatchers.IO) { artifactImporter.discard(task) }
         }
     }
 

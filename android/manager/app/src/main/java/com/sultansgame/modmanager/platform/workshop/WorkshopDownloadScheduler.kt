@@ -16,7 +16,12 @@ class WorkshopDownloadScheduler(context: Context) {
 
     fun enqueue(task: DownloadTask) {
         val request = OneTimeWorkRequestBuilder<WorkshopDownloadWorker>()
-            .setInputData(workDataOf(WorkshopDownloadWorker.KEY_TASK_ID to task.id))
+            .setInputData(
+                workDataOf(
+                    WorkshopDownloadWorker.KEY_TASK_ID to task.id,
+                    WorkshopDownloadWorker.KEY_ATTEMPT_GENERATION to task.attemptGeneration,
+                ),
+            )
             .setConstraints(
                 Constraints.Builder()
                     .setRequiredNetworkType(NetworkType.CONNECTED)

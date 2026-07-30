@@ -7,6 +7,7 @@ import com.sultansgame.modmanager.model.DownloadFailureCode
 import com.sultansgame.modmanager.model.DownloadStage
 import com.sultansgame.modmanager.model.SULTANS_GAME_APP_ID
 import com.sultansgame.modmanager.platform.auth.SteamCmAuthProvider
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.takeWhile
 import top.apricityx.workshop.steam.protocol.OkHttpSteamCmSession
@@ -22,18 +23,49 @@ class WorkshopDownloadWorker(
 ) : CoroutineWorker(context, parameters) {
     override suspend fun doWork(): Result {
         val taskId = inputData.getString(KEY_TASK_ID) ?: return Result.failure()
+        val attemptGeneration = inputData.getLong(KEY_ATTEMPT_GENERATION, INVALID_ATTEMPT_GENERATION)
+        if (attemptGeneration < 1L) return Result.failure()
+
         val store = WorkshopTaskStore(applicationContext)
+        return try {
+            runDownload(store, taskId, attemptGeneration)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Throwable) {
+            store.updateActiveState(
+                id = taskId,
+                attemptGeneration = attemptGeneration,
+                stage = DownloadStage.Failed,
+                failure = DownloadFailureCode.Network,
+            )
+            Result.failure()
+        }
+    }
+
+    private suspend fun runDownload(
+        store: WorkshopTaskStore,
+        taskId: String,
+        attemptGeneration: Long,
+    ): Result {
         val task = store.getPersisted(taskId) ?: return Result.success()
-        if (task.pauseRequested) {
-            store.forceState(taskId, DownloadStage.Paused, pauseRequested = true)
+        if (
+            task.attemptGeneration != attemptGeneration ||
+            task.appId != SULTANS_GAME_APP_ID ||
+            task.stage !in RUNNABLE_STAGES ||
+            task.pauseRequested
+        ) {
             return Result.success()
         }
-        if (task.appId != SULTANS_GAME_APP_ID || task.stage in terminalStages) return Result.success()
 
         val auth = SteamCmAuthProvider(applicationContext)
         val account = auth.activeSession()
         if (task.accessMode == com.sultansgame.modmanager.model.WorkshopAccessMode.Account && account == null) {
-            store.forceState(taskId, DownloadStage.NeedsLogin, failure = DownloadFailureCode.LoginRequired)
+            store.updateActiveState(
+                taskId,
+                attemptGeneration,
+                DownloadStage.NeedsLogin,
+                DownloadFailureCode.LoginRequired,
+            )
             return Result.failure()
         }
         if (
@@ -41,20 +73,32 @@ class WorkshopDownloadWorker(
             task.boundAccountHash != null &&
             task.boundAccountHash != accountHash(account!!)
         ) {
-            store.forceState(taskId, DownloadStage.NeedsLogin, failure = DownloadFailureCode.LoginRequired)
+            store.updateActiveState(
+                taskId,
+                attemptGeneration,
+                DownloadStage.NeedsLogin,
+                DownloadFailureCode.LoginRequired,
+            )
             return Result.failure()
         }
 
         val root = File(applicationContext.filesDir, "workshop-staging/$taskId")
         if (!root.mkdirs() && !root.isDirectory) {
-            store.forceState(taskId, DownloadStage.Failed, failure = DownloadFailureCode.Network)
-            return Result.retry()
+            store.updateActiveState(
+                taskId,
+                attemptGeneration,
+                DownloadStage.Failed,
+                DownloadFailureCode.Network,
+            )
+            return Result.failure()
         }
 
-        store.updateActiveState(taskId, DownloadStage.ResolvingMetadata)
+        if (!store.updateActiveState(taskId, attemptGeneration, DownloadStage.ResolvingMetadata)) {
+            return Result.success()
+        }
+
         val engine = createEngine(account)
         var failed = false
-        var paused = false
         engine.download(
             WorkshopDownloadRequest(
                 appId = SULTANS_GAME_APP_ID,
@@ -62,12 +106,11 @@ class WorkshopDownloadWorker(
                 outputDir = root,
             ),
         ).takeWhile {
-            val shouldPause = store.getPersisted(taskId)?.pauseRequested == true
-            if (shouldPause) {
-                paused = true
-                store.forceState(taskId, DownloadStage.Paused, pauseRequested = true)
-            }
-            !shouldPause
+            store.getPersisted(taskId)?.let {
+                it.attemptGeneration == attemptGeneration &&
+                    it.stage in RUNNABLE_STAGES &&
+                    !it.pauseRequested
+            } == true
         }.collect { event ->
             when (event) {
                 is DownloadEvent.StateChanged -> {
@@ -75,36 +118,48 @@ class WorkshopDownloadWorker(
                         top.apricityx.workshop.workshop.DownloadState.Resolving -> DownloadStage.ResolvingMetadata
                         top.apricityx.workshop.workshop.DownloadState.Connecting,
                         top.apricityx.workshop.workshop.DownloadState.Downloading -> DownloadStage.Downloading
-                        top.apricityx.workshop.workshop.DownloadState.Paused -> DownloadStage.Paused
+                        top.apricityx.workshop.workshop.DownloadState.Paused -> null
                         top.apricityx.workshop.workshop.DownloadState.Success -> DownloadStage.Verifying
-                        top.apricityx.workshop.workshop.DownloadState.Failed -> DownloadStage.Failed
+                        top.apricityx.workshop.workshop.DownloadState.Failed -> null
                         top.apricityx.workshop.workshop.DownloadState.Idle -> null
                     }
-                    if (stage != null) store.updateActiveState(taskId, stage)
+                    if (stage != null) {
+                        val updated = store.updateActiveState(taskId, attemptGeneration, stage)
+                        if (!updated) return@collect
+                    }
                 }
-                is DownloadEvent.Progress -> store.updateActiveProgress(
-                    id = taskId,
-                    stage = DownloadStage.Downloading,
-                    downloadedBytes = event.writtenBytes,
-                    totalBytes = event.totalBytes,
-                )
+                is DownloadEvent.Progress -> {
+                    store.updateActiveProgress(
+                        id = taskId,
+                        attemptGeneration = attemptGeneration,
+                        stage = DownloadStage.Downloading,
+                        downloadedBytes = event.writtenBytes,
+                        totalBytes = event.totalBytes,
+                    )
+                }
                 is DownloadEvent.Completed -> {
-                    val digest = directoryDigest(root)
-                    store.completeDownload(taskId, digest, event.files.size)
+                    val summary = WorkshopStagingArtifact.summarize(root)
+                    store.completeDownload(
+                        taskId,
+                        attemptGeneration,
+                        summary.sha256,
+                        summary.fileCount,
+                    )
                 }
                 is DownloadEvent.Failed -> {
                     failed = true
-                    store.updateActiveState(taskId, DownloadStage.Failed, failureFor(event.message))
+                    store.updateActiveState(
+                        taskId,
+                        attemptGeneration,
+                        DownloadStage.Failed,
+                        failureFor(event.failure),
+                    )
                 }
                 is DownloadEvent.FileCompleted,
                 is DownloadEvent.LogAppended -> Unit
             }
         }
-        return when {
-            paused -> Result.success()
-            failed -> Result.failure()
-            else -> Result.success()
-        }
+        return if (failed) Result.failure() else Result.success()
     }
 
     private fun createEngine(account: top.apricityx.workshop.steam.protocol.SteamAccountSession?): WorkshopDownloadEngine =
@@ -120,38 +175,27 @@ class WorkshopDownloadWorker(
             .digest(account.steamId.toString().toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it) }
 
-    private fun failureFor(message: String): DownloadFailureCode = when {
-        message.contains("consumer app", ignoreCase = true) ||
-            message.contains("result=", ignoreCase = true) ||
-            message.contains("metadata", ignoreCase = true) -> DownloadFailureCode.MetadataUnavailable
-        message.contains("file_url", ignoreCase = true) ||
-            message.contains("manifest", ignoreCase = true) ||
-            message.contains("unavailable", ignoreCase = true) -> DownloadFailureCode.NotOwnedOrUnavailable
-        message.contains("size", ignoreCase = true) -> DownloadFailureCode.SizeMismatch
-        message.contains("checksum", ignoreCase = true) ||
-            message.contains("integrity", ignoreCase = true) -> DownloadFailureCode.ChecksumMismatch
-        message.contains("http", ignoreCase = true) -> DownloadFailureCode.HttpFailure
-        else -> DownloadFailureCode.Network
-    }
-
-    private fun directoryDigest(root: File): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        root.walkTopDown().filter(File::isFile).sortedBy { it.relativeTo(root).path }.forEach { file ->
-            digest.update(file.relativeTo(root).invariantSeparatorsPath.toByteArray())
-            file.inputStream().buffered().use { input ->
-                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                while (true) {
-                    val count = input.read(buffer)
-                    if (count < 0) break
-                    digest.update(buffer, 0, count)
-                }
-            }
-        }
-        return digest.digest().joinToString("") { "%02x".format(it) }
+    private fun failureFor(failure: top.apricityx.workshop.workshop.DownloadFailure): DownloadFailureCode = when (failure) {
+        top.apricityx.workshop.workshop.DownloadFailure.MetadataUnavailable -> DownloadFailureCode.MetadataUnavailable
+        top.apricityx.workshop.workshop.DownloadFailure.NotOwnedOrUnavailable -> DownloadFailureCode.NotOwnedOrUnavailable
+        top.apricityx.workshop.workshop.DownloadFailure.UnsafeOrInvalidContent -> DownloadFailureCode.InvalidArtifact
+        top.apricityx.workshop.workshop.DownloadFailure.ResponseTooLarge -> DownloadFailureCode.ResponseTooLarge
+        top.apricityx.workshop.workshop.DownloadFailure.SizeMismatch -> DownloadFailureCode.SizeMismatch
+        top.apricityx.workshop.workshop.DownloadFailure.ChecksumMismatch -> DownloadFailureCode.ChecksumMismatch
+        is top.apricityx.workshop.workshop.DownloadFailure.HttpFailure -> DownloadFailureCode.HttpFailure
+        top.apricityx.workshop.workshop.DownloadFailure.Network -> DownloadFailureCode.Network
     }
 
     companion object {
         const val KEY_TASK_ID = "task-id"
-        private val terminalStages = setOf(DownloadStage.Imported, DownloadStage.Cancelled)
+        const val KEY_ATTEMPT_GENERATION = "attempt-generation"
+        private const val INVALID_ATTEMPT_GENERATION = -1L
+        private val RUNNABLE_STAGES = setOf(
+            DownloadStage.Queued,
+            DownloadStage.ResolvingMetadata,
+            DownloadStage.AwaitingPublicUrl,
+            DownloadStage.Downloading,
+            DownloadStage.Verifying,
+        )
     }
 }

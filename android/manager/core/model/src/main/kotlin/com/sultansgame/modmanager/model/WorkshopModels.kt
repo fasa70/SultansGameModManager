@@ -57,17 +57,21 @@ data class WorkshopBrowseQuery(
     val page: Int = 1,
     val pageSize: Int = DEFAULT_PAGE_SIZE,
 ) {
-    fun normalized(): WorkshopBrowseQuery = copy(
-        sectionKey = sectionKey.trim().ifBlank { SECTION_ITEMS },
-        sortKey = sortKey.trim().ifBlank { SORT_TREND },
-        searchText = searchText.trim(),
-        requiredTags = requiredTags.map(String::trim).filter(String::isNotBlank).toSortedSet(),
-        excludedTags = excludedTags.map(String::trim).filter(String::isNotBlank).toSortedSet(),
-        createdDateRange = createdDateRange.normalized(),
-        updatedDateRange = updatedDateRange.normalized(),
-        page = page.coerceAtLeast(1),
-        pageSize = normalizePageSize(pageSize),
-    )
+    fun normalized(): WorkshopBrowseQuery {
+        val normalizedRequired = requiredTags.map(String::trim).filter(String::isNotBlank).toSortedSet()
+        val normalizedExcluded = excludedTags.map(String::trim).filter(String::isNotBlank).toSortedSet() - normalizedRequired
+        return copy(
+            sectionKey = sectionKey.trim().ifBlank { SECTION_ITEMS },
+            sortKey = sortKey.trim().ifBlank { SORT_TREND },
+            searchText = searchText.trim(),
+            requiredTags = normalizedRequired,
+            excludedTags = normalizedExcluded,
+            createdDateRange = createdDateRange.normalized(),
+            updatedDateRange = updatedDateRange.normalized(),
+            page = page.coerceAtLeast(1),
+            pageSize = normalizePageSize(pageSize),
+        )
+    }
 
     companion object {
         const val DEFAULT_PAGE_SIZE = 9
@@ -183,6 +187,7 @@ data class DownloadTask(
     val rawArtifactDigestSha256: String? = null,
     val completedFileCount: Int = 0,
     val pauseRequested: Boolean = false,
+    val attemptGeneration: Long = 1L,
     val createdAtEpochMillis: Long = System.currentTimeMillis(),
     val updatedAtEpochMillis: Long = System.currentTimeMillis(),
 )
