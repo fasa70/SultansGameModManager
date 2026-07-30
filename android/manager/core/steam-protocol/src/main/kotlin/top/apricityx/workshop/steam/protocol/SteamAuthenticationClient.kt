@@ -86,7 +86,10 @@ class SteamAuthenticationClient(
         } catch (error: Throwable) {
             debugLogger.log("Protocol: credential auth failed ${error::class.java.simpleName}: ${error.message.orEmpty()}")
             session.close()
-            throw error.asAuthenticationException("Steam 登录失败")
+            throw error.asAuthenticationException(
+                prefix = "Steam 登录失败",
+                operation = SteamAuthenticationOperation.BeginSession,
+            )
         }
     }
 
@@ -127,7 +130,10 @@ class SteamAuthenticationClient(
                 )
             } catch (error: Throwable) {
                 debugLogger.log("Protocol: GenerateAccessTokenForApp failed ${error::class.java.simpleName}: ${error.message.orEmpty()}")
-                throw error.asAuthenticationException("生成 Steam Web Token 失败")
+                throw error.asAuthenticationException(
+                    prefix = "生成 Steam Web Token 失败",
+                    operation = SteamAuthenticationOperation.BeginSession,
+                )
             }
         }
     }
@@ -156,7 +162,10 @@ class SteamAuthenticationClient(
                 debugLogger.log("Protocol: refresh token revoked successfully.")
             } catch (error: Throwable) {
                 debugLogger.log("Protocol: RevokeRefreshToken failed ${error::class.java.simpleName}: ${error.message.orEmpty()}")
-                throw error.asAuthenticationException("撤销 Steam Refresh Token 失败")
+                throw error.asAuthenticationException(
+                    prefix = "撤销 Steam Refresh Token 失败",
+                    operation = SteamAuthenticationOperation.BeginSession,
+                )
             }
         }
     }
@@ -186,11 +195,15 @@ class SteamCredentialAuthSession internal constructor(
                     .setCodeType(type.toProto())
                     .build(),
                 parser = CAuthentication_UpdateAuthSessionWithSteamGuardCode_Response.parser(),
+                replayPolicy = SteamServiceMethodReplayPolicy.NeverReplay,
             )
             debugLogger.log("Protocol: Steam Guard code accepted by service.")
         } catch (error: Throwable) {
             debugLogger.log("Protocol: UpdateAuthSessionWithSteamGuardCode failed ${error::class.java.simpleName}: ${error.message.orEmpty()}")
-            throw error.asAuthenticationException("提交 Steam Guard 验证码失败")
+            throw error.asAuthenticationException(
+                prefix = "提交 Steam Guard 验证码失败",
+                operation = SteamAuthenticationOperation.SubmitGuardCode,
+            )
         }
     }
 
@@ -221,7 +234,10 @@ class SteamCredentialAuthSession internal constructor(
             )
         } catch (error: Throwable) {
             debugLogger.log("Protocol: PollAuthSessionStatus failed ${error::class.java.simpleName}: ${error.message.orEmpty()}")
-            throw error.asAuthenticationException("轮询 Steam 登录状态失败")
+            throw error.asAuthenticationException(
+                prefix = "轮询 Steam 登录状态失败",
+                operation = SteamAuthenticationOperation.PollStatus,
+            )
         }
     }
 
@@ -371,9 +387,19 @@ internal fun buildBeginAuthSessionRequest(
     return builder.build()
 }
 
-private fun Throwable.asAuthenticationException(prefix: String): SteamAuthenticationException =
+private fun Throwable.asAuthenticationException(
+    prefix: String,
+    operation: SteamAuthenticationOperation,
+): SteamAuthenticationException =
     when (this) {
         is SteamAuthenticationException -> this
+        is SteamRequestDeliveryUncertainException -> SteamAuthenticationException(
+            resultCode = 2,
+            message = "$prefix：请求可能已送达 Steam，正在确认登录结果。",
+            cause = this,
+            operation = operation,
+            deliveryUncertain = true,
+        )
         is SteamServiceMethodException -> SteamAuthenticationException(
             resultCode = resultCode,
             message = buildSteamAuthenticationErrorMessage(
@@ -382,11 +408,12 @@ private fun Throwable.asAuthenticationException(prefix: String): SteamAuthentica
                 detail = steamMessage,
             ),
             cause = this,
+            operation = operation,
         )
-
         else -> SteamAuthenticationException(
             resultCode = 2,
             message = listOfNotNull(prefix, message).joinToString(": "),
             cause = this,
+            operation = operation,
         )
     }

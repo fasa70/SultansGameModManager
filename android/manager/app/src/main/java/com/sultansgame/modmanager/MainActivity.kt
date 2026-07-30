@@ -163,6 +163,7 @@ class MainActivity : ComponentActivity() {
                     onLookupWorkshop = viewModel::lookupWorkshop,
                     onBeginSteamLogin = viewModel::beginSteamLogin,
                     onSubmitSteamGuard = viewModel::submitSteamGuard,
+                    onCheckPendingSteamLogin = viewModel::checkPendingSteamLogin,
                     onLogoutSteam = viewModel::logoutSteam,
                     onBrowseWorkshop = viewModel::browseWorkshop,
                     onQueueWorkshopDownload = viewModel::queueWorkshopDownload,
@@ -218,6 +219,7 @@ private fun ManagerApp(
     onLookupWorkshop: (String) -> Unit,
     onBeginSteamLogin: (String, String, Boolean) -> Unit,
     onSubmitSteamGuard: (String) -> Unit,
+    onCheckPendingSteamLogin: () -> Unit,
     onLogoutSteam: () -> Unit,
     onBrowseWorkshop: (com.sultansgame.modmanager.model.WorkshopBrowseQuery) -> Unit,
     onQueueWorkshopDownload: (com.sultansgame.modmanager.model.WorkshopItem) -> Unit,
@@ -264,6 +266,7 @@ private fun ManagerApp(
                     onLookupWorkshop = onLookupWorkshop,
                     onBeginSteamLogin = onBeginSteamLogin,
                     onSubmitSteamGuard = onSubmitSteamGuard,
+                    onCheckPendingSteamLogin = onCheckPendingSteamLogin,
                     onLogoutSteam = onLogoutSteam,
                     onBrowseWorkshop = onBrowseWorkshop,
                     onQueueWorkshopDownload = onQueueWorkshopDownload,
@@ -305,6 +308,7 @@ private fun ManagerApp(
                     onLookupWorkshop = onLookupWorkshop,
                     onBeginSteamLogin = onBeginSteamLogin,
                     onSubmitSteamGuard = onSubmitSteamGuard,
+                    onCheckPendingSteamLogin = onCheckPendingSteamLogin,
                     onLogoutSteam = onLogoutSteam,
                     onBrowseWorkshop = onBrowseWorkshop,
                     onQueueWorkshopDownload = onQueueWorkshopDownload,
@@ -494,6 +498,7 @@ private fun ContentArea(
     onLookupWorkshop: (String) -> Unit,
     onBeginSteamLogin: (String, String, Boolean) -> Unit,
     onSubmitSteamGuard: (String) -> Unit,
+    onCheckPendingSteamLogin: () -> Unit,
     onLogoutSteam: () -> Unit,
     onBrowseWorkshop: (com.sultansgame.modmanager.model.WorkshopBrowseQuery) -> Unit,
     onQueueWorkshopDownload: (com.sultansgame.modmanager.model.WorkshopItem) -> Unit,
@@ -540,6 +545,7 @@ private fun ContentArea(
                 onLookup = onLookupWorkshop,
                 onBeginSteamLogin = onBeginSteamLogin,
                 onSubmitSteamGuard = onSubmitSteamGuard,
+                onCheckPendingSteamLogin = onCheckPendingSteamLogin,
                 onLogoutSteam = onLogoutSteam,
                 onBrowse = onBrowseWorkshop,
                 onQueueDownload = onQueueWorkshopDownload,
@@ -673,6 +679,7 @@ private fun WorkshopNavigation(
     onLookup: (String) -> Unit,
     onBeginSteamLogin: (String, String, Boolean) -> Unit,
     onSubmitSteamGuard: (String) -> Unit,
+    onCheckPendingSteamLogin: () -> Unit,
     onLogoutSteam: () -> Unit,
     onBrowse: (com.sultansgame.modmanager.model.WorkshopBrowseQuery) -> Unit,
     onQueueDownload: (com.sultansgame.modmanager.model.WorkshopItem) -> Unit,
@@ -695,6 +702,7 @@ private fun WorkshopNavigation(
                 },
                 onBeginSteamLogin = onBeginSteamLogin,
                 onSubmitSteamGuard = onSubmitSteamGuard,
+                onCheckPendingSteamLogin = onCheckPendingSteamLogin,
                 onLogoutSteam = onLogoutSteam,
                 onBrowse = onBrowse,
                 onOpenQueue = { navController.navigate("queue") },
@@ -892,6 +900,7 @@ private fun WorkshopScreen(
     onLookup: (String) -> Unit,
     onBeginSteamLogin: (String, String, Boolean) -> Unit,
     onSubmitSteamGuard: (String) -> Unit,
+    onCheckPendingSteamLogin: () -> Unit,
     onLogoutSteam: () -> Unit,
     onBrowse: (com.sultansgame.modmanager.model.WorkshopBrowseQuery) -> Unit,
     onOpenQueue: () -> Unit,
@@ -1026,7 +1035,9 @@ private fun WorkshopScreen(
     }
 
     if (showSteamLogin) {
-        Dialog(onDismissRequest = { if (state.steamAuthState !is com.sultansgame.modmanager.model.SteamAuthState.SigningIn) showSteamLogin = false }) {
+        val authBusy = state.steamAuthState is com.sultansgame.modmanager.model.SteamAuthState.SigningIn ||
+            state.steamAuthState is com.sultansgame.modmanager.model.SteamAuthState.VerifyingSteamGuard
+        Dialog(onDismissRequest = { if (!authBusy) showSteamLogin = false }) {
             Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(22.dp)) {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     when (val auth = state.steamAuthState) {
@@ -1037,9 +1048,17 @@ private fun WorkshopScreen(
                         }
                         is com.sultansgame.modmanager.model.SteamAuthState.SteamGuardRequired -> {
                             Text("需要 ${auth.challenge}", fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                            Text("输入验证码后可重试；若 Steam 要求在 App 中批准登录，请改用可输入的 Guard 或邮箱验证码。", fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                            Text("输入验证码后提交。仅在 Steam 明确报告验证码错误时才重新输入；不要重复提交同一验证码。", fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                             WorkshopTextField(guardCode, { guardCode = it }, "验证码")
                             PrimaryButton("提交验证码", guardCode.isNotBlank()) { onSubmitSteamGuard(guardCode); guardCode = "" }
+                        }
+                        is com.sultansgame.modmanager.model.SteamAuthState.VerifyingSteamGuard -> LoadingPanel(
+                            "正在提交 ${auth.challenge} 并确认 Steam 登录，请勿重复提交…",
+                        )
+                        is com.sultansgame.modmanager.model.SteamAuthState.SteamAuthStatusUnknown -> {
+                            Text("正在等待 Steam 确认", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                            Text("Steam 可能已收到 ${auth.challenge}。请继续检查登录状态，不要再次提交验证码。", fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                            PrimaryButton("继续检查登录状态", onClick = onCheckPendingSteamLogin)
                         }
                         com.sultansgame.modmanager.model.SteamAuthState.SigningIn -> LoadingPanel("正在连接 Steam…")
                         else -> {
@@ -1067,7 +1086,7 @@ private fun WorkshopScreen(
                             }
                         }
                     }
-                    if (state.steamAuthState !is com.sultansgame.modmanager.model.SteamAuthState.SigningIn) {
+                    if (!authBusy) {
                         Text("关闭", modifier = Modifier.fillMaxWidth().clickable { showSteamLogin = false }.padding(8.dp), fontSize = 13.sp)
                     }
                 }

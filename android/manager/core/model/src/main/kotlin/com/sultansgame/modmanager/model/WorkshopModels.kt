@@ -197,6 +197,8 @@ sealed interface SteamAuthState {
     data object SigningIn : SteamAuthState
     data class SignedIn(val accountName: String, val steamId: Long) : SteamAuthState
     data class SteamGuardRequired(val challenge: String) : SteamAuthState
+    data class VerifyingSteamGuard(val challenge: String) : SteamAuthState
+    data class SteamAuthStatusUnknown(val challenge: String) : SteamAuthState
     data class AwaitingConfirmation(val challenge: String) : SteamAuthState
     data object AuthenticationUnavailable : SteamAuthState
 }

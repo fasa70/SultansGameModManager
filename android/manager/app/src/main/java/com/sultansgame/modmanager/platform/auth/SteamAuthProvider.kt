@@ -14,6 +14,7 @@ interface SteamAuthProvider {
     fun observeState(): Flow<SteamAuthState>
     suspend fun beginLogin(credentials: SteamCredentials): SteamAuthResult
     suspend fun submitSteamGuard(code: String): SteamAuthResult
+    suspend fun checkPendingLogin(): SteamAuthResult
     suspend fun logout(): SteamAuthResult
 }
 
@@ -32,6 +33,8 @@ class UnavailableSteamAuthProvider : SteamAuthProvider {
     override suspend fun beginLogin(credentials: SteamCredentials): SteamAuthResult = unavailable()
 
     override suspend fun submitSteamGuard(code: String): SteamAuthResult = unavailable()
+
+    override suspend fun checkPendingLogin(): SteamAuthResult = unavailable()
 
     override suspend fun logout(): SteamAuthResult = SteamAuthResult.Cleared
 

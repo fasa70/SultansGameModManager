@@ -132,7 +132,28 @@ class SteamAuthenticationException(
     val resultCode: Int,
     message: String,
     cause: Throwable? = null,
+    val operation: SteamAuthenticationOperation? = null,
+    val deliveryUncertain: Boolean = false,
 ) : SteamProtocolException(message, cause)
+
+enum class SteamAuthenticationOperation {
+    BeginSession,
+    SubmitGuardCode,
+    PollStatus,
+}
+
+enum class SteamServiceMethodReplayPolicy {
+    RetryRecoverable,
+    NeverReplay,
+}
+
+class SteamRequestDeliveryUncertainException(
+    val methodName: String,
+    cause: Throwable,
+) : SteamProtocolException(
+    "Steam service request delivery is uncertain: $methodName",
+    cause,
+)
 
 internal fun buildSteamAuthenticationErrorMessage(
     prefix: String,
@@ -157,6 +178,7 @@ internal fun buildSteamAuthenticationErrorMessage(
 
 internal fun steamAuthenticationResultDescription(resultCode: Int): String? =
     when (resultCode) {
+        29 -> "Steam 已收到相同认证请求，正在确认登录结果"
         5 -> "账号名或密码错误"
         8 -> "Steam 拒绝了当前认证请求参数"
         15 -> "Steam 拒绝了这次认证请求"
@@ -183,6 +205,7 @@ interface SteamCmSession : Closeable {
         methodName: String,
         request: com.google.protobuf.MessageLite,
         parser: com.google.protobuf.Parser<T>,
+        replayPolicy: SteamServiceMethodReplayPolicy = SteamServiceMethodReplayPolicy.RetryRecoverable,
     ): T
     suspend fun requestDepotDecryptionKey(appId: UInt, depotId: UInt): ByteArray
 
