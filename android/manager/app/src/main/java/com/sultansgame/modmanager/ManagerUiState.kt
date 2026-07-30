@@ -26,8 +26,14 @@ data class ManagerUiState(
     val steamAuthState: SteamAuthState = SteamAuthState.SignedOut,
     val deviceSigningKeyState: DeviceSigningKeyState? = null,
     val patch: PatchUiState = PatchUiState.ChooseSource,
+    val preparedPatchRecovery: PreparedPatchRecovery? = null,
     val noticeAccepted: Boolean? = null,
     val feedback: FeedbackMessage? = null,
+)
+
+data class PreparedPatchRecovery(
+    val transactionId: String,
+    val summary: String,
 )
 
 data class PatchInputUiModel(

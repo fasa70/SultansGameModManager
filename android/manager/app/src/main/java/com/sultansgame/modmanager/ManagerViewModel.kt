@@ -119,13 +119,18 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     init {
         privateModCache.recoverInterruptedImports()
         val cachedMods = privateModCache.listCached()
-        val pendingPatch = transactions.latestResumable()
+        val pendingPatch = transactions.latestPreparedForRecovery()
         mutableState.value = mutableState.value.copy(
             cachedMods = cachedMods,
             deploymentPlan = deploymentPlan.entries(cachedMods),
             downloadTasks = taskStore.tasks.value,
             deviceSigningKeyState = deviceSigningKeyStore.state(),
-            patch = pendingPatch?.let(::restorePatchUiState) ?: PatchUiState.ChooseSource,
+            preparedPatchRecovery = pendingPatch?.let { transaction ->
+                PreparedPatchRecovery(
+                    transactionId = transaction.id,
+                    summary = "发现已准备的修补 APK；继续前会校验工件和设备签名身份。",
+                )
+            },
         )
         refreshGame()
         refreshGameModStorage()
@@ -511,6 +516,19 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         mutableState.value = mutableState.value.copy(patch = PatchUiState.ChooseSource)
     }
 
+    fun resumePreparedPatch(transactionId: String) {
+        val recovery = mutableState.value.preparedPatchRecovery ?: return
+        if (recovery.transactionId != transactionId || mutableState.value.patch !is PatchUiState.ChooseSource) return
+        viewModelScope.launch {
+            mutableState.value = mutableState.value.copy(patch = PatchUiState.Importing("正在验证已准备的修补 APK…"))
+            val result = withContext(Dispatchers.IO) { orchestrator.resumePreparedArtifacts(transactionId) }
+            applyOrchestrationResult(result, null, null)
+            if (result is PatchOrchestrationResult.Failed) {
+                mutableState.value = mutableState.value.copy(preparedPatchRecovery = null)
+            }
+        }
+    }
+
     fun preparePatchArtifacts() {
         val review = mutableState.value.patch as? PatchUiState.Review ?: return
         val selected = selectedPatchInput ?: return
@@ -704,6 +722,13 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         }
         mutableState.value = mutableState.value.copy(
             patch = patch,
+            preparedPatchRecovery = when (result) {
+                is PatchOrchestrationResult.NeedsInstallPermission,
+                is PatchOrchestrationResult.NeedsGameUninstall,
+                is PatchOrchestrationResult.AwaitingSystemInstall,
+                is PatchOrchestrationResult.Completed -> null
+                else -> mutableState.value.preparedPatchRecovery
+            },
             deviceSigningKeyState = deviceSigningKeyStore.state(),
             feedback = (result as? PatchOrchestrationResult.Failed)?.let { FeedbackMessage("迁移失败：${it.reason}", isError = true) }
                 ?: mutableState.value.feedback,
