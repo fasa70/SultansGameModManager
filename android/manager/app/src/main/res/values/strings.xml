@@ -51,13 +51,13 @@
     <string name="notice_title">使用前说明</string>
     <string name="notice_intro">请在继续前确认以下事项。</string>
     <string name="notice_unofficial">本工具是独立社区工具，不隶属、未经《苏丹的游戏》权利人、发行商、Steam 或 Valve 认可。</string>
-    <string name="notice_scope">当前版本仅探测已安装游戏、管理私有 Mod 缓存、查询公开 Workshop 元数据及下载允许公开取得的原始工件。</string>
+    <string name="notice_scope">本工具可准备受支持的游戏安装、管理私有 Mod 缓存、查询创意工坊内容及下载允许取得的工件。任何会改变游戏安装或游戏内 Mod 的操作，都会在执行前要求你确认。</string>
     <string name="notice_legal">请仅处理你有权使用的游戏、Mod 和文件。本工具不提供游戏资源，不绕过 DRM、付费、地区、可见性、账号或平台限制。</string>
-    <string name="notice_risk">Mod 的安全性、兼容性、内容合法性和稳定性由其作者及使用者自行判断。未来修补功能可能改变游戏运行环境，届时应先备份存档。</string>
+    <string name="notice_risk">Mod 的安全性、兼容性、内容合法性和稳定性由其作者及使用者自行判断。准备游戏可能改变游戏运行环境，请在继续前备份重要存档。</string>
     <string name="notice_data">导入文件、Mod 元数据和下载工件保存在本应用私有目录；网络请求仅用于 Steam 公开元数据及其符合安全策略的公开下载地址。</string>
     <string name="notice_checkbox">我已阅读并理解上述使用须知</string>
     <string name="privacy_title">隐私与数据流</string>
-    <string name="privacy_body">本应用将你选择导入的 ZIP、校验后的 Mod 缓存和公开 Workshop 工件保存在应用私有目录。文件不会写入游戏目录。\n\n查询 Workshop 时，仅向 Steam 官方公开接口、受限 Steam Community 详情页及经校验的 Steam 图片/公开工件地址发起 HTTPS 请求。密码和 Steam Guard 验证码仅用于认证，不会写入本地。\n\n登录时可选择“记住登录状态”。开启后，Steam 刷新令牌会使用 Android Keystore AES-GCM 加密保存，以便重新启动后恢复登录；关闭后，令牌仅保留在当前进程，关闭或被系统终止后需重新登录，后台下载不会使用该会话。通过“退出 Steam”可删除本地保存的登录状态。\n\n你可在设置中清空私有 Mod 缓存；已下载的原始工件会保留在私有目录，直到未来提供独立清理入口。</string>
+    <string name="privacy_body">本应用将你选择导入的 ZIP、校验后的 Mod 缓存和创意工坊下载暂存保存在应用私有目录。只有你确认同步 Mod 或准备游戏后，应用才会在对应流程中修改游戏目录或游戏安装。\n\n查询创意工坊时，仅向 Steam 官方公开接口、受限 Steam Community 详情页及经校验的 Steam 图片/公开工件地址发起 HTTPS 请求。密码和 Steam Guard 验证码仅用于认证，不会写入本地。\n\n登录时可选择“记住登录状态”。开启后，Steam 刷新令牌会使用 Android Keystore AES-GCM 加密保存，以便重新启动后恢复登录；关闭后，令牌仅保留在当前进程，关闭或被系统终止后需重新登录，后台下载不会使用该会话。通过“退出 Steam”可删除本地保存的登录状态。\n\n你可在设置中清空私有 Mod 缓存；下载和修补暂存可在对应任务中单独删除。</string>
     <string name="license_title">开源许可与无担保</string>
     <string name="license_body">本项目以 GNU GPLv3 发布。软件按“原样”提供，在适用法律允许的最大范围内不提供担保。\n\n游戏名称、商标、游戏内容及 Mod 内容的权利分别归其权利人和作者所有。本应用不包含或分发游戏 APK、游戏资源或官方 Mod 内容。</string>
     <string name="clear_cache_title">清空私有 Mod 缓存？</string>
