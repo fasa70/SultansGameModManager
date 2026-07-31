@@ -1,6 +1,7 @@
 package com.sultansgame.modmanager.platform.saf
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.system.Os
 import androidx.test.core.app.ApplicationProvider
@@ -8,6 +9,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.sultansgame.modmanager.platform.storage.AndroidPrivateModCache
 import com.sultansgame.modmanager.storage.ImportValidationException
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -56,6 +58,78 @@ class ZipModImporterInstrumentedTest {
     }
 
     @Test
+    fun importsMultipleRootsAsOneBatch() {
+        val id = UUID.randomUUID().toString()
+        val archive = File(context.cacheDir, "zip-mod-multiple-$id.zip")
+        val cacheRoot = File(context.filesDir, "zip-mod-multiple-cache-$id")
+        try {
+            ZipOutputStream(archive.outputStream()).use { output ->
+                writeEntry(output, "first/Info.json", "{\"name\":\"First\"}")
+                writeEntry(output, "second/Info.json", "{\"name\":\"Second\"}")
+            }
+
+            val imported = ZipModImporter(context, AndroidPrivateModCache(cacheRoot)).importZip(archive)
+
+            assertEquals(listOf("First", "Second"), imported.map { it.displayName })
+            assertEquals(2, cacheRoot.listFiles()?.count { it.isDirectory && !it.name.startsWith('.') })
+        } finally {
+            archive.delete()
+            cacheRoot.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun rejectsInvalidBatchBeforeCreatingAnyCacheEntry() {
+        val id = UUID.randomUUID().toString()
+        val root = File(context.filesDir, "batch-source-$id")
+        val cacheRoot = File(context.filesDir, "batch-cache-$id")
+        val valid = File(root, "valid")
+        val invalid = File(root, "invalid")
+        try {
+            assertTrue(valid.mkdirs())
+            assertTrue(invalid.mkdirs())
+            File(valid, "Info.json").writeText("{\"name\":\"Valid\"}")
+            File(invalid, "Info.json").writeText("not-json")
+
+            val error = runCatching {
+                AndroidPrivateModCache(cacheRoot).importDirectories(
+                    listOf(valid, invalid),
+                    com.sultansgame.modmanager.model.CacheSource.SafArchive,
+                )
+            }.exceptionOrNull()
+
+            assertTrue(error is ImportValidationException)
+            assertFalse(cacheRoot.listFiles()?.any { it.isDirectory && !it.name.startsWith('.') } == true)
+        } finally {
+            root.deleteRecursively()
+            cacheRoot.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun acceptsOnlySingleReadableContentUriFromExternalIntent() {
+        val inbox = ExternalZipInbox(context)
+        val content = Uri.parse("content://example.mod.provider/mod.zip")
+
+        val accepted = inbox.inspect(Intent(Intent.ACTION_SEND).apply {
+            putExtra(Intent.EXTRA_STREAM, content)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        })
+        val missingGrant = inbox.inspect(Intent(Intent.ACTION_VIEW, content))
+        val fileUri = inbox.inspect(Intent(Intent.ACTION_VIEW, Uri.fromFile(File(context.cacheDir, "mod.zip"))).apply {
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        })
+
+        assertTrue(accepted is ExternalZipIntentResult.Accepted)
+        assertTrue(missingGrant is ExternalZipIntentResult.Rejected)
+        assertTrue(fileUri is ExternalZipIntentResult.Rejected)
+        assertEquals(
+            ExternalZipIntentResult.MultipleFilesNotSupported,
+            inbox.inspect(Intent(Intent.ACTION_SEND_MULTIPLE)),
+        )
+    }
+
+    @Test
     fun rejectsActualSymbolicLinkAsModRoot() {
         val id = UUID.randomUUID().toString()
         val testRoot = File(context.filesDir, "symbolic-link-mod-$id")
@@ -79,12 +153,14 @@ class ZipModImporterInstrumentedTest {
 
     private fun writeZip(archive: File) {
         ZipOutputStream(archive.outputStream()).use { output ->
-            output.putNextEntry(ZipEntry("Info.json"))
-            output.write("{\"name\":\"Private staging regression\"}".toByteArray())
-            output.closeEntry()
-            output.putNextEntry(ZipEntry("config/cards.json"))
-            output.write("{}".toByteArray())
-            output.closeEntry()
+            writeEntry(output, "Info.json", "{\"name\":\"Private staging regression\"}")
+            writeEntry(output, "config/cards.json", "{}")
         }
+    }
+
+    private fun writeEntry(output: ZipOutputStream, name: String, content: String) {
+        output.putNextEntry(ZipEntry(name))
+        output.write(content.toByteArray())
+        output.closeEntry()
     }
 }

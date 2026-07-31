@@ -144,6 +144,8 @@ data class ManagerActions(
     val clearModCache: () -> Unit,
     val acceptNotice: () -> Unit,
     val clearFeedback: () -> Unit,
+    val confirmExternalZipImport: () -> Unit,
+    val cancelExternalZipImport: () -> Unit,
 )
 
 private enum class Destination(val title: String, val caption: String) {
@@ -164,6 +166,7 @@ private sealed interface DialogKind {
     data object PatchCleanup : DialogKind
     data object XiaomiInstallRisk : DialogKind
     data class WorkshopTaskRemoval(val taskId: String) : DialogKind
+    data object ExternalZipImport : DialogKind
 }
 
 @Composable
@@ -192,6 +195,10 @@ fun ManagerApp(state: ManagerUiState, actions: ManagerActions) {
     }
     LaunchedEffect(state.gameStopSyncConfirmation) {
         if (state.gameStopSyncConfirmation != null) dialog = DialogKind.StopGameAndSync
+    }
+
+    LaunchedEffect(state.pendingExternalZip) {
+        if (state.pendingExternalZip != null) dialog = DialogKind.ExternalZipImport
     }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)) {
@@ -232,7 +239,15 @@ fun ManagerApp(state: ManagerUiState, actions: ManagerActions) {
         false -> LegalNoticeDialog(actions.acceptNotice)
         true -> Unit
     }
-    DialogHost(state, actions, dialog, onDismiss = { dialog = null })
+    DialogHost(
+        state,
+        actions,
+        dialog,
+        onDismiss = {
+            if (dialog == DialogKind.ExternalZipImport) actions.cancelExternalZipImport()
+            dialog = null
+        },
+    )
 }
 
 @Composable
@@ -866,6 +881,15 @@ private fun DialogHost(state: ManagerUiState, actions: ManagerActions, dialog: D
         is DialogKind.WorkshopTaskRemoval -> {
             val task = state.downloadTasks.firstOrNull { it.id == dialog.taskId }
             if (task != null) ConfirmDialog("删除下载任务？", "这会停止任务并删除应用内下载暂存", "删除任务", { actions.removeWorkshopDownload(task.id); onDismiss() }, onDismiss)
+        }
+        DialogKind.ExternalZipImport -> state.pendingExternalZip?.let { request ->
+            ConfirmDialog(
+                "导入外部 ZIP？",
+                "将检查 ${request.displayName} 并把通过校验的 Mod 安全缓存到应用内；不会自动修改游戏。",
+                "检查并导入",
+                { actions.confirmExternalZipImport(); onDismiss() },
+                { actions.cancelExternalZipImport(); onDismiss() },
+            )
         }
         null -> Unit
     }
