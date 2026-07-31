@@ -57,10 +57,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.util.UUID
 
@@ -70,6 +72,7 @@ sealed interface ManagerUiEvent {
     data class OpenUnknownSourcesSettings(val intent: android.content.Intent) : ManagerUiEvent
     data class ConfirmPackageInstall(val intent: android.content.Intent) : ManagerUiEvent
     data class CreateApksExport(val transactionId: String, val suggestedName: String) : ManagerUiEvent
+    data class OpenExternalUrl(val url: String) : ManagerUiEvent
 }
 
 class ManagerViewModel(application: Application) : AndroidViewModel(application) {
@@ -110,6 +113,8 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     )
     private val loaderBridge: LoaderBridge = AndroidModStorageLoaderBridge(application, File(application.filesDir, "mod-cache"))
     private val legalNotice = LegalNoticeRepository(application)
+    private val updateCheckSettings = UpdateCheckSettingsRepository(application)
+    private val updateChecker: UpdateChecker = GitHubReleaseUpdateChecker()
 
     private val mutableState = MutableStateFlow(ManagerUiState())
     val state: StateFlow<ManagerUiState> = mutableState.asStateFlow()
@@ -128,6 +133,8 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     private var workshopBrowseGeneration = 0L
     private var gameModStorageRefreshJob: Job? = null
     private var gameModStorageRefreshGeneration = 0L
+    private var updateCheckJob: Job? = null
+    private var updateCheckEnabled = false
 
     init {
         privateModCache.recoverInterruptedImports()
@@ -170,6 +177,12 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             legalNotice.isCurrentNoticeAccepted.collect { accepted ->
                 mutableState.value = mutableState.value.copy(noticeAccepted = accepted)
             }
+        }
+        viewModelScope.launch {
+            val enabled = updateCheckSettings.isAutoCheckEnabled.first()
+            updateCheckEnabled = enabled
+            mutableState.value = mutableState.value.copy(autoUpdateCheckEnabled = enabled)
+            if (enabled) checkForUpdateAtStartup()
         }
         viewModelScope.launch {
             PatchInstallResults.results.collect { intent ->
@@ -378,6 +391,47 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
 
     fun acceptLegalNotice() {
         viewModelScope.launch { legalNotice.acceptCurrentNotice() }
+    }
+
+    private fun checkForUpdateAtStartup() {
+        if (updateCheckJob?.isActive == true) return
+        updateCheckJob = viewModelScope.launch {
+            val result = withTimeoutOrNull(10_000) {
+                withContext(Dispatchers.IO) { updateChecker.check(BuildConfig.VERSION_NAME) }
+            } ?: return@launch
+            if (!updateCheckEnabled || result !is UpdateCheckResult.UpdateAvailable) return@launch
+            mutableState.value = mutableState.value.copy(availableUpdate = result.update)
+        }
+    }
+
+    fun setAutoUpdateCheckEnabled(enabled: Boolean) {
+        updateCheckEnabled = enabled
+        if (!enabled) {
+            updateCheckJob?.cancel()
+            mutableState.value = mutableState.value.copy(
+                autoUpdateCheckEnabled = false,
+                availableUpdate = null,
+            )
+        } else {
+            mutableState.value = mutableState.value.copy(autoUpdateCheckEnabled = true)
+        }
+        viewModelScope.launch { updateCheckSettings.setAutoCheckEnabled(enabled) }
+    }
+
+    fun dismissAvailableUpdate() {
+        mutableState.value = mutableState.value.copy(availableUpdate = null)
+    }
+
+    fun openAvailableUpdate() {
+        val update = mutableState.value.availableUpdate ?: return
+        if (!isAllowedReleasePageUrl(update.releaseUrl)) return
+        uiEventChannel.trySend(ManagerUiEvent.OpenExternalUrl(update.releaseUrl))
+    }
+
+    fun onExternalUrlOpenFailed() {
+        mutableState.value = mutableState.value.copy(
+            feedback = FeedbackMessage("未找到可打开下载页面的浏览器。", isError = true),
+        )
     }
 
     fun clearFeedback() {

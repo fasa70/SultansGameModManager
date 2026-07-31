@@ -34,6 +34,8 @@ data class ManagerUiState(
     val patchCleanupConfirmation: PatchCleanupUiModel? = null,
     val apksExport: ApksExportUiState = ApksExportUiState.Idle,
     val noticeAccepted: Boolean? = null,
+    val autoUpdateCheckEnabled: Boolean? = null,
+    val availableUpdate: AvailableUpdate? = null,
     val feedback: FeedbackMessage? = null,
 )
 

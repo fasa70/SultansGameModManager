@@ -60,6 +60,16 @@ class MainActivity : ComponentActivity() {
                             pendingApksExportTransactionId = event.transactionId
                             createApksDocument.launch(event.suggestedName)
                         }
+                        is ManagerUiEvent.OpenExternalUrl -> {
+                            try {
+                                startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse(event.url))
+                                        .addCategory(Intent.CATEGORY_BROWSABLE),
+                                )
+                            } catch (_: android.content.ActivityNotFoundException) {
+                                viewModel.onExternalUrlOpenFailed()
+                            }
+                        }
                     }
                 }
             }
@@ -110,6 +120,9 @@ class MainActivity : ComponentActivity() {
                         deleteCachedMod = viewModel::deleteCachedMod,
                         clearModCache = viewModel::clearModCache,
                         acceptNotice = viewModel::acceptLegalNotice,
+                        setAutoUpdateCheckEnabled = viewModel::setAutoUpdateCheckEnabled,
+                        dismissAvailableUpdate = viewModel::dismissAvailableUpdate,
+                        openAvailableUpdate = viewModel::openAvailableUpdate,
                         clearFeedback = viewModel::clearFeedback,
                     ),
                 )

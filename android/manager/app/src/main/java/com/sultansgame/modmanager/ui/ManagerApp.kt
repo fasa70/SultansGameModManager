@@ -143,6 +143,9 @@ data class ManagerActions(
     val deleteCachedMod: (String) -> Unit,
     val clearModCache: () -> Unit,
     val acceptNotice: () -> Unit,
+    val setAutoUpdateCheckEnabled: (Boolean) -> Unit,
+    val dismissAvailableUpdate: () -> Unit,
+    val openAvailableUpdate: () -> Unit,
     val clearFeedback: () -> Unit,
 )
 
@@ -163,6 +166,7 @@ private sealed interface DialogKind {
     data object StopGameAndSync : DialogKind
     data object PatchCleanup : DialogKind
     data object XiaomiInstallRisk : DialogKind
+    data object UpdateAvailable : DialogKind
     data class WorkshopTaskRemoval(val taskId: String) : DialogKind
 }
 
@@ -192,6 +196,9 @@ fun ManagerApp(state: ManagerUiState, actions: ManagerActions) {
     }
     LaunchedEffect(state.gameStopSyncConfirmation) {
         if (state.gameStopSyncConfirmation != null) dialog = DialogKind.StopGameAndSync
+    }
+    LaunchedEffect(state.availableUpdate, state.noticeAccepted) {
+        if (state.availableUpdate != null && state.noticeAccepted == true) dialog = DialogKind.UpdateAvailable
     }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)) {
@@ -232,7 +239,15 @@ fun ManagerApp(state: ManagerUiState, actions: ManagerActions) {
         false -> LegalNoticeDialog(actions.acceptNotice)
         true -> Unit
     }
-    DialogHost(state, actions, dialog, onDismiss = { dialog = null })
+    DialogHost(
+        state,
+        actions,
+        dialog,
+        onDismiss = {
+            if (dialog == DialogKind.UpdateAvailable) actions.dismissAvailableUpdate()
+            dialog = null
+        },
+    )
 }
 
 @Composable
@@ -818,6 +833,21 @@ private fun SettingsScreen(state: ManagerUiState, actions: ManagerActions, wide:
         item { HeroPanel("设置与帮助", "", "Mod、下载和修补文件保存在应用私有目录。修补或同步游戏前，应用始终会要求你确认。") }
         item { SectionLabel("存储", "${state.cachedMods.size} 个 Mod") }
         item { ListPanel("清理本地 Mod ", "存储空间管理", "管理") { onShowDialog(DialogKind.ClearCache) } }
+        item { SectionLabel("应用更新", "GitHub") }
+        item {
+            val enabled = state.autoUpdateCheckEnabled
+            ConfirmationCheckbox(
+                "启动时检查 GitHub 更新",
+                checked = enabled == true,
+                onToggle = { actions.setAutoUpdateCheckEnabled(it) },
+                enabled = enabled != null,
+            )
+            Text(
+                if (enabled == null) "正在读取更新检查设置…" else "关闭后，应用启动时不会联网检查新版本。",
+                fontSize = 13.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            )
+        }
         item { SectionLabel("帮助与安全", "") }
         item { ListPanel("本项目仅供学习交流使用", "请勿用于非法用途", "查看") { onShowDialog(DialogKind.Notice) } }
         item { ListPanel("开源许可", "GNU GPLv3", "查看") { onShowDialog(DialogKind.License) } }
@@ -852,6 +882,22 @@ private fun DialogHost(state: ManagerUiState, actions: ManagerActions, dialog: D
             "由于 MIUI / 澎湃系统对Android API的修改，安装过程可能出现无法预知的情况并导致失败。如果遇到安装失败，大概率可以通过系统设置的开发者选项关闭 MIUI 优化/系统优化来修复",
             onDismiss,
         )
+        DialogKind.UpdateAvailable -> {
+            state.availableUpdate?.let { update ->
+                UpdateAvailableDialog(
+                    update = update,
+                    onOpen = {
+                        actions.openAvailableUpdate()
+                        actions.dismissAvailableUpdate()
+                        onDismiss()
+                    },
+                    onDismiss = {
+                        actions.dismissAvailableUpdate()
+                        onDismiss()
+                    },
+                )
+            }
+        }
         DialogKind.PatchCleanup -> {
             state.patchCleanup?.let { cleanup ->
                 ConfirmDialog(
@@ -1165,8 +1211,13 @@ private fun LabeledTextField(
 }
 
 @Composable
-private fun ConfirmationCheckbox(label: String, checked: Boolean, onToggle: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth().toggleable(checked, role = Role.Checkbox, onValueChange = onToggle).padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+private fun ConfirmationCheckbox(label: String, checked: Boolean, enabled: Boolean = true, onToggle: (Boolean) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth()
+            .toggleable(checked, enabled = enabled, role = Role.Checkbox, onValueChange = onToggle)
+            .padding(vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Box(Modifier.size(22.dp).clip(RoundedCornerShape(6.dp)).border(1.dp, MiuixTheme.colorScheme.outline, RoundedCornerShape(6.dp)).background(if (checked) MiuixTheme.colorScheme.primary else Color.Transparent), contentAlignment = Alignment.Center) {
             if (checked) Text("✓", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = MiuixTheme.colorScheme.onPrimary)
         }
@@ -1227,6 +1278,26 @@ private fun TextDialog(title: String, body: String, onDismiss: () -> Unit) {
                 Text(title, fontSize = 21.sp, fontWeight = FontWeight.Bold)
                 Text(body, fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                 PrimaryButton("关闭", onClick = onDismiss)
+            }
+        }
+    }
+}
+
+@Composable
+private fun UpdateAvailableDialog(
+    update: com.sultansgame.modmanager.AvailableUpdate,
+    onOpen: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(22.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text("发现新版本", fontSize = 21.sp, fontWeight = FontWeight.Bold)
+                Text("最新版本：${update.version}", fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                update.name.takeIf { it != update.version }?.let { Text(it, fontSize = 14.sp) }
+                update.notes.takeIf(String::isNotBlank)?.let { Text(it, fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary) }
+                PrimaryButton("前往下载", onClick = onOpen)
+                SecondaryButton("暂不更新", onClick = onDismiss)
             }
         }
     }
