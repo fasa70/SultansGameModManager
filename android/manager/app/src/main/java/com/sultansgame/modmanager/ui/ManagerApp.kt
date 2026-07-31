@@ -849,7 +849,7 @@ private fun gameStorageMessage(storage: GameModStorageStatus?): LibraryPresentat
     storage.isReady -> LibraryPresentation("游戏已准备好。同步后，启用的 Mod 会在下次启动游戏时生效。", "同步 Mod", LibraryAction.Sync)
     storage.failureCode == ModStorageFailureCode.GameRunning || storage.availability == ModStorageAvailability.GameRunning -> LibraryPresentation("请先退出游戏，再同步 Mod。", "同步 Mod", LibraryAction.Sync)
     storage.failureCode == ModStorageFailureCode.ExternalChangesDetected -> LibraryPresentation("发现游戏内的其他 Mod。同步前会由你确认是否替换。", "同步 Mod", LibraryAction.Sync)
-    storage.availability == ModStorageAvailability.ProviderUnavailable -> LibraryPresentation("需要先启动游戏，以启用 Mod 服务。启动后返回此处即可继续同步。", "启动游戏以启用服务", LibraryAction.Launch)
+    storage.availability == ModStorageAvailability.ProviderUnavailable -> LibraryPresentation("需要先启动游戏，以启用 Mod 服务。启动后保持游戏在后台运行，返回此处即可同步mod。", "启动游戏以启用服务", LibraryAction.Launch)
     storage.availability in setOf(ModStorageAvailability.ProviderMissing, ModStorageAvailability.Unauthorized, ModStorageAvailability.Incompatible) -> LibraryPresentation("游戏还没有进行修补，无法同步mod。请先在首页修补游戏。", "重新检查", LibraryAction.Refresh)
     else -> LibraryPresentation("暂时无法同步 Mod。请重新检查游戏状态。", "重新检查", LibraryAction.Refresh)
 }
