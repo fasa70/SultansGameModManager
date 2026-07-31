@@ -6,6 +6,7 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -48,6 +49,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.disabled
@@ -70,6 +72,7 @@ import androidx.navigation.navArgument
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import com.sultansgame.modmanager.R
 import com.sultansgame.modmanager.ApksExportUiState
 import com.sultansgame.modmanager.FeedbackMessage
 import com.sultansgame.modmanager.ManagerUiState
@@ -269,9 +272,12 @@ private fun CompactHeader(destination: Destination) {
 
 @Composable
 private fun BrandMark(size: androidx.compose.ui.unit.Dp) {
-    Box(Modifier.size(size).clip(CircleShape).background(MiuixTheme.colorScheme.primary), contentAlignment = Alignment.Center) {
-        Text("S", fontSize = if (size > 40.dp) 22.sp else 16.sp, fontWeight = FontWeight.Bold, color = MiuixTheme.colorScheme.onPrimary)
-    }
+    Image(
+        painter = painterResource(R.mipmap.ic_launcher_photo),
+        contentDescription = null,
+        contentScale = ContentScale.Crop,
+        modifier = Modifier.size(size).clip(CircleShape),
+    )
 }
 
 @Composable
