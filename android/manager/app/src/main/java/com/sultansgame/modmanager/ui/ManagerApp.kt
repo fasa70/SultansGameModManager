@@ -1,5 +1,7 @@
 package com.sultansgame.modmanager.ui
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
@@ -60,6 +62,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -152,7 +155,7 @@ data class ManagerActions(
 private enum class Destination(val title: String, val caption: String) {
     Start("开始", "准备游戏"),
     Acquire("创意工坊", "浏览与添加"),
-    Library("管理Mod", "同步并开始"),
+    Library("管理Mod", "同步mod列表"),
     Settings("设置", "帮助与存储"),
 }
 
@@ -386,9 +389,9 @@ private fun StartScreen(state: ManagerUiState, actions: ManagerActions, wide: Bo
             item {
                 Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(18.dp)) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("由于安装修补过的游戏前，需要先卸载原游戏，这会导致游戏数据丢失，所以请您确认", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        Text("由于安装修补过的游戏，会导致原本的游戏数据丢失，所以请您确认", fontSize = 16.sp, fontWeight = FontWeight.Bold)
                         val review = state.patch as PatchUiState.Review
-                        ConfirmationCheckbox("我已经通过游戏内云存档等方式备份好了存档，已准备好卸载原版游戏", review.confirmation.acknowledgedReinstallRequirement) {
+                        ConfirmationCheckbox("我已经通过游戏内云存档等方式备份好了存档", review.confirmation.acknowledgedReinstallRequirement) {
                             actions.updatePatchConfirmation(review.confirmation.copy(acknowledgedReinstallRequirement = it))
                         }
                     }
@@ -414,22 +417,40 @@ private fun StartScreen(state: ManagerUiState, actions: ManagerActions, wide: Bo
             }
             else -> Unit
         }
-        val showPatchCleanup = state.patch !is PatchUiState.ReadyToInstall
-        if (showPatchCleanup) {
-            state.patchCleanup?.let { cleanup ->
-                item { SectionLabel("存储与清理", formatBytes(cleanup.sizeBytes)) }
-                item {
-                    SecondaryButton(
-                        "清理临时文件（${formatBytes(cleanup.sizeBytes)}）",
-                        enabled = !state.patchCleanupInProgress,
-                        onClick = actions.requestPatchCleanup,
-                    )
-                }
-            }
+        val cleanup = state.patchCleanup
+        item { SectionLabel("存储与清理", cleanup?.let { formatBytes(it.sizeBytes) } ?: "0 B") }
+        item {
+            val cleanupInProgress = state.patchCleanupInProgress
+            SecondaryButton(
+                label = when {
+                    cleanupInProgress -> "正在清理临时文件…"
+                    cleanup != null -> "清理临时文件（${formatBytes(cleanup.sizeBytes)}）"
+                    else -> "暂无可清理临时文件"
+                },
+                enabled = cleanup != null && !cleanupInProgress,
+                onClick = actions.requestPatchCleanup,
+            )
         }
         item { DiagnosticPanel("诊断信息", presentation.diagnostics) }
+        item { GitHubStarLink() }
     }
 }
+
+@Composable
+private fun GitHubStarLink() {
+    val context = LocalContext.current
+    Text(
+        "如果喜欢，记得点这里给我的仓库点亮一颗 ⭐～",
+        fontSize = 13.sp,
+        color = MiuixTheme.colorScheme.primary,
+        textAlign = TextAlign.Center,
+        modifier = Modifier.fillMaxWidth().clickable {
+            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(GITHUB_REPOSITORY_URL)))
+        }.padding(vertical = 8.dp),
+    )
+}
+
+private const val GITHUB_REPOSITORY_URL = "https://github.com/fasa70/SultansGameModManager"
 
 @Composable
 private fun StartOperationStatusPanel(patch: PatchUiState) {
@@ -564,7 +585,7 @@ private fun AcquireModsScreen(state: ManagerUiState, actions: ManagerActions, wi
     val submitSearch = { actions.browseWorkshop(state.workshopBrowse.query.copy(searchText = query, page = 1).normalized()) }
     ScreenList(wide) {
         item {
-            HeroPanel("获取 Mod", "找到想要的 Mod", "浏览公开内容或从本地添加 ZIP。", action = "从本地添加 Mod", onAction = actions.importMod)
+            HeroPanel("获取 Mod", "创意工坊", "浏览创意工坊并下载mod", action = "点这里也可以从本地添加 Mod", onAction = actions.importMod)
         }
         item {
             Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(18.dp)) {
@@ -772,8 +793,8 @@ private fun MyModsScreen(state: ManagerUiState, actions: ManagerActions, wide: B
     ScreenList(wide) {
         item {
             HeroPanel(
-                eyebrow = "同步mod",
-                title = if (state.cachedMods.isEmpty()) "先添加一个 Mod" else "让 Mod 在游戏中生效",
+                eyebrow = "同步mod列表",
+                title = if (state.cachedMods.isEmpty()) "Mod管理" else "Mod管理",
                 body = storageMessage.summary,
                 action = storageMessage.actionLabel,
                 actionEnabled = storageMessage.actionEnabled && !state.deploymentInProgress && !state.cachedModDeletionInProgress,
@@ -823,14 +844,14 @@ private fun gameStorageMessage(storage: GameModStorageStatus?): LibraryPresentat
     storage.failureCode == ModStorageFailureCode.GameRunning || storage.availability == ModStorageAvailability.GameRunning -> LibraryPresentation("请先退出游戏，再同步 Mod。", "同步 Mod", LibraryAction.Sync)
     storage.failureCode == ModStorageFailureCode.ExternalChangesDetected -> LibraryPresentation("发现游戏内的其他 Mod。同步前会由你确认是否替换。", "同步 Mod", LibraryAction.Sync)
     storage.availability == ModStorageAvailability.ProviderUnavailable -> LibraryPresentation("需要先启动游戏，以启用 Mod 服务。启动后返回此处即可继续同步。", "启动游戏以启用服务", LibraryAction.Launch)
-    storage.availability in setOf(ModStorageAvailability.ProviderMissing, ModStorageAvailability.Unauthorized, ModStorageAvailability.Incompatible) -> LibraryPresentation("游戏还没有进行修补，无法加载mod。请先在首页修补游戏。", "重新检查", LibraryAction.Refresh)
+    storage.availability in setOf(ModStorageAvailability.ProviderMissing, ModStorageAvailability.Unauthorized, ModStorageAvailability.Incompatible) -> LibraryPresentation("游戏还没有进行修补，无法同步mod。请先在首页修补游戏。", "重新检查", LibraryAction.Refresh)
     else -> LibraryPresentation("暂时无法同步 Mod。请重新检查游戏状态。", "重新检查", LibraryAction.Refresh)
 }
 
 @Composable
 private fun SettingsScreen(state: ManagerUiState, actions: ManagerActions, wide: Boolean, onShowDialog: (DialogKind) -> Unit) {
     ScreenList(wide) {
-        item { HeroPanel("设置与帮助", "", "Mod、下载和修补文件保存在应用私有目录。修补或同步游戏前，应用始终会要求你确认。") }
+        item { HeroPanel("", "设置", "") }
         item { SectionLabel("存储", "${state.cachedMods.size} 个 Mod") }
         item { ListPanel("清理本地 Mod ", "存储空间管理", "管理") { onShowDialog(DialogKind.ClearCache) } }
         item { SectionLabel("应用更新", "GitHub") }
@@ -902,7 +923,7 @@ private fun DialogHost(state: ManagerUiState, actions: ManagerActions, dialog: D
             state.patchCleanup?.let { cleanup ->
                 ConfirmDialog(
                     "清理临时文件？",
-                    "这会删除因修补游戏而产生的临时文件，大多数情况下都可以放心清理，释放 ${formatBytes(cleanup.sizeBytes)}。此操作不会删除mod",
+                    "这会删除因修补游戏而产生的临时文件，释放 ${formatBytes(cleanup.sizeBytes)}。此操作不会删除 Mod 或已导出的 APKS。安装过程中请勿清理临时文件。",
                     "确认清理",
                     { actions.confirmPatchCleanup(); onDismiss() },
                     { actions.dismissPatchCleanup(); onDismiss() },

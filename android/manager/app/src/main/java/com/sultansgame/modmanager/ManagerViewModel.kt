@@ -451,7 +451,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
 
     fun requestPatchCleanupConfirmation() {
         val candidate = mutableState.value.patchCleanup ?: return
-        if (!canCleanPatchArtifacts()) return
+        if (mutableState.value.patchCleanupInProgress) return
         mutableState.value = mutableState.value.copy(patchCleanupConfirmation = candidate)
     }
 
@@ -460,7 +460,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun confirmPatchCleanup() {
-        if (mutableState.value.patchCleanup == null || !canCleanPatchArtifacts()) return
+        if (mutableState.value.patchCleanup == null || mutableState.value.patchCleanupInProgress) return
         viewModelScope.launch {
             mutableState.value = mutableState.value.copy(
                 patchCleanupConfirmation = null,
@@ -1102,15 +1102,6 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         refreshPatchWorkspaceState()
     }
 
-    private fun canCleanPatchArtifacts(): Boolean =
-        !mutableState.value.patchCleanupInProgress &&
-            mutableState.value.apksExport is ApksExportUiState.Idle &&
-            mutableState.value.patch !is PatchUiState.Importing &&
-            mutableState.value.patch !is PatchUiState.Preparing &&
-            mutableState.value.patch !is PatchUiState.ReadyToInstall &&
-            mutableState.value.patch !is PatchUiState.SubmittingInstall &&
-            mutableState.value.patch !is PatchUiState.AwaitingSystemInstall
-
     private fun reservedPatchWorkspaceIds(): Set<String> = buildSet {
         if (mutableState.value.patch is PatchUiState.Review || mutableState.value.patch is PatchUiState.Preparing) {
             selectedPatchInput?.extracted?.transactionId?.let(::add)
@@ -1120,6 +1111,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             is PatchUiState.SubmittingInstall -> add(patch.transactionId)
             else -> Unit
         }
+        mutableState.value.apksExport.transactionIdOrNull()?.let(::add)
     }
 
     private fun refreshPatchWorkspaceState() {
