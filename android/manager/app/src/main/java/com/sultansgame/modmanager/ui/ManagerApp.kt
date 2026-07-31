@@ -399,18 +399,19 @@ private fun StartScreen(state: ManagerUiState, actions: ManagerActions, wide: Bo
             }
             else -> Unit
         }
-        val showPatchCleanup = state.patch !is PatchUiState.ReadyToInstall
-        if (showPatchCleanup) {
-            state.patchCleanup?.let { cleanup ->
-                item { SectionLabel("存储与清理", formatBytes(cleanup.sizeBytes)) }
-                item {
-                    SecondaryButton(
-                        "清理临时文件（${formatBytes(cleanup.sizeBytes)}）",
-                        enabled = !state.patchCleanupInProgress,
-                        onClick = actions.requestPatchCleanup,
-                    )
-                }
-            }
+        val cleanup = state.patchCleanup
+        item { SectionLabel("存储与清理", cleanup?.let { formatBytes(it.sizeBytes) } ?: "0 B") }
+        item {
+            val cleanupInProgress = state.patchCleanupInProgress
+            SecondaryButton(
+                label = when {
+                    cleanupInProgress -> "正在清理临时文件…"
+                    cleanup != null -> "清理临时文件（${formatBytes(cleanup.sizeBytes)}）"
+                    else -> "暂无可清理临时文件"
+                },
+                enabled = cleanup != null && !cleanupInProgress,
+                onClick = actions.requestPatchCleanup,
+            )
         }
         item { DiagnosticPanel("诊断信息", presentation.diagnostics) }
     }
@@ -856,7 +857,7 @@ private fun DialogHost(state: ManagerUiState, actions: ManagerActions, dialog: D
             state.patchCleanup?.let { cleanup ->
                 ConfirmDialog(
                     "清理临时文件？",
-                    "这会删除因修补游戏而产生的临时文件，大多数情况下都可以放心清理，释放 ${formatBytes(cleanup.sizeBytes)}。此操作不会删除mod",
+                    "这会删除因修补游戏而产生的临时文件，释放 ${formatBytes(cleanup.sizeBytes)}。此操作不会删除 Mod 或已导出的 APKS。安装过程中请勿清理临时文件。",
                     "确认清理",
                     { actions.confirmPatchCleanup(); onDismiss() },
                     { actions.dismissPatchCleanup(); onDismiss() },
