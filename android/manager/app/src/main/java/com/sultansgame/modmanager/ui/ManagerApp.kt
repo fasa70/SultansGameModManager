@@ -1,5 +1,11 @@
 package com.sultansgame.modmanager.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -42,7 +48,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -51,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -332,6 +343,7 @@ private fun StartScreen(state: ManagerUiState, actions: ManagerActions, wide: Bo
                 },
             )
         }
+        item { StartOperationStatusPanel(patch = state.patch) }
         if (presentation.showConfirmations) {
             item {
                 Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(18.dp)) {
@@ -376,6 +388,43 @@ private fun StartScreen(state: ManagerUiState, actions: ManagerActions, wide: Bo
         }
         item { DiagnosticPanel("诊断信息", presentation.diagnostics) }
     }
+}
+
+@Composable
+private fun StartOperationStatusPanel(patch: PatchUiState) {
+    val status = patch.toStartOperationStatus()
+    AnimatedVisibility(
+        visible = status != null,
+        enter = fadeIn() + expandVertically(),
+        exit = fadeOut() + shrinkVertically(),
+    ) {
+        status?.let { LoadingPanel(body = it.body, title = it.title) }
+    }
+}
+
+internal data class StartOperationStatus(
+    val title: String,
+    val body: String,
+)
+
+internal fun PatchUiState.toStartOperationStatus(): StartOperationStatus? = when (this) {
+    is PatchUiState.Importing -> StartOperationStatus(
+        title = "正在导入游戏安装文件",
+        body = "$label 请不要关闭应用。",
+    )
+    is PatchUiState.Preparing -> StartOperationStatus(
+        title = "正在准备修补文件",
+        body = "正在安全处理 ${input.sourceLabel}，请不要关闭应用。",
+    )
+    is PatchUiState.SubmittingInstall -> StartOperationStatus(
+        title = "正在请求系统安装",
+        body = "请稍候，系统安装确认页面即将打开。",
+    )
+    is PatchUiState.AwaitingSystemInstall -> StartOperationStatus(
+        title = "正在等待系统安装确认",
+        body = "请在系统页面完成操作；完成后返回此处继续核验。",
+    )
+    else -> null
 }
 
 private data class StartPresentation(
@@ -930,7 +979,24 @@ private fun DiagnosticPanel(title: String, details: String) {
 private fun EmptyPanel(title: String, body: String) = NoticeStrip(title, body)
 
 @Composable
-private fun LoadingPanel(body: String) = NoticeStrip("正在处理", body)
+private fun LoadingPanel(body: String, title: String = "正在处理") {
+    Card(
+        Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite },
+        colors = CardDefaults.defaultColors(color = MiuixTheme.colorScheme.surfaceVariant),
+        insideMargin = PaddingValues(16.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 3.dp)
+            Spacer(Modifier.width(12.dp))
+            Crossfade(targetState = title to body, label = "loading-panel-content") { (currentTitle, currentBody) ->
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(currentTitle, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Text(currentBody, fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                }
+            }
+        }
+    }
+}
 
 @Composable
 private fun FriendlyErrorPanel(title: String, summary: String, diagnostics: String) {
@@ -983,7 +1049,7 @@ private fun PrimaryButtonContent(
     modifier: Modifier,
 ) {
     Card(
-        modifier,
+        modifier.semantics { if (!enabled) disabled() },
         colors = CardDefaults.defaultColors(
             color = if (enabled) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.surfaceVariant,
         ),
