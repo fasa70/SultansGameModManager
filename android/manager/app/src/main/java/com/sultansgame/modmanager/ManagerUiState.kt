@@ -43,7 +43,7 @@ data class PreparedPatchRecovery(
 )
 
 data class PatchCleanupUiModel(
-    val transactionId: String,
+    val workspaceIds: Set<String>,
     val sizeBytes: Long,
 )
 

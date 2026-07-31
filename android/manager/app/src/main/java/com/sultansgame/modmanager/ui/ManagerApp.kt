@@ -112,8 +112,8 @@ data class ManagerActions(
     val restartPatch: () -> Unit,
     val resumePreparedPatch: (String) -> Unit,
     val updatePatchConfirmation: (PatchConfirmation) -> Unit,
-    val requestPatchCleanup: (String) -> Unit,
-    val confirmPatchCleanup: (String) -> Unit,
+    val requestPatchCleanup: () -> Unit,
+    val confirmPatchCleanup: () -> Unit,
     val dismissPatchCleanup: () -> Unit,
     val browseWorkshop: (WorkshopBrowseQuery) -> Unit,
     val lookupWorkshop: (String) -> Unit,
@@ -157,7 +157,7 @@ private sealed interface DialogKind {
     data class DeleteCachedMod(val cacheKey: String) : DialogKind
     data object SyncMods : DialogKind
     data object StopGameAndSync : DialogKind
-    data class PatchCleanup(val transactionId: String) : DialogKind
+    data object PatchCleanup : DialogKind
     data class WorkshopTaskRemoval(val taskId: String) : DialogKind
 }
 
@@ -167,8 +167,8 @@ fun ManagerApp(state: ManagerUiState, actions: ManagerActions) {
     var dialog by remember { mutableStateOf<DialogKind?>(null) }
     val destination = Destination.entries[destinationIndex]
 
-    LaunchedEffect(state.patchCleanupConfirmation?.transactionId) {
-        state.patchCleanupConfirmation?.let { dialog = DialogKind.PatchCleanup(it.transactionId) }
+    LaunchedEffect(state.patchCleanupConfirmation != null) {
+        if (state.patchCleanupConfirmation != null) dialog = DialogKind.PatchCleanup
     }
     LaunchedEffect(state.gameStopSyncConfirmation) {
         if (state.gameStopSyncConfirmation != null) dialog = DialogKind.StopGameAndSync
@@ -384,7 +384,13 @@ private fun StartScreen(state: ManagerUiState, actions: ManagerActions, wide: Bo
         }
         state.patchCleanup?.let { cleanup ->
             item { SectionLabel("存储与清理", formatBytes(cleanup.sizeBytes)) }
-            item { SecondaryButton("删除本次准备文件", enabled = !state.patchCleanupInProgress) { actions.requestPatchCleanup(cleanup.transactionId) } }
+            item {
+                SecondaryButton(
+                    "临时文件已占用${formatBytes(cleanup.sizeBytes)}，点击清理",
+                    enabled = !state.patchCleanupInProgress,
+                    onClick = actions.requestPatchCleanup,
+                )
+            }
         }
         item { DiagnosticPanel("诊断信息", presentation.diagnostics) }
     }
@@ -817,9 +823,16 @@ private fun DialogHost(state: ManagerUiState, actions: ManagerActions, dialog: D
             )
         }
         DialogKind.StopGameAndSync -> ConfirmDialog("关闭游戏后同步？", "游戏正在运行。继续会结束游戏进程，未保存的进度可能丢失；关闭后会重试同步。", "关闭并同步", { actions.confirmStopGameAndSync(); onDismiss() }, { actions.dismissStopGameAndSync(); onDismiss() })
-        is DialogKind.PatchCleanup -> {
-            val cleanup = state.patchCleanup?.takeIf { it.transactionId == dialog.transactionId }
-            if (cleanup != null) ConfirmDialog("删除准备文件？", "这会删除本次准备的应用内安装文件，释放约 ${formatBytes(cleanup.sizeBytes)}。不会删除已安装游戏、存档或导出的 APKS 文件。", "删除文件", { actions.confirmPatchCleanup(cleanup.transactionId); onDismiss() }, { actions.dismissPatchCleanup(); onDismiss() })
+        DialogKind.PatchCleanup -> {
+            state.patchCleanup?.let { cleanup ->
+                ConfirmDialog(
+                    "清理临时文件？",
+                    "这会删除应用内可安全清理的修补临时文件，包括提取的安装包、重签后的安装包和中断残留，释放 ${formatBytes(cleanup.sizeBytes)}。不会删除已安装游戏、存档、已导出的 APKS、Mod 或创意工坊下载内容。",
+                    "确认清理",
+                    { actions.confirmPatchCleanup(); onDismiss() },
+                    { actions.dismissPatchCleanup(); onDismiss() },
+                )
+            }
         }
         is DialogKind.WorkshopTaskRemoval -> {
             val task = state.downloadTasks.firstOrNull { it.id == dialog.taskId }

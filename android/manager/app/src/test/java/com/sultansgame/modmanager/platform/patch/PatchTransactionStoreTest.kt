@@ -49,50 +49,77 @@ class PatchTransactionStoreTest {
     }
 
     @Test
-    fun reportsSizeForNewestCleanupCandidate() {
+    fun reportsAggregateSizeForAllCleanupWorkspaces() {
         val store = PatchTransactionStore(TestContext())
-        createArtifacts(store, "older", transaction("older"), inputBytes = 4, signedBytes = 8)
-        File(store.root("older"), "transaction.properties").setLastModified(1L)
-        createArtifacts(store, "newer", transaction("newer", stage = PatchStage.Completed), inputBytes = 10, signedBytes = 20)
-        File(store.root("newer"), "transaction.properties").setLastModified(2L)
+        createArtifacts(store, "completed", transaction("completed", stage = PatchStage.Completed), inputBytes = 4, signedBytes = 8)
+        createArtifacts(store, "interrupted", transaction("interrupted", stage = PatchStage.PreparingArtifacts), inputBytes = 10, signedBytes = 0)
+        File(store.root("orphan"), "template/modloader.apk").apply {
+            parentFile?.mkdirs()
+            writeBytes(ByteArray(3))
+        }
 
-        val candidate = requireNotNull(store.latestCleanupCandidate())
+        val summary = requireNotNull(store.cleanupSummary(emptySet()))
 
-        assertEquals("newer", candidate.transactionId)
-        assertEquals(PatchStage.Completed, candidate.stage)
-        assertTrue(candidate.sizeBytes >= 50L)
+        assertEquals(setOf("completed", "interrupted", "orphan"), summary.workspaceIds)
+        assertTrue(summary.sizeBytes >= 33L)
     }
 
     @Test
-    fun deletesWholePreparedTransactionDirectory() {
-        val store = PatchTransactionStore(TestContext())
+    fun cleansInterruptedAndOrphanWorkspacesWithoutTouchingOtherPrivateStorage() {
+        val context = TestContext()
+        val store = PatchTransactionStore(context)
         createArtifacts(store, "prepared", transaction("prepared"), inputBytes = 4, signedBytes = 8)
         File(store.root("prepared"), "template/modloader.apk").apply {
             parentFile?.mkdirs()
             writeBytes(ByteArray(3))
         }
+        File(store.root("orphan"), "input/selected.apk").apply {
+            parentFile?.mkdirs()
+            writeBytes(ByteArray(5))
+        }
+        File(context.filesDir, "workshop-staging/task/content.zip").apply {
+            parentFile?.mkdirs()
+            writeBytes(ByteArray(7))
+        }
+        File(context.filesDir, "mod-cache/mod/info.json").apply {
+            parentFile?.mkdirs()
+            writeBytes(ByteArray(9))
+        }
 
-        assertEquals(PatchArtifactCleanupResult.Deleted, store.deletePreparedArtifacts("prepared"))
+        val result = store.deleteCleanupWorkspaces(emptySet())
+
+        assertTrue(result is PatchWorkspaceCleanupResult.Deleted)
         assertFalse(store.root("prepared").exists())
-        assertNull(store.latestPreparedForRecovery())
+        assertFalse(store.root("orphan").exists())
+        assertTrue(File(context.filesDir, "workshop-staging/task/content.zip").exists())
+        assertTrue(File(context.filesDir, "mod-cache/mod/info.json").exists())
+        assertNull(store.cleanupSummary(emptySet()))
     }
 
     @Test
-    fun rejectsCleanupWhileSystemInstallIsPending() {
+    fun excludesSubmittedSystemInstallAndReservedWorkspacesFromCleanup() {
         val store = PatchTransactionStore(TestContext())
         createArtifacts(store, "submitted", transaction("submitted", stage = PatchStage.AwaitingSystemInstall), inputBytes = 4, signedBytes = 8)
+        createArtifacts(store, "reserved", transaction("reserved"), inputBytes = 4, signedBytes = 8)
+        createArtifacts(store, "cleanup", transaction("cleanup"), inputBytes = 4, signedBytes = 8)
 
-        assertTrue(store.deletePreparedArtifacts("submitted") is PatchArtifactCleanupResult.Rejected)
+        val summary = requireNotNull(store.cleanupSummary(setOf("reserved")))
+        val result = store.deleteCleanupWorkspaces(setOf("reserved"))
+
+        assertEquals(setOf("cleanup"), summary.workspaceIds)
+        assertTrue(result is PatchWorkspaceCleanupResult.Deleted)
         assertTrue(store.root("submitted").exists())
+        assertTrue(store.root("reserved").exists())
+        assertFalse(store.root("cleanup").exists())
     }
 
     @Test
-    fun rejectsUnsafeCleanupIdentifierWithoutTouchingOtherTransactions() {
+    fun ignoresEmptyWorkspace() {
         val store = PatchTransactionStore(TestContext())
-        createArtifacts(store, "safe", transaction("safe"), inputBytes = 4, signedBytes = 8)
+        store.root("empty").mkdirs()
 
-        assertTrue(store.deletePreparedArtifacts("../safe") is PatchArtifactCleanupResult.Rejected)
-        assertTrue(store.root("safe").exists())
+        assertNull(store.cleanupSummary(emptySet()))
+        assertEquals(PatchWorkspaceCleanupResult.NothingToDelete, store.deleteCleanupWorkspaces(emptySet()))
     }
 
     private fun createArtifacts(
