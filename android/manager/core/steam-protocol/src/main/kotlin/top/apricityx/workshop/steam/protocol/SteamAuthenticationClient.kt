@@ -303,17 +303,27 @@ private fun SteamGuardChallengeType.toProto(): EAuthSessionGuardType =
         SteamGuardChallengeType.Unknown -> EAuthSessionGuardType.k_EAuthSessionGuardType_Unknown
     }
 
-private fun encryptPassword(
+internal fun encryptPassword(
     password: String,
     publicKey: CAuthentication_GetPasswordRSAPublicKey_Response,
 ): String {
     val modulus = BigInteger(1, decodeHex(publicKey.publickeyMod))
+    val passwordBytes = password.toByteArray(Charsets.UTF_8)
+    val maximumPasswordBytes = (modulus.bitLength() + 7) / 8 - PKCS1_V1_5_PADDING_BYTES
+    if (passwordBytes.size > maximumPasswordBytes) {
+        throw SteamPasswordEncryptionCapacityException(
+            passwordBytes = passwordBytes.size,
+            maximumPasswordBytes = maximumPasswordBytes,
+        )
+    }
     val exponent = BigInteger(1, decodeHex(publicKey.publickeyExp))
     val keySpec = RSAPublicKeySpec(modulus, exponent)
     val cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding")
     cipher.init(Cipher.ENCRYPT_MODE, KeyFactory.getInstance("RSA").generatePublic(keySpec))
-    return Base64.getEncoder().encodeToString(cipher.doFinal(password.toByteArray(Charsets.UTF_8)))
+    return Base64.getEncoder().encodeToString(cipher.doFinal(passwordBytes))
 }
+
+private const val PKCS1_V1_5_PADDING_BYTES = 11
 
 private fun decodeHex(value: String): ByteArray {
     require(value.length % 2 == 0) { "Invalid hex input length" }
@@ -387,12 +397,18 @@ internal fun buildBeginAuthSessionRequest(
     return builder.build()
 }
 
-private fun Throwable.asAuthenticationException(
+internal fun Throwable.asAuthenticationException(
     prefix: String,
     operation: SteamAuthenticationOperation,
 ): SteamAuthenticationException =
     when (this) {
         is SteamAuthenticationException -> this
+        is SteamPasswordEncryptionCapacityException -> SteamAuthenticationException(
+            resultCode = 2,
+            message = "$prefix：Steam 密码过长（UTF-8 编码后为 $passwordBytes 字节，当前登录方式最多支持 $maximumPasswordBytes 字节）。请在 Steam 修改为更短的密码后重试。",
+            cause = this,
+            operation = operation,
+        )
         is SteamRequestDeliveryUncertainException -> SteamAuthenticationException(
             resultCode = 2,
             message = "$prefix：请求可能已送达 Steam，正在确认登录结果。",
