@@ -136,6 +136,13 @@ class SteamAuthenticationException(
     val deliveryUncertain: Boolean = false,
 ) : SteamProtocolException(message, cause)
 
+class SteamPasswordEncryptionCapacityException(
+    val passwordBytes: Int,
+    val maximumPasswordBytes: Int,
+) : SteamProtocolException(
+    "Steam password exceeds RSA encryption capacity: $passwordBytes > $maximumPasswordBytes UTF-8 bytes",
+)
+
 enum class SteamAuthenticationOperation {
     BeginSession,
     SubmitGuardCode,
