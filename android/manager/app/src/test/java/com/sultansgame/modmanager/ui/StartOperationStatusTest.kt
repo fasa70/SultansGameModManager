@@ -5,6 +5,7 @@ import com.sultansgame.modmanager.PatchInputUiModel
 import com.sultansgame.modmanager.model.Compatibility
 import com.sultansgame.modmanager.model.CompatibilityReport
 import com.sultansgame.modmanager.model.PatchInputClassification
+import com.sultansgame.modmanager.model.PatchConfirmation
 import com.sultansgame.modmanager.model.PatchMode
 import com.sultansgame.modmanager.model.PatchSource
 import org.junit.Assert.assertEquals
@@ -66,6 +67,32 @@ class StartOperationStatusTest {
         )
     }
 
+    @Test
+    fun singlePatchConfirmationSatisfiesVerifiedRequirementsOnly() {
+        val confirmed = PatchConfirmation().withSinglePatchConfirmation(true)
+
+        assertEquals(true, confirmed.acknowledgedInstallRisk)
+        assertEquals(true, confirmed.acknowledgedRecoveryLimit)
+        assertEquals(true, confirmed.acknowledgedReinstallRequirement)
+        assertEquals(false, confirmed.confirmedBackup)
+        assertEquals(false, confirmed.confirmedExperimentalRetry)
+        assertEquals(true, confirmed.permits(PatchMode.Verified))
+        assertEquals(false, confirmed.permits(PatchMode.Experimental))
+    }
+
+    @Test
+    fun clearingSinglePatchConfirmationClearsVerifiedRequirements() {
+        val cleared = PatchConfirmation(
+            acknowledgedInstallRisk = true,
+            acknowledgedRecoveryLimit = true,
+            acknowledgedReinstallRequirement = true,
+        ).withSinglePatchConfirmation(false)
+
+        assertEquals(false, cleared.acknowledgedInstallRisk)
+        assertEquals(false, cleared.acknowledgedRecoveryLimit)
+        assertEquals(false, cleared.acknowledgedReinstallRequirement)
+        assertEquals(false, cleared.permits(PatchMode.Verified))
+    }
     @Test
     fun nonBusyStagesDoNotShowAnOperationStatus() {
         assertNull(PatchUiState.ChooseSource.toStartOperationStatus())
