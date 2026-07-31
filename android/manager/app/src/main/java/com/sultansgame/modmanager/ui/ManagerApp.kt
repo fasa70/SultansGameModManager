@@ -1,5 +1,7 @@
 package com.sultansgame.modmanager.ui
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
@@ -60,6 +62,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -414,8 +417,25 @@ private fun StartScreen(state: ManagerUiState, actions: ManagerActions, wide: Bo
             )
         }
         item { DiagnosticPanel("诊断信息", presentation.diagnostics) }
+        item { GitHubStarLink() }
     }
 }
+
+@Composable
+private fun GitHubStarLink() {
+    val context = LocalContext.current
+    Text(
+        "如果喜欢，记得点这里给我的仓库点亮一颗 ⭐～",
+        fontSize = 13.sp,
+        color = MiuixTheme.colorScheme.primary,
+        textAlign = TextAlign.Center,
+        modifier = Modifier.fillMaxWidth().clickable {
+            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(GITHUB_REPOSITORY_URL)))
+        }.padding(vertical = 8.dp),
+    )
+}
+
+private const val GITHUB_REPOSITORY_URL = "https://github.com/fasa70/SultansGameModManager"
 
 @Composable
 private fun StartOperationStatusPanel(patch: PatchUiState) {
