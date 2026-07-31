@@ -374,7 +374,7 @@ private fun StartScreen(state: ManagerUiState, actions: ManagerActions, wide: Bo
                         Text("由于安装修补过的游戏前，需要先卸载原游戏，这会导致游戏数据丢失，所以请您确认", fontSize = 16.sp, fontWeight = FontWeight.Bold)
                         val review = state.patch as PatchUiState.Review
                         ConfirmationCheckbox("我已经通过游戏内云存档等方式备份好了存档，已准备好卸载原版游戏", review.confirmation.acknowledgedReinstallRequirement) {
-                            actions.updatePatchConfirmation(review.confirmation.copy(acknowledgedReinstallRequirement = it))
+                            actions.updatePatchConfirmation(review.confirmation.withSinglePatchConfirmation(it))
                         }
                     }
                 }
@@ -431,6 +431,12 @@ private fun StartOperationStatusPanel(patch: PatchUiState) {
 internal data class StartOperationStatus(
     val title: String,
     val body: String,
+)
+
+internal fun PatchConfirmation.withSinglePatchConfirmation(confirmed: Boolean): PatchConfirmation = copy(
+    acknowledgedInstallRisk = confirmed,
+    acknowledgedRecoveryLimit = confirmed,
+    acknowledgedReinstallRequirement = confirmed,
 )
 
 internal fun PatchUiState.toStartOperationStatus(): StartOperationStatus? = when (this) {
