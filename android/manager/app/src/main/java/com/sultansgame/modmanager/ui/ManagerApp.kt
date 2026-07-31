@@ -148,8 +148,8 @@ data class ManagerActions(
 
 private enum class Destination(val title: String, val caption: String) {
     Start("开始", "准备游戏"),
-    Acquire("获取 Mod", "浏览与添加"),
-    Library("我的 Mod", "同步并开始"),
+    Acquire("创意工坊", "浏览与添加"),
+    Library("管理Mod", "同步并开始"),
     Settings("设置", "帮助与存储"),
 }
 
@@ -371,15 +371,9 @@ private fun StartScreen(state: ManagerUiState, actions: ManagerActions, wide: Bo
             item {
                 Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(18.dp)) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("继续前请确认", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        Text("由于安装修补过的游戏前，需要先卸载原游戏，这会导致游戏数据丢失，所以请您确认", fontSize = 16.sp, fontWeight = FontWeight.Bold)
                         val review = state.patch as PatchUiState.Review
-                        ConfirmationCheckbox("我了解这是非官方修改，已备份重要存档", review.confirmation.acknowledgedInstallRisk) {
-                            actions.updatePatchConfirmation(review.confirmation.copy(acknowledgedInstallRisk = it))
-                        }
-                        ConfirmationCheckbox("我了解更换设备后可能需要重新准备游戏", review.confirmation.acknowledgedRecoveryLimit) {
-                            actions.updatePatchConfirmation(review.confirmation.copy(acknowledgedRecoveryLimit = it))
-                        }
-                        ConfirmationCheckbox("我了解系统会要求先卸载旧版本，再确认安装", review.confirmation.acknowledgedReinstallRequirement) {
+                        ConfirmationCheckbox("我已经通过游戏内云存档等方式备份好了存档，已准备好卸载原版游戏", review.confirmation.acknowledgedReinstallRequirement) {
                             actions.updatePatchConfirmation(review.confirmation.copy(acknowledgedReinstallRequirement = it))
                         }
                     }
@@ -411,7 +405,7 @@ private fun StartScreen(state: ManagerUiState, actions: ManagerActions, wide: Bo
                 item { SectionLabel("存储与清理", formatBytes(cleanup.sizeBytes)) }
                 item {
                     SecondaryButton(
-                        "清理修补临时文件（${formatBytes(cleanup.sizeBytes)}）",
+                        "清理临时文件（${formatBytes(cleanup.sizeBytes)}）",
                         enabled = !state.patchCleanupInProgress,
                         onClick = actions.requestPatchCleanup,
                     )
@@ -441,19 +435,19 @@ internal data class StartOperationStatus(
 
 internal fun PatchUiState.toStartOperationStatus(): StartOperationStatus? = when (this) {
     is PatchUiState.Importing -> StartOperationStatus(
-        title = "正在导入游戏安装文件",
-        body = "$label 请不要关闭应用。",
+        title = "正在导入游戏安装包",
+        body = "请不要关闭应用。",
     )
     is PatchUiState.Preparing -> StartOperationStatus(
-        title = "正在准备修补文件",
-        body = "正在安全处理 ${input.sourceLabel}，请不要关闭应用。",
+        title = "正在修补游戏安装包",
+        body = "请不要关闭应用。",
     )
     is PatchUiState.SubmittingInstall -> StartOperationStatus(
         title = "正在请求系统安装",
         body = "请稍候，系统安装确认页面即将打开。",
     )
     is PatchUiState.AwaitingSystemInstall -> StartOperationStatus(
-        title = "正在等待系统安装确认",
+        title = "正在等待系统安装",
         body = "请在系统页面完成操作；完成后返回此处继续核验。",
     )
     else -> null
@@ -473,35 +467,35 @@ private fun startPresentation(state: ManagerUiState): StartPresentation = when (
     PatchUiState.ChooseSource -> {
         val found = state.gameProbeResult is GameProbeResult.Found
         StartPresentation(
-            title = if (found) "准备已安装的游戏" else "先准备游戏",
-            body = if (found) "我们会先检查已安装游戏是否可以安全准备。之后仍需要你在系统页面确认卸载和安装。" else "选择游戏安装文件开始。应用只会处理已加入安全支持列表的版本。",
-            primaryLabel = if (found) "使用已安装的游戏" else "选择游戏安装包",
+            title = if (found) "检测到游戏已安装" else "检测到游戏未安装",
+            body = if (found) "我们可以直接导入已安装的游戏进行修补" else "需要先从本地导入游戏安装包后才能进行修补",
+            primaryLabel = if (found) "导入游戏安装包" else "从本地导入游戏安装包",
             primaryEnabled = true,
             diagnostics = gameProbeDiagnostic(state.gameProbeResult),
             primaryAction = { actions -> if (found) actions.selectInstalledGame else actions.importLocalApk },
         )
     }
-    is PatchUiState.Importing -> StartPresentation("正在检查游戏安装文件", "请不要关闭应用。检查完成后会告诉你下一步。", "正在检查…", false, diagnostics = patch.label, primaryAction = { {} })
+    is PatchUiState.Importing -> StartPresentation("正在导入游戏安装包", "请不要关闭应用", "正在导入…", false, diagnostics = patch.label, primaryAction = { {} })
     is PatchUiState.Review -> {
         val unsupported = patch.input.classification.compatibility.compatibility == Compatibility.Unsupported
         val confirmationReady = patch.confirmation.permits(patch.input.classification.mode)
         StartPresentation(
-            title = if (unsupported) "此游戏版本暂不支持" else "确认后准备游戏",
-            body = if (unsupported) "此版本尚未加入安全支持列表，应用不会继续修改或安装。请选择其他游戏安装文件。" else "已完成基本检查。确认以下事项后，应用会准备所需文件；不会自动卸载或安装游戏。",
-            primaryLabel = if (unsupported) "选择其他安装包" else "继续准备",
+            title = if (unsupported) "此游戏版本暂不支持" else "导入完成",
+            body = if (unsupported) "此版本尚未加入安全支持列表，应用不会继续修改或安装。请选择其他游戏安装文件。" else "已完成基本检查。确认以下事项后，我们将会开始修补游戏安装包",
+            primaryLabel = if (unsupported) "选择其他安装包" else "开始修补",
             primaryEnabled = unsupported || confirmationReady,
             showConfirmations = !unsupported,
             diagnostics = "来源：${patch.input.sourceLabel}\n版本：${patch.input.versionLabel}\n安装组件：${patch.input.splitCount + 1}\n签名：${patch.input.signerSummary}\n${patch.input.classification.compatibility.reasons.joinToString("\n")}",
             primaryAction = { actions -> if (unsupported) actions.restartPatch else actions.preparePatch },
         )
     }
-    is PatchUiState.Preparing -> StartPresentation("正在准备游戏", "正在安全处理安装文件，请不要关闭应用。", "正在准备…", false, diagnostics = "准备中的安装文件：${patch.input.sourceLabel}", primaryAction = { {} })
-    is PatchUiState.AwaitingOriginalUninstall -> StartPresentation("请先卸载原游戏", "准备已完成。请在系统页面卸载当前游戏，返回后再继续安装。", "打开系统卸载页面", diagnostics = patch.summary, primaryAction = { actions -> { actions.requestOriginalUninstall(patch.transactionId) } })
-    is PatchUiState.ReadyToInstall -> StartPresentation("可以安装 Mod 支持版游戏", "原游戏已卸载。请在 Android 系统页面确认安装；应用不会自动完成系统操作。", "打开系统安装确认", diagnostics = patch.summary, primaryAction = { actions -> { actions.installPreparedArtifacts(patch.transactionId) } })
+    is PatchUiState.Preparing -> StartPresentation("正在修补游戏", "请不要关闭应用。", "正在修补…", false, diagnostics = "修补中的安装文件：${patch.input.sourceLabel}", primaryAction = { {} })
+    is PatchUiState.AwaitingOriginalUninstall -> StartPresentation("请先卸载原游戏", "修补已完成。请在系统页面卸载当前游戏，返回后再继续安装。", "打开系统卸载页面", diagnostics = patch.summary, primaryAction = { actions -> { actions.requestOriginalUninstall(patch.transactionId) } })
+    is PatchUiState.ReadyToInstall -> StartPresentation("可以安装 Mod 支持版游戏", "修补已完成。请在系统页面确认安装", "调用系统安装器", diagnostics = patch.summary, primaryAction = { actions -> { actions.installPreparedArtifacts(patch.transactionId) } })
     is PatchUiState.SubmittingInstall -> StartPresentation("正在打开系统安装", "请稍候，马上会转到系统安装确认。", "正在处理…", false, diagnostics = patch.transactionId, primaryAction = { {} })
-    is PatchUiState.AwaitingInstallPermission -> StartPresentation("需要允许安装应用", "请在系统设置允许此应用安装游戏。返回后还需要你手动确认安装。", "前往系统设置", diagnostics = "准备事务：${patch.transactionId ?: "尚未创建"}", primaryAction = { it.openUnknownSourcesSettings })
-    is PatchUiState.AwaitingSystemInstall -> StartPresentation("请在系统页面完成安装", "安装完成后回到这里，应用会核验游戏是否已准备好。", "等待系统确认", false, diagnostics = patch.transactionId, primaryAction = { {} })
-    is PatchUiState.Completed -> StartPresentation("游戏已准备好", "现在可以浏览创意工坊，添加 Mod 后再同步并启动游戏。", "去获取 Mod", diagnostics = patch.transactionId, primaryAction = { {} })
+    is PatchUiState.AwaitingInstallPermission -> StartPresentation("需要允许安装应用权限", "请在系统设置允许此应用安装游戏", "前往系统设置", diagnostics = "准备事务：${patch.transactionId ?: "尚未创建"}", primaryAction = { it.openUnknownSourcesSettings })
+    is PatchUiState.AwaitingSystemInstall -> StartPresentation("请在系统页面完成安装", "安装完成后回到这里，应用会核验游戏是否已准备好。", "等待安装", false, diagnostics = patch.transactionId, primaryAction = { {} })
+    is PatchUiState.Completed -> StartPresentation("游戏安装成功", "现在可以使用mod", "浏览创意工坊", diagnostics = patch.transactionId, primaryAction = { {} })
     is PatchUiState.Failed -> StartPresentation("准备未完成", "这一步没有完成，游戏和 Mod 未被更改。请重新开始；仍有问题时可查看诊断信息。", "重新开始", diagnostics = patch.reason, primaryAction = { it.restartPatch })
 }
 
@@ -510,8 +504,8 @@ private fun StartPresentation.primaryAction(actions: ManagerActions): () -> Unit
 
 @Composable
 private fun ResumePatchCard(recovery: PreparedPatchRecovery, actions: ManagerActions) {
-    NoticeStrip("继续未完成的准备", "发现上次已安全准备的安装文件。继续前会重新检查文件和设备状态。")
-    PrimaryButton("继续准备", onClick = { actions.resumePreparedPatch(recovery.transactionId) })
+    NoticeStrip("继续未完成的安装", "发现上次准备的安装文件")
+    PrimaryButton("继续安装", onClick = { actions.resumePreparedPatch(recovery.transactionId) })
 }
 
 @Composable
@@ -555,7 +549,7 @@ private fun AcquireModsScreen(state: ManagerUiState, actions: ManagerActions, wi
     val submitSearch = { actions.browseWorkshop(state.workshopBrowse.query.copy(searchText = query, page = 1).normalized()) }
     ScreenList(wide) {
         item {
-            HeroPanel("获取 Mod", "找到想要的 Mod", "浏览公开内容或从本地添加 ZIP。下载完成后仍会先检查，并由你决定是否添加。", action = "从本地添加 Mod", onAction = actions.importMod)
+            HeroPanel("获取 Mod", "找到想要的 Mod", "浏览公开内容或从本地添加 ZIP。", action = "从本地添加 Mod", onAction = actions.importMod)
         }
         item {
             Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(18.dp)) {
@@ -622,7 +616,7 @@ private fun FilterDialog(
         Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(22.dp)) {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("筛选 Mod", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                Text("只保留常用条件。更精细的 Steam 条件不会影响安全检查。", fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                Text("只保留常用条件。", fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                 if (state.workshopBrowse.sectionOptions.isNotEmpty()) {
                     Text("分类", fontSize = 14.sp, fontWeight = FontWeight.Bold)
                     state.workshopBrowse.sectionOptions.forEach { option -> SmallAction(if (draft.sectionKey == option.key) "✓ ${option.label}" else option.label) { onDraftChange(draft.copy(sectionKey = option.key)) } }
@@ -709,7 +703,7 @@ private fun WorkshopDetailScreen(item: WorkshopItem, tasks: List<DownloadTask>, 
                     PrimaryButton("查看下载", onClick = onOpenQueue)
                 }
                 item.canDownload -> PrimaryButton("下载并检查") { actions.queueWorkshopDownload(item) }
-                else -> NoticeStrip("当前无法下载", "此内容没有可验证的下载方式。应用不会尝试绕过 Steam 的访问限制。")
+                else -> NoticeStrip("当前无法下载", "此内容没有可验证的下载方式。")
             }
         }
         item { DiagnosticPanel("技术详情", "条目编号：${item.publishedFileId}\n下载方式：${if (item.canDirectDownload) "公开地址" else "Steam 内容"}") }
@@ -763,7 +757,7 @@ private fun MyModsScreen(state: ManagerUiState, actions: ManagerActions, wide: B
     ScreenList(wide) {
         item {
             HeroPanel(
-                eyebrow = "同步并开始",
+                eyebrow = "同步mod",
                 title = if (state.cachedMods.isEmpty()) "先添加一个 Mod" else "让 Mod 在游戏中生效",
                 body = storageMessage.summary,
                 action = storageMessage.actionLabel,
@@ -778,7 +772,7 @@ private fun MyModsScreen(state: ManagerUiState, actions: ManagerActions, wide: B
         }
         item { ImportButton("从本地添加 Mod", onClick = actions.importMod) }
         item { SectionLabel("我的 Mod", "${state.deploymentPlan.size} 个") }
-        if (state.deploymentPlan.isEmpty()) item { EmptyPanel("还没有 Mod", "你可以从创意工坊下载，或从本地选择 ZIP 文件。") }
+        if (state.deploymentPlan.isEmpty()) item { EmptyPanel("还没有 Mod", "你可以从创意工坊下载，或从本地选择 ZIP 文件导入。") }
         items(state.deploymentPlan, key = { it.cacheKey }) { entry ->
             Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(16.dp)) {
                 Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -800,7 +794,7 @@ private fun MyModsScreen(state: ManagerUiState, actions: ManagerActions, wide: B
             }
         }
         state.gameModStorage?.mods?.takeIf { it.isNotEmpty() }?.let { mods ->
-            item { DiagnosticPanel("查看游戏内内容", mods.joinToString("\n") { it.displayName ?: it.directoryName }) }
+            item { DiagnosticPanel("查看游戏启用的mod", mods.joinToString("\n") { it.displayName ?: it.directoryName }) }
         }
     }
 }
@@ -813,23 +807,21 @@ private fun gameStorageMessage(storage: GameModStorageStatus?): LibraryPresentat
     storage.isReady -> LibraryPresentation("游戏已准备好。同步后，启用的 Mod 会在下次启动游戏时生效。", "同步 Mod", LibraryAction.Sync)
     storage.failureCode == ModStorageFailureCode.GameRunning || storage.availability == ModStorageAvailability.GameRunning -> LibraryPresentation("请先退出游戏，再同步 Mod。", "同步 Mod", LibraryAction.Sync)
     storage.failureCode == ModStorageFailureCode.ExternalChangesDetected -> LibraryPresentation("发现游戏内的其他 Mod。同步前会由你确认是否替换。", "同步 Mod", LibraryAction.Sync)
-    storage.availability == ModStorageAvailability.ProviderUnavailable -> LibraryPresentation("需要先启动一次游戏，以启用 Mod 服务。返回后重新检查即可继续同步。", "启动游戏以启用服务", LibraryAction.Launch)
-    storage.availability in setOf(ModStorageAvailability.ProviderMissing, ModStorageAvailability.Unauthorized, ModStorageAvailability.Incompatible) -> LibraryPresentation("游戏还没有准备好使用 Mod。请先完成“准备游戏”。", "重新检查", LibraryAction.Refresh)
+    storage.availability == ModStorageAvailability.ProviderUnavailable -> LibraryPresentation("需要先启动游戏，以启用 Mod 服务。启动后返回此处即可继续同步。", "启动游戏以启用服务", LibraryAction.Launch)
+    storage.availability in setOf(ModStorageAvailability.ProviderMissing, ModStorageAvailability.Unauthorized, ModStorageAvailability.Incompatible) -> LibraryPresentation("游戏还没有进行修补，无法加载mod。请先在首页修补游戏。", "重新检查", LibraryAction.Refresh)
     else -> LibraryPresentation("暂时无法同步 Mod。请重新检查游戏状态。", "重新检查", LibraryAction.Refresh)
 }
 
 @Composable
 private fun SettingsScreen(state: ManagerUiState, actions: ManagerActions, wide: Boolean, onShowDialog: (DialogKind) -> Unit) {
     ScreenList(wide) {
-        item { HeroPanel("设置与帮助", "把数据和决定留在你手中", "Mod、下载和修补文件保存在应用私有目录。修补或同步游戏前，应用始终会要求你确认。") }
+        item { HeroPanel("设置与帮助", "", "Mod、下载和修补文件保存在应用私有目录。修补或同步游戏前，应用始终会要求你确认。") }
         item { SectionLabel("存储", "${state.cachedMods.size} 个 Mod") }
-        item { ListPanel("清理本地 Mod 缓存", "只删除应用内已添加的 Mod，不会删除游戏或存档。", "管理") { onShowDialog(DialogKind.ClearCache) } }
-        item { SectionLabel("帮助与安全", "随时可查看") }
-        item { ListPanel("使用说明", "非官方工具、内容权利与兼容性风险。", "查看") { onShowDialog(DialogKind.Notice) } }
-        item { ListPanel("隐私与数据", "本地保存范围、Steam 网络访问与会话。", "查看") { onShowDialog(DialogKind.Privacy) } }
-        item { ListPanel("开源许可", "GNU GPLv3 与无担保说明。", "查看") { onShowDialog(DialogKind.License) } }
+        item { ListPanel("清理本地 Mod ", "存储空间管理", "管理") { onShowDialog(DialogKind.ClearCache) } }
+        item { SectionLabel("帮助与安全", "") }
+        item { ListPanel("本项目仅供学习交流使用", "请勿用于非法用途", "查看") { onShowDialog(DialogKind.Notice) } }
+        item { ListPanel("开源许可", "GNU GPLv3", "查看") { onShowDialog(DialogKind.License) } }
         item { DiagnosticPanel("应用诊断", "游戏：${gameProbeDiagnostic(state.gameProbeResult)}\n已添加 Mod：${state.cachedMods.size}\n下载任务：${state.downloadTasks.size}") }
-        item { NoticeStrip("版本", "Manager 0.1.0") }
     }
 }
 
@@ -838,33 +830,33 @@ private fun DialogHost(state: ManagerUiState, actions: ManagerActions, dialog: D
     when (dialog) {
         DialogKind.Notice -> LegalNoticeDialog(actions.acceptNotice, onDismiss)
         DialogKind.Privacy -> TextDialog("隐私与数据流", "你选择导入的 Mod、下载暂存和修补工件保存在应用私有目录。浏览创意工坊时只会连接 Steam 公开服务和经过校验的下载地址。密码和 Steam Guard 验证码只用于认证；选择记住登录状态时，刷新令牌会由 Android Keystore 加密保存。", onDismiss)
-        DialogKind.License -> TextDialog("开源许可与无担保", "本项目以 GNU GPLv3 发布，按“原样”提供且不提供担保。游戏、商标和 Mod 内容的权利归各自权利人所有。", onDismiss)
-        DialogKind.ClearCache -> ConfirmDialog("清理本地 Mod 缓存？", "这会删除应用内已添加的 Mod，无法撤销；不会删除游戏、存档或下载任务。", "确认清理", { actions.clearModCache(); onDismiss() }, onDismiss)
+        DialogKind.License -> TextDialog("开源许可", "本项目以 GNU GPLv3 开源", onDismiss)
+        DialogKind.ClearCache -> ConfirmDialog("清理本地 Mod 缓存？", "这会删除应用内已添加的 Mod", "确认清理", { actions.clearModCache(); onDismiss() }, onDismiss)
         is DialogKind.DeleteCachedMod -> {
             val entry = state.deploymentPlan.firstOrNull { it.cacheKey == dialog.cacheKey }
-            if (entry != null) ConfirmDialog("删除 ${entry.displayName}？", "这会删除应用内的 Mod 缓存，并从同步列表移除。游戏内已有 Mod 不会立即改变，之后同步时才会更新。", "删除 Mod", { actions.deleteCachedMod(entry.cacheKey); onDismiss() }, onDismiss)
+            if (entry != null) ConfirmDialog("删除 ${entry.displayName}？", "这会删除应用内的 Mod，并从同步列表移除。游戏内已有 Mod 不会立即改变，之后同步时才会更新。", "删除 Mod", { actions.deleteCachedMod(entry.cacheKey); onDismiss() }, onDismiss)
         }
         DialogKind.SyncMods -> {
             val external = state.gameModStorage?.mods.orEmpty().filterNot { it.managedBySnapshot }
             ConfirmDialog(
                 "同步 Mod 到游戏？",
-                if (external.isEmpty()) "会将当前启用的 Mod 和顺序同步到游戏。请先完全退出游戏；同步完成后重新启动游戏。" else "发现 ${external.size} 个不由本应用管理的游戏内 Mod。继续会用当前列表替换它们；取消则不会修改游戏。",
+                if (external.isEmpty()) "会将当前启用的 Mod 和顺序同步到游戏。" else "发现 ${external.size} 个不由本应用管理的游戏内 Mod。继续会用当前列表替换它们；取消则不会修改游戏。",
                 if (external.isEmpty()) "确认同步" else "替换并同步",
                 { actions.syncMods(external.isNotEmpty()); onDismiss() },
                 onDismiss,
             )
         }
-        DialogKind.StopGameAndSync -> ConfirmDialog("关闭游戏后同步？", "游戏正在运行。继续会结束游戏进程，未保存的进度可能丢失；关闭后会重试同步。", "关闭并同步", { actions.confirmStopGameAndSync(); onDismiss() }, { actions.dismissStopGameAndSync(); onDismiss() })
+        DialogKind.StopGameAndSync -> ConfirmDialog("结束游戏进程后同步mod", "游戏正在运行。继续会先结束游戏进程后尝试同步mod", "结束游戏并同步mod", { actions.confirmStopGameAndSync(); onDismiss() }, { actions.dismissStopGameAndSync(); onDismiss() })
         DialogKind.XiaomiInstallRisk -> TextDialog(
             "小米设备安装提示",
-            "检测到 Xiaomi、Redmi 或 POCO 设备。由于 MIUI / 澎湃系统可能修改 Android API，安装过程可能出现无法预知的情况并导致失败。如果遇到安装失败，大概率可以通过系统设置的开发者选项关闭 MIUI 优化或系统优化来修复，然后从准备游戏重新开始。",
+            "由于 MIUI / 澎湃系统对Android API的修改，安装过程可能出现无法预知的情况并导致失败。如果遇到安装失败，大概率可以通过系统设置的开发者选项关闭 MIUI 优化/系统优化来修复",
             onDismiss,
         )
         DialogKind.PatchCleanup -> {
             state.patchCleanup?.let { cleanup ->
                 ConfirmDialog(
                     "清理临时文件？",
-                    "这会删除应用内可安全清理的修补临时文件，包括提取的安装包、重签后的安装包和中断残留，释放 ${formatBytes(cleanup.sizeBytes)}。不会删除已安装游戏、存档、已导出的 APKS、Mod 或创意工坊下载内容。",
+                    "这会删除因修补游戏而产生的临时文件，大多数情况下都可以放心清理，释放 ${formatBytes(cleanup.sizeBytes)}。此操作不会删除mod",
                     "确认清理",
                     { actions.confirmPatchCleanup(); onDismiss() },
                     { actions.dismissPatchCleanup(); onDismiss() },
@@ -873,7 +865,7 @@ private fun DialogHost(state: ManagerUiState, actions: ManagerActions, dialog: D
         }
         is DialogKind.WorkshopTaskRemoval -> {
             val task = state.downloadTasks.firstOrNull { it.id == dialog.taskId }
-            if (task != null) ConfirmDialog("删除下载任务？", "这会停止任务并删除应用内下载暂存。已添加的 Mod、游戏和存档不会受影响。", "删除任务", { actions.removeWorkshopDownload(task.id); onDismiss() }, onDismiss)
+            if (task != null) ConfirmDialog("删除下载任务？", "这会停止任务并删除应用内下载暂存", "删除任务", { actions.removeWorkshopDownload(task.id); onDismiss() }, onDismiss)
         }
         null -> Unit
     }
@@ -897,7 +889,7 @@ private fun SteamLoginDialog(auth: SteamAuthState, actions: ManagerActions, onDi
                     }
                     is SteamAuthState.SteamGuardRequired -> {
                         Text("需要 Steam Guard 验证", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                        Text("请在 Steam 中获取验证码并提交。不要重复提交同一验证码。", fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                        Text("请在 Steam 中获取验证码并提交。", fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                         LabeledTextField(guardCode, { guardCode = it }, "验证码")
                         PrimaryButton("提交验证码", guardCode.isNotBlank()) { actions.submitSteamGuard(guardCode); guardCode = "" }
                     }
@@ -906,13 +898,13 @@ private fun SteamLoginDialog(auth: SteamAuthState, actions: ManagerActions, onDi
                         Text("请在 Steam 完成确认后继续检查。", fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                         PrimaryButton("继续检查", onClick = actions.checkPendingSteamLogin)
                     }
-                    SteamAuthState.SigningIn, is SteamAuthState.VerifyingSteamGuard -> LoadingPanel("正在连接 Steam，请不要重复提交。")
+                    SteamAuthState.SigningIn, is SteamAuthState.VerifyingSteamGuard -> LoadingPanel("正在连接 Steam")
                     else -> {
                         Text("登录 Steam", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                        Text("登录只用于受限下载内容。密码不会保存。", fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                        Text("登录即可下载创意工坊中的项目", fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                         LabeledTextField(username, { username = it }, "Steam 账号")
                         LabeledTextField(password, { password = it }, "Steam 密码", password = true)
-                        ConfirmationCheckbox("记住登录状态，以便后台下载", rememberSession) { rememberSession = it }
+                        ConfirmationCheckbox("记住登录状态，以后自动登录", rememberSession) { rememberSession = it }
                         PrimaryButton("登录", username.isNotBlank() && password.isNotBlank()) { actions.beginSteamLogin(username, password, rememberSession); password = "" }
                     }
                 }
@@ -1217,10 +1209,10 @@ private fun LegalNoticeDialog(onAccept: () -> Unit, onDismiss: (() -> Unit)? = n
         Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(22.dp)) {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("使用前说明", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                Text("这是独立社区工具，不隶属游戏发行方、Steam 或 Valve。请只处理你有权使用的游戏和 Mod。", fontSize = 14.sp)
-                Text("添加 Mod 先保存在应用内；同步 Mod 和准备游戏会在真正改变游戏前明确要求你确认。", fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                Text("本工具出于个人学习目的制作，与苏丹的游戏的官方开发商、发行商及任何相关关联公司无任何关系", fontSize = 14.sp)
+                Text("", fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                 ConfirmationCheckbox("我已阅读并理解", checked) { checked = it }
-                PrimaryButton("继续", checked) { onAccept(); onDismiss?.invoke() }
+                PrimaryButton("确认", checked) { onAccept(); onDismiss?.invoke() }
                 onDismiss?.let { SecondaryButton("取消", onClick = it) }
             }
         }
