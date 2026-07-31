@@ -87,29 +87,57 @@ class AndroidPrivateModCache(private val cacheRoot: File) {
             ?.filter { it.name.startsWith('.') && it.name.endsWith(".partial") }
             ?.forEach(File::deleteRecursively)
     }
-    fun importDirectory(sourceRoot: File, source: CacheSource): CachedMod {
-        val validated = validateDirectory(sourceRoot)
+    fun importDirectory(sourceRoot: File, source: CacheSource): CachedMod =
+        importDirectories(listOf(sourceRoot), source).single()
+
+    fun importDirectories(sourceRoots: List<File>, source: CacheSource): List<CachedMod> {
+        if (sourceRoots.isEmpty()) return emptyList()
+        val validated = sourceRoots.map { it to validateDirectory(it) }
+            .distinctBy { it.second.digest }
         if (!cacheRoot.mkdirs() && !cacheRoot.isDirectory) throw ImportValidationException("无法创建私有缓存目录")
-        val staging = File(cacheRoot, ".${UUID.randomUUID()}.partial")
+        val pending = mutableListOf<PendingImport>()
+        val committed = mutableListOf<File>()
         try {
-            copyDirectory(sourceRoot, staging, 0)
-            val destination = File(cacheRoot, validated.digest)
-            if (!destination.exists() && !staging.renameTo(destination)) throw ImportValidationException("无法提交私有缓存")
-            if (destination.exists() && staging.exists()) staging.deleteRecursively()
-            return CachedMod(
-                cacheKey = validated.digest,
-                contentDigestSha256 = validated.digest,
-                displayName = validated.name,
-                source = source,
-                sizeBytes = validated.sizeBytes,
-                importedAtEpochMillis = System.currentTimeMillis(),
-                state = CachedModState.Cached,
-            )
+            validated.forEach { (sourceRoot, expected) ->
+                val staging = File(cacheRoot, ".${UUID.randomUUID()}.partial")
+                pending += PendingImport(sourceRoot, expected, staging)
+                copyDirectory(sourceRoot, staging, 0)
+                val copied = validateDirectory(staging)
+                if (copied.digest != expected.digest || copied.sizeBytes != expected.sizeBytes) {
+                    throw ImportValidationException("导入内容在复制期间发生变化")
+                }
+            }
+            return pending.map { item ->
+                val destination = File(cacheRoot, item.validated.digest)
+                if (!destination.exists()) {
+                    if (!item.staging.renameTo(destination)) throw ImportValidationException("无法提交私有缓存")
+                    committed += destination
+                } else {
+                    item.staging.deleteRecursively()
+                }
+                CachedMod(
+                    cacheKey = item.validated.digest,
+                    contentDigestSha256 = item.validated.digest,
+                    displayName = item.validated.name,
+                    source = source,
+                    sizeBytes = item.validated.sizeBytes,
+                    importedAtEpochMillis = System.currentTimeMillis(),
+                    state = CachedModState.Cached,
+                )
+            }
         } catch (error: Exception) {
-            staging.deleteRecursively()
+            pending.forEach { it.staging.deleteRecursively() }
+            committed.forEach { it.deleteRecursively() }
             throw error
         }
     }
+
+    private data class PendingImport(
+        val sourceRoot: File,
+        val validated: AndroidValidatedMod,
+        val staging: File,
+    )
+
 
     fun validateDirectory(sourceRoot: File): AndroidValidatedMod {
         if (!sourceRoot.isDirectory || isSymbolicLink(sourceRoot)) throw ImportValidationException("Mod 根目录不可读")

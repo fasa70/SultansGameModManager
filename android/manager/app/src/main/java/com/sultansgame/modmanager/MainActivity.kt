@@ -11,6 +11,8 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.sultansgame.modmanager.platform.saf.ExternalZipInbox
+import com.sultansgame.modmanager.platform.saf.ExternalZipIntentResult
 import com.sultansgame.modmanager.ui.ManagerActions
 import com.sultansgame.modmanager.ui.ManagerApp
 import kotlinx.coroutines.launch
@@ -21,6 +23,8 @@ import top.yukonga.miuix.kmp.theme.ThemeController
 
 class MainActivity : ComponentActivity() {
     private val viewModel by lazy { ViewModelProvider(this)[ManagerViewModel::class.java] }
+    private val externalZipInbox by lazy { ExternalZipInbox(this) }
+    private var lastExternalIntentSignature: String? = null
     private val selectModZip = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let(viewModel::importZip)
     }
@@ -80,7 +84,7 @@ class MainActivity : ComponentActivity() {
                 ManagerApp(
                     state = state,
                     actions = ManagerActions(
-                        importMod = { selectModZip.launch(arrayOf("application/zip", "application/x-zip-compressed")) },
+                        importMod = { selectModZip.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) },
                         importLocalApk = { selectLocalApk.launch(arrayOf("application/vnd.android.package-archive", "application/octet-stream")) },
                         importLocalApkSet = { selectLocalApkSet.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) },
                         selectInstalledGame = viewModel::selectInstalledGameSource,
@@ -124,9 +128,30 @@ class MainActivity : ComponentActivity() {
                         dismissAvailableUpdate = viewModel::dismissAvailableUpdate,
                         openAvailableUpdate = viewModel::openAvailableUpdate,
                         clearFeedback = viewModel::clearFeedback,
+                        confirmExternalZipImport = viewModel::confirmExternalZipImport,
+                        cancelExternalZipImport = viewModel::cancelExternalZipImport,
                     ),
                 )
             }
+        }
+        handleExternalIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleExternalIntent(intent)
+    }
+
+    private fun handleExternalIntent(intent: Intent) {
+        val signature = "${intent.action}|${intent.data}|${intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)}|${intent.flags}"
+        if (signature == lastExternalIntentSignature) return
+        lastExternalIntentSignature = signature
+        when (val result = externalZipInbox.inspect(intent)) {
+            ExternalZipIntentResult.Ignored -> Unit
+            ExternalZipIntentResult.MultipleFilesNotSupported -> viewModel.reportExternalImportError("暂不支持一次分享多个 ZIP 文件，请逐个分享。")
+            is ExternalZipIntentResult.Accepted -> viewModel.receiveExternalZip(result.uri)
+            is ExternalZipIntentResult.Rejected -> viewModel.reportExternalImportError(result.reason)
         }
     }
 
@@ -142,7 +167,7 @@ class MainActivity : ComponentActivity() {
         null,
         null,
     )?.use { cursor ->
-        cursor.takeIf { it.moveToFirst() }
-            ?.getString(cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME))
+        val column = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+        cursor.takeIf { column >= 0 && it.moveToFirst() }?.getString(column)
     } ?: uri.lastPathSegment ?: "所选文件"
 }

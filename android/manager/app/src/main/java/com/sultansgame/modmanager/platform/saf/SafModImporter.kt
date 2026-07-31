@@ -13,7 +13,9 @@ import com.sultansgame.modmanager.storage.ModPathPolicy
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.FilterInputStream
 import java.io.InputStream
+import java.util.Locale
 import java.util.UUID
 import java.util.zip.ZipInputStream
 
@@ -24,6 +26,11 @@ class ZipModImporter(
     fun importZip(uri: Uri): List<CachedMod> = context.contentResolver.openInputStream(uri)
         ?.use { source -> importZipStream(source, allowMultipleRoots = true) }
         ?: throw ImportValidationException("无法读取所选 ZIP")
+
+    fun importZip(file: File): List<CachedMod> {
+        if (!file.isFile) throw ImportValidationException("外部 ZIP 文件不可读")
+        return FileInputStream(file).use { source -> importZipStream(source, allowMultipleRoots = true) }
+    }
 
     fun importDownloadedZip(file: File): CachedMod {
         if (!file.isFile) throw ImportValidationException("下载的 ZIP 不可读")
@@ -43,9 +50,7 @@ class ZipModImporter(
                 throw ImportValidationException("下载的 ZIP 必须只包含一个 Mod 根目录")
             }
             roots.forEach(cache::validateDirectory)
-            return roots.map { root ->
-                cache.importDirectory(root, CacheSource.SafArchive)
-            }
+            return cache.importDirectories(roots, CacheSource.SafArchive)
         } finally {
             staging.deleteRecursively()
         }
@@ -57,12 +62,12 @@ class ZipModImporter(
         val caseFoldedPaths = mutableSetOf<String>()
         var entries = 0
         var totalSize = 0L
-        ZipInputStream(source).use { zip ->
+        ZipInputStream(BoundedInputStream(source)).use { zip ->
             while (true) {
                 val entry = zip.nextEntry ?: break
                 val normalized = normalizeEntry(entry.name)
                 if (++entries > MAXIMUM_MOD_ENTRY_COUNT) throw ImportValidationException("文件或目录数量超出限制")
-                if (!paths.add(normalized) || !caseFoldedPaths.add(normalized.lowercase())) {
+                if (!paths.add(normalized) || !caseFoldedPaths.add(normalized.lowercase(Locale.ROOT))) {
                     throw ImportValidationException("ZIP 包含重复或大小写冲突路径")
                 }
                 val destination = File(root, normalized)
@@ -112,4 +117,31 @@ class ZipModImporter(
 
     private fun hasManifest(directory: File): Boolean = directory.listFiles()
         ?.count { it.isFile && it.name.equals("info.json", ignoreCase = true) } == 1
+
+    private class BoundedInputStream(input: InputStream) : FilterInputStream(input) {
+        private var total = 0L
+
+        override fun read(): Int {
+            val value = super.read()
+            if (value >= 0) checkSize(1)
+            return value
+        }
+
+        override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+            val count = super.read(buffer, offset, length)
+            if (count > 0) checkSize(count)
+            return count
+        }
+
+        private fun checkSize(count: Int) {
+            total = Math.addExact(total, count.toLong())
+            if (total > MAXIMUM_ARCHIVE_SIZE_BYTES) {
+                throw ImportValidationException("ZIP 原始文件大小超出限制")
+            }
+        }
+    }
+
+    private companion object {
+        const val MAXIMUM_ARCHIVE_SIZE_BYTES = 512L * 1024 * 1024
+    }
 }

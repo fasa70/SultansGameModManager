@@ -38,6 +38,7 @@ import com.sultansgame.modmanager.platform.auth.steamAccountBindingHash
 import com.sultansgame.modmanager.platform.game.AndroidModStorageLoaderBridge
 import com.sultansgame.modmanager.platform.game.GameProbeResult
 import com.sultansgame.modmanager.platform.game.PackageManagerGameProbe
+import com.sultansgame.modmanager.platform.saf.ExternalZipInbox
 import com.sultansgame.modmanager.platform.saf.ZipModImporter
 import com.sultansgame.modmanager.platform.storage.AndroidPrivateModCache
 import com.sultansgame.modmanager.platform.storage.CachedModDeletionResult
@@ -79,6 +80,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     private val privateModCache = AndroidPrivateModCache(File(application.filesDir, "mod-cache"))
     private val deploymentPlan = DeploymentPlanStore(application)
     private val zipImporter = ZipModImporter(application, privateModCache)
+    private val externalZipInbox = ExternalZipInbox(application)
     private val artifactImporter = WorkshopArtifactImporter(application, privateModCache, zipImporter)
     private val taskStore = WorkshopTaskStore(application)
     private val downloadScheduler = WorkshopDownloadScheduler(application)
@@ -138,6 +140,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
 
     init {
         privateModCache.recoverInterruptedImports()
+        externalZipInbox.recoverInterruptedReceipts()
         val cachedMods = privateModCache.listCached()
         val pendingPatch = transactions.latestPreparedForRecovery()
         val cleanupCandidate = transactions.cleanupSummary(emptySet())
@@ -438,6 +441,10 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         mutableState.value = mutableState.value.copy(feedback = null)
     }
 
+    fun reportExternalImportError(reason: String) {
+        mutableState.value = mutableState.value.copy(feedback = FeedbackMessage(reason, isError = true))
+    }
+
     fun clearModCache() {
         viewModelScope.launch {
             withContext(Dispatchers.IO) { privateModCache.clear() }
@@ -498,22 +505,71 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             mutableState.value = mutableState.value.copy(feedback = FeedbackMessage("正在校验并导入 ZIP Mod…"))
             runCatching { withContext(Dispatchers.IO) { zipImporter.importZip(uri) } }
-                .onSuccess { imported ->
-                    val cachedMods = (mutableState.value.cachedMods + imported).distinctBy { it.cacheKey }
-                    mutableState.value = mutableState.value.copy(
-                        cachedMods = cachedMods,
-                        deploymentPlan = deploymentPlan.entries(cachedMods),
-                        feedback = FeedbackMessage(
-                            "已安全缓存 ${imported.size} 个 Mod：${imported.joinToString { it.displayName }}；可在 Mod 页面启用并同步到游戏。",
-                        ),
-                    )
-                }
+                .onSuccess(::updateImportedMods)
                 .onFailure { error ->
                     mutableState.value = mutableState.value.copy(
                         feedback = FeedbackMessage("ZIP 导入失败：${error.message ?: "无法验证内容"}", isError = true),
                     )
                 }
         }
+    }
+
+    fun receiveExternalZip(uri: Uri) {
+        if (mutableState.value.pendingExternalZip != null) {
+            mutableState.value = mutableState.value.copy(feedback = FeedbackMessage("请先处理当前待导入的外部 ZIP 文件。", isError = true))
+            return
+        }
+        viewModelScope.launch {
+            mutableState.value = mutableState.value.copy(feedback = FeedbackMessage("正在安全接收外部 ZIP 文件…"))
+            runCatching { withContext(Dispatchers.IO) { externalZipInbox.receive(uri) } }
+                .onSuccess { request ->
+                    mutableState.value = mutableState.value.copy(
+                        pendingExternalZip = request,
+                        feedback = null,
+                    )
+                }
+                .onFailure { error ->
+                    mutableState.value = mutableState.value.copy(
+                        feedback = FeedbackMessage("无法接收外部 ZIP：${error.message ?: "请重试"}", isError = true),
+                    )
+                }
+        }
+    }
+
+    fun confirmExternalZipImport() {
+        val request = mutableState.value.pendingExternalZip ?: return
+        mutableState.value = mutableState.value.copy(pendingExternalZip = null, feedback = FeedbackMessage("正在校验并导入 ${request.displayName}…"))
+        viewModelScope.launch {
+            try {
+                val imported = withContext(Dispatchers.IO) { zipImporter.importZip(externalZipInbox.fileFor(request)) }
+                updateImportedMods(imported)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                mutableState.value = mutableState.value.copy(
+                    feedback = FeedbackMessage("ZIP 导入失败：${error.message ?: "无法验证内容"}", isError = true),
+                )
+            } finally {
+                withContext(Dispatchers.IO) { externalZipInbox.discard(request) }
+            }
+        }
+    }
+
+    fun cancelExternalZipImport() {
+        val request = mutableState.value.pendingExternalZip ?: return
+        mutableState.value = mutableState.value.copy(pendingExternalZip = null)
+        viewModelScope.launch(Dispatchers.IO) { externalZipInbox.discard(request) }
+    }
+
+    private fun updateImportedMods(imported: List<com.sultansgame.modmanager.model.CachedMod>) {
+        val cachedMods = (mutableState.value.cachedMods + imported).distinctBy { it.cacheKey }
+        mutableState.value = mutableState.value.copy(
+            cachedMods = cachedMods,
+            deploymentPlan = deploymentPlan.entries(cachedMods),
+            feedback = FeedbackMessage(
+                "已安全缓存 ${imported.size} 个 Mod：${imported.joinToString { it.displayName }}；可在 Mod 页面启用并同步到游戏。",
+            ),
+        )
     }
 
     fun beginSteamLogin(username: String, password: String, rememberSession: Boolean) {

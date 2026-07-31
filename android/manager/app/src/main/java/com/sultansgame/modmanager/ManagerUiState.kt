@@ -1,6 +1,7 @@
 package com.sultansgame.modmanager
 
 import com.sultansgame.modmanager.model.CachedMod
+import com.sultansgame.modmanager.platform.saf.ExternalZipImportRequest
 import com.sultansgame.modmanager.model.DeploymentEntry
 import com.sultansgame.modmanager.model.DeviceSigningKeyState
 import com.sultansgame.modmanager.model.DownloadTask
@@ -36,6 +37,7 @@ data class ManagerUiState(
     val noticeAccepted: Boolean? = null,
     val autoUpdateCheckEnabled: Boolean? = null,
     val availableUpdate: AvailableUpdate? = null,
+    val pendingExternalZip: ExternalZipImportRequest? = null,
     val feedback: FeedbackMessage? = null,
 )
 
