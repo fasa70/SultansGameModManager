@@ -1053,6 +1053,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             mutableState.value.apksExport is ApksExportUiState.Idle &&
             mutableState.value.patch !is PatchUiState.Importing &&
             mutableState.value.patch !is PatchUiState.Preparing &&
+            mutableState.value.patch !is PatchUiState.ReadyToInstall &&
             mutableState.value.patch !is PatchUiState.SubmittingInstall &&
             mutableState.value.patch !is PatchUiState.AwaitingSystemInstall
 

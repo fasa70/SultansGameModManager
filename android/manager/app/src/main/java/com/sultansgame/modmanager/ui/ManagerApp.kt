@@ -1,5 +1,6 @@
 package com.sultansgame.modmanager.ui
 
+import android.os.Build
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.expandVertically
@@ -161,6 +162,7 @@ private sealed interface DialogKind {
     data object SyncMods : DialogKind
     data object StopGameAndSync : DialogKind
     data object PatchCleanup : DialogKind
+    data object XiaomiInstallRisk : DialogKind
     data class WorkshopTaskRemoval(val taskId: String) : DialogKind
 }
 
@@ -168,7 +170,22 @@ private sealed interface DialogKind {
 fun ManagerApp(state: ManagerUiState, actions: ManagerActions) {
     var destinationIndex by rememberSaveable { mutableIntStateOf(Destination.Start.ordinal) }
     var dialog by remember { mutableStateOf<DialogKind?>(null) }
+    var promptedXiaomiInstallTransaction by remember { mutableStateOf<String?>(null) }
     val destination = Destination.entries[destinationIndex]
+
+    val readyToInstall = state.patch as? PatchUiState.ReadyToInstall
+    val xiaomiDevice = remember {
+        isXiaomiFamilyDevice(Build.MANUFACTURER, Build.BRAND)
+    }
+
+    LaunchedEffect(readyToInstall?.transactionId, xiaomiDevice) {
+        if (readyToInstall == null) {
+            promptedXiaomiInstallTransaction = null
+        } else if (xiaomiDevice && promptedXiaomiInstallTransaction != readyToInstall.transactionId) {
+            promptedXiaomiInstallTransaction = readyToInstall.transactionId
+            dialog = DialogKind.XiaomiInstallRisk
+        }
+    }
 
     LaunchedEffect(state.patchCleanupConfirmation != null) {
         if (state.patchCleanupConfirmation != null) dialog = DialogKind.PatchCleanup
@@ -388,14 +405,17 @@ private fun StartScreen(state: ManagerUiState, actions: ManagerActions, wide: Bo
             }
             else -> Unit
         }
-        state.patchCleanup?.let { cleanup ->
-            item { SectionLabel("存储与清理", formatBytes(cleanup.sizeBytes)) }
-            item {
-                SecondaryButton(
-                    "临时文件已占用${formatBytes(cleanup.sizeBytes)}，点击清理",
-                    enabled = !state.patchCleanupInProgress,
-                    onClick = actions.requestPatchCleanup,
-                )
+        val showPatchCleanup = state.patch !is PatchUiState.ReadyToInstall
+        if (showPatchCleanup) {
+            state.patchCleanup?.let { cleanup ->
+                item { SectionLabel("存储与清理", formatBytes(cleanup.sizeBytes)) }
+                item {
+                    SecondaryButton(
+                        "清理修补临时文件（${formatBytes(cleanup.sizeBytes)}）",
+                        enabled = !state.patchCleanupInProgress,
+                        onClick = actions.requestPatchCleanup,
+                    )
+                }
             }
         }
         item { DiagnosticPanel("诊断信息", presentation.diagnostics) }
@@ -829,6 +849,11 @@ private fun DialogHost(state: ManagerUiState, actions: ManagerActions, dialog: D
             )
         }
         DialogKind.StopGameAndSync -> ConfirmDialog("关闭游戏后同步？", "游戏正在运行。继续会结束游戏进程，未保存的进度可能丢失；关闭后会重试同步。", "关闭并同步", { actions.confirmStopGameAndSync(); onDismiss() }, { actions.dismissStopGameAndSync(); onDismiss() })
+        DialogKind.XiaomiInstallRisk -> TextDialog(
+            "小米设备安装提示",
+            "检测到 Xiaomi、Redmi 或 POCO 设备。由于 MIUI / 澎湃系统可能修改 Android API，安装过程可能出现无法预知的情况并导致失败。如果遇到安装失败，大概率可以通过系统设置的开发者选项关闭 MIUI 优化或系统优化来修复，然后从准备游戏重新开始。",
+            onDismiss,
+        )
         DialogKind.PatchCleanup -> {
             state.patchCleanup?.let { cleanup ->
                 ConfirmDialog(
@@ -1155,7 +1180,7 @@ private fun ConfirmationCheckbox(label: String, checked: Boolean, onToggle: (Boo
 @Composable
 private fun ApksExportAction(export: ApksExportUiState, transactionId: String, onExport: (String) -> Unit) {
     when (export) {
-        ApksExportUiState.Idle -> SecondaryButton("导出安装包（APKS）") { onExport(transactionId) }
+        ApksExportUiState.Idle -> PrimaryButton("导出安装包（APKS）") { onExport(transactionId) }
         is ApksExportUiState.SelectingDestination -> if (export.transactionId == transactionId) LoadingPanel("正在选择导出位置…")
         is ApksExportUiState.Validating -> if (export.transactionId == transactionId) LoadingPanel("正在检查安装文件…")
         is ApksExportUiState.Writing -> if (export.transactionId == transactionId) {
