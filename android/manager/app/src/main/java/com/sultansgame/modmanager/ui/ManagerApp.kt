@@ -591,7 +591,13 @@ private fun AcquireModsScreen(state: ManagerUiState, actions: ManagerActions, wi
             }
         }
         state.workshopBrowse.error?.let { item { FriendlyErrorPanel("暂时无法获取创意工坊", "请检查网络后重试。", it) } }
-        if (state.workshopBrowse.items.isEmpty() && state.workshopBrowse.isRefreshing) item { LoadingPanel("正在浏览公开 Mod…") }
+        if (state.workshopBrowse.isRefreshing) {
+            item {
+                LoadingPanel(
+                    if (state.workshopBrowse.items.isEmpty()) "正在浏览公开 Mod…" else "正在更新创意工坊结果…",
+                )
+            }
+        }
         if (state.workshopBrowse.items.isNotEmpty()) {
             item { SectionLabel("推荐 Mod", "${state.workshopBrowse.totalCount} 项") }
             items(state.workshopBrowse.items, key = { it.publishedFileId.toString() }) { item -> WorkshopBrowseItemCard(item) { onOpenDetail(item.publishedFileId.toString()) } }
