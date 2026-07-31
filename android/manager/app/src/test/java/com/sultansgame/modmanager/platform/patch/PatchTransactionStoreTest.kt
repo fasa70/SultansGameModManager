@@ -114,6 +114,22 @@ class PatchTransactionStoreTest {
     }
 
     @Test
+    fun deletesExactlyTheWorkspacesReportedByCleanupSummary() {
+        val store = PatchTransactionStore(TestContext())
+        createArtifacts(store, "submitted", transaction("submitted", stage = PatchStage.AwaitingSystemInstall), inputBytes = 4, signedBytes = 8)
+        createArtifacts(store, "reserved", transaction("reserved"), inputBytes = 4, signedBytes = 8)
+        createArtifacts(store, "cleanup", transaction("cleanup"), inputBytes = 4, signedBytes = 8)
+
+        val summary = requireNotNull(store.cleanupSummary(setOf("reserved")))
+        val result = store.deleteCleanupWorkspaces(setOf("reserved")) as PatchWorkspaceCleanupResult.Deleted
+
+        assertEquals(summary.workspaceIds, result.workspaceIds)
+        assertTrue(store.root("submitted").exists())
+        assertTrue(store.root("reserved").exists())
+        assertFalse(store.root("cleanup").exists())
+    }
+
+    @Test
     fun ignoresEmptyWorkspace() {
         val store = PatchTransactionStore(TestContext())
         store.root("empty").mkdirs()
