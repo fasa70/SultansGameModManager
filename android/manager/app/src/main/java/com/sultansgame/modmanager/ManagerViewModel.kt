@@ -20,8 +20,8 @@ import com.sultansgame.modmanager.platform.patch.DeviceSigningKeyStore
 import com.sultansgame.modmanager.platform.patch.GameProfileRegistry
 import com.sultansgame.modmanager.platform.patch.InstalledApkExtractor
 import com.sultansgame.modmanager.platform.patch.PackageInstallerGateway
-import com.sultansgame.modmanager.platform.patch.PatchArtifactCleanupCandidate
-import com.sultansgame.modmanager.platform.patch.PatchArtifactCleanupResult
+import com.sultansgame.modmanager.platform.patch.PatchWorkspaceCleanupResult
+import com.sultansgame.modmanager.platform.patch.PatchWorkspaceCleanupSummary
 import com.sultansgame.modmanager.platform.patch.PatchInstallResults
 import com.sultansgame.modmanager.platform.patch.PatchOrchestrationResult
 import com.sultansgame.modmanager.platform.patch.PatchOrchestrator
@@ -133,7 +133,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         privateModCache.recoverInterruptedImports()
         val cachedMods = privateModCache.listCached()
         val pendingPatch = transactions.latestPreparedForRecovery()
-        val cleanupCandidate = transactions.latestCleanupCandidate()
+        val cleanupCandidate = transactions.cleanupSummary(emptySet())
         mutableState.value = mutableState.value.copy(
             cachedMods = cachedMods,
             deploymentPlan = deploymentPlan.entries(cachedMods),
@@ -395,9 +395,9 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun requestPatchCleanupConfirmation(transactionId: String) {
+    fun requestPatchCleanupConfirmation() {
         val candidate = mutableState.value.patchCleanup ?: return
-        if (candidate.transactionId != transactionId || !canCleanPatchArtifacts()) return
+        if (!canCleanPatchArtifacts()) return
         mutableState.value = mutableState.value.copy(patchCleanupConfirmation = candidate)
     }
 
@@ -405,44 +405,37 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         mutableState.value = mutableState.value.copy(patchCleanupConfirmation = null)
     }
 
-    fun confirmPatchCleanup(transactionId: String) {
-        val candidate = mutableState.value.patchCleanup ?: return
-        if (candidate.transactionId != transactionId || !canCleanPatchArtifacts()) return
+    fun confirmPatchCleanup() {
+        if (mutableState.value.patchCleanup == null || !canCleanPatchArtifacts()) return
         viewModelScope.launch {
             mutableState.value = mutableState.value.copy(
                 patchCleanupConfirmation = null,
                 patchCleanupInProgress = true,
             )
-            when (val result = withContext(Dispatchers.IO) { transactions.deletePreparedArtifacts(transactionId) }) {
-                PatchArtifactCleanupResult.Deleted,
-                PatchArtifactCleanupResult.NotFound -> {
-                    if (selectedPatchInput?.extracted?.transactionId == transactionId) selectedPatchInput = null
-                    refreshPatchWorkspaceState()
+            when (val result = withContext(Dispatchers.IO) {
+                transactions.deleteCleanupWorkspaces(reservedPatchWorkspaceIds())
+            }) {
+                is PatchWorkspaceCleanupResult.Deleted -> {
+                    if (selectedPatchInput?.extracted?.transactionId in result.workspaceIds) selectedPatchInput = null
                     val current = mutableState.value.patch
                     mutableState.value = mutableState.value.copy(
-                        patch = when (current) {
-                            is PatchUiState.AwaitingOriginalUninstall -> if (current.transactionId == transactionId) PatchUiState.ChooseSource else current
-                            is PatchUiState.ReadyToInstall -> if (current.transactionId == transactionId) PatchUiState.ChooseSource else current
-                            is PatchUiState.AwaitingInstallPermission -> if (current.transactionId == transactionId) PatchUiState.ChooseSource else current
-                            is PatchUiState.Completed -> if (current.transactionId == transactionId) PatchUiState.ChooseSource else current
-                            is PatchUiState.Failed -> if (current.transactionId == transactionId) PatchUiState.ChooseSource else current
-                            else -> current
-                        },
+                        patch = current.resetIfWorkspaceWasDeleted(result.workspaceIds),
                         patchCleanupInProgress = false,
-                        feedback = FeedbackMessage("已删除 Manager 私有修补文件；已导出的 APKS 未受影响。"),
+                        feedback = FeedbackMessage("已清理修补临时文件；已导出的 APKS 未受影响。"),
                     )
-                }
-                is PatchArtifactCleanupResult.Rejected -> {
                     refreshPatchWorkspaceState()
+                }
+                PatchWorkspaceCleanupResult.NothingToDelete -> {
+                    mutableState.value = mutableState.value.copy(patchCleanupInProgress = false)
+                    refreshPatchWorkspaceState()
+                }
+                is PatchWorkspaceCleanupResult.Failed -> {
                     mutableState.value = mutableState.value.copy(
                         patchCleanupInProgress = false,
-                        feedback = FeedbackMessage(result.reason, isError = true),
+                        feedback = FeedbackMessage("清理修补临时文件失败：${result.reason}", isError = true),
                     )
+                    refreshPatchWorkspaceState()
                 }
-                is PatchArtifactCleanupResult.Failed -> mutableState.value = mutableState.value.copy(
-                    patchCleanupInProgress = false,
-                    feedback = FeedbackMessage("删除私有修补文件失败：${result.reason}", isError = true),
-                )
             }
         }
     }
@@ -761,6 +754,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     fun restartPatchFlow() {
         selectedPatchInput = null
         mutableState.value = mutableState.value.copy(patch = PatchUiState.ChooseSource)
+        refreshPatchWorkspaceState()
     }
 
     fun resumePreparedPatch(transactionId: String) {
@@ -850,11 +844,9 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
                 refreshPatchWorkspaceState()
-                val cleanupConfirmation = mutableState.value.patchCleanup
-                    ?.takeIf { it.transactionId == transactionId }
                 mutableState.value = mutableState.value.copy(
                     apksExport = ApksExportUiState.Idle,
-                    patchCleanupConfirmation = cleanupConfirmation,
+                    patchCleanupConfirmation = null,
                     feedback = FeedbackMessage("已导出修补 APKS；请使用支持 APKS 的安装工具安装。"),
                 )
             } catch (error: CancellationException) {
@@ -980,6 +972,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                     )
                     selectedPatchInput = SelectedPatchInput(source, extracted, input)
                     mutableState.value = mutableState.value.copy(patch = PatchUiState.Review(input))
+                    refreshPatchWorkspaceState()
                 }
                 .onFailure { error ->
                     selectedPatchInput = null
@@ -1038,14 +1031,6 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             }
             is PatchOrchestrationResult.Failed -> PatchUiState.Failed(result.reason, result.transactionId)
         }
-        if (result is PatchOrchestrationResult.Completed || result is PatchOrchestrationResult.Failed) {
-            refreshPatchWorkspaceState()
-        }
-        val cleanupConfirmation = if (result is PatchOrchestrationResult.Completed) {
-            mutableState.value.patchCleanup?.takeIf { it.transactionId == result.transactionId }
-        } else {
-            mutableState.value.patchCleanupConfirmation
-        }
         mutableState.value = mutableState.value.copy(
             patch = patch,
             preparedPatchRecovery = when (result) {
@@ -1055,26 +1040,49 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                 is PatchOrchestrationResult.Completed -> null
                 else -> mutableState.value.preparedPatchRecovery
             },
-            patchCleanupConfirmation = cleanupConfirmation,
+            patchCleanupConfirmation = null,
             deviceSigningKeyState = deviceSigningKeyStore.state(),
             feedback = (result as? PatchOrchestrationResult.Failed)?.let { FeedbackMessage("迁移失败：${it.reason}", isError = true) }
                 ?: mutableState.value.feedback,
         )
+        refreshPatchWorkspaceState()
     }
 
     private fun canCleanPatchArtifacts(): Boolean =
         !mutableState.value.patchCleanupInProgress &&
             mutableState.value.apksExport is ApksExportUiState.Idle &&
+            mutableState.value.patch !is PatchUiState.Importing &&
+            mutableState.value.patch !is PatchUiState.Preparing &&
             mutableState.value.patch !is PatchUiState.SubmittingInstall &&
             mutableState.value.patch !is PatchUiState.AwaitingSystemInstall
 
+    private fun reservedPatchWorkspaceIds(): Set<String> = buildSet {
+        if (mutableState.value.patch is PatchUiState.Review || mutableState.value.patch is PatchUiState.Preparing) {
+            selectedPatchInput?.extracted?.transactionId?.let(::add)
+        }
+        when (val patch = mutableState.value.patch) {
+            is PatchUiState.AwaitingSystemInstall -> add(patch.transactionId)
+            is PatchUiState.SubmittingInstall -> add(patch.transactionId)
+            else -> Unit
+        }
+    }
+
     private fun refreshPatchWorkspaceState() {
         val recovery = transactions.latestPreparedForRecovery()
-        val cleanupCandidate = transactions.latestCleanupCandidate()
+        val cleanupSummary = transactions.cleanupSummary(reservedPatchWorkspaceIds())
         mutableState.value = mutableState.value.copy(
             preparedPatchRecovery = recovery?.toRecoveryUiModel(),
-            patchCleanup = cleanupCandidate?.toCleanupUiModel(),
+            patchCleanup = cleanupSummary?.toCleanupUiModel(),
         )
+    }
+
+    private fun PatchUiState.resetIfWorkspaceWasDeleted(workspaceIds: Set<String>): PatchUiState = when (this) {
+        is PatchUiState.AwaitingOriginalUninstall -> if (transactionId in workspaceIds) PatchUiState.ChooseSource else this
+        is PatchUiState.ReadyToInstall -> if (transactionId in workspaceIds) PatchUiState.ChooseSource else this
+        is PatchUiState.AwaitingInstallPermission -> if (transactionId in workspaceIds) PatchUiState.ChooseSource else this
+        is PatchUiState.Completed -> if (transactionId in workspaceIds) PatchUiState.ChooseSource else this
+        is PatchUiState.Failed -> if (transactionId in workspaceIds) PatchUiState.ChooseSource else this
+        else -> this
     }
 
     private fun com.sultansgame.modmanager.platform.patch.PatchTransaction.toRecoveryUiModel() =
@@ -1083,8 +1091,8 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             summary = "发现已准备的修补 APK；继续前会校验工件和设备签名身份。",
         )
 
-    private fun PatchArtifactCleanupCandidate.toCleanupUiModel() = PatchCleanupUiModel(
-        transactionId = transactionId,
+    private fun PatchWorkspaceCleanupSummary.toCleanupUiModel() = PatchCleanupUiModel(
+        workspaceIds = workspaceIds,
         sizeBytes = sizeBytes,
     )
 

@@ -21,17 +21,19 @@ internal data class PatchTransaction(
     val failure: String? = null,
 )
 
-internal data class PatchArtifactCleanupCandidate(
-    val transactionId: String,
+internal data class PatchWorkspaceCleanupSummary(
+    val workspaceIds: Set<String>,
     val sizeBytes: Long,
-    val stage: PatchStage,
 )
 
-internal sealed interface PatchArtifactCleanupResult {
-    data object Deleted : PatchArtifactCleanupResult
-    data object NotFound : PatchArtifactCleanupResult
-    data class Rejected(val reason: String) : PatchArtifactCleanupResult
-    data class Failed(val reason: String) : PatchArtifactCleanupResult
+internal sealed interface PatchWorkspaceCleanupResult {
+    data class Deleted(
+        val workspaceIds: Set<String>,
+        val releasedBytes: Long,
+    ) : PatchWorkspaceCleanupResult
+
+    data object NothingToDelete : PatchWorkspaceCleanupResult
+    data class Failed(val reason: String) : PatchWorkspaceCleanupResult
 }
 
 internal class PatchTransactionStore {
@@ -58,38 +60,31 @@ internal class PatchTransactionStore {
 
     fun latestResumable(): PatchTransaction? = latestPreparedForRecovery()
 
-    fun latestCleanupCandidate(): PatchArtifactCleanupCandidate? = root.listFiles()
-        .orEmpty()
-        .asSequence()
-        .filter(File::isDirectory)
-        .mapNotNull { directory -> read(directory.name)?.let { transaction -> transaction to directory } }
-        .filter { (transaction, directory) -> transaction.isCleanupCandidate(directory) }
-        .maxByOrNull { (_, directory) -> File(directory, "transaction.properties").lastModified() }
-        ?.let { (transaction, directory) ->
-            PatchArtifactCleanupCandidate(
-                transactionId = transaction.id,
-                sizeBytes = directorySize(directory),
-                stage = transaction.stage,
+    fun cleanupSummary(reservedWorkspaceIds: Set<String>): PatchWorkspaceCleanupSummary? {
+        val candidates = cleanupWorkspaces(reservedWorkspaceIds)
+        val sizeBytes = candidates.fold(0L) { total, directory -> saturatedAdd(total, directorySize(directory)) }
+        return candidates.takeIf { sizeBytes > 0L }?.let { directories ->
+            PatchWorkspaceCleanupSummary(
+                workspaceIds = directories.mapTo(linkedSetOf()) { it.name },
+                sizeBytes = sizeBytes,
             )
         }
+    }
 
-    fun deletePreparedArtifacts(transactionId: String): PatchArtifactCleanupResult {
-        if (!isSafeTransactionId(transactionId)) {
-            return PatchArtifactCleanupResult.Rejected("修补事务标识无效。")
+    fun deleteCleanupWorkspaces(reservedWorkspaceIds: Set<String>): PatchWorkspaceCleanupResult {
+        val candidates = cleanupWorkspaces(reservedWorkspaceIds)
+        if (candidates.isEmpty()) return PatchWorkspaceCleanupResult.NothingToDelete
+
+        val releasedBytes = candidates.fold(0L) { total, directory -> saturatedAdd(total, directorySize(directory)) }
+        val deleted = linkedSetOf<String>()
+        candidates.forEach { directory ->
+            val deletedDirectory = runCatching { directory.deleteRecursively() }.getOrDefault(false)
+            if (!deletedDirectory) {
+                return PatchWorkspaceCleanupResult.Failed("部分私有修补文件未能删除。")
+            }
+            deleted += directory.name
         }
-        val directory = root(transactionId)
-        if (!directory.exists()) return PatchArtifactCleanupResult.NotFound
-        val transaction = read(transactionId)
-            ?: return PatchArtifactCleanupResult.Rejected("修补事务记录无效，无法安全删除。")
-        if (!transaction.isCleanupCandidate(directory)) {
-            return PatchArtifactCleanupResult.Rejected("当前修补事务仍在安装或校验中，暂不能删除。")
-        }
-        return runCatching {
-            if (directory.deleteRecursively()) PatchArtifactCleanupResult.Deleted
-            else PatchArtifactCleanupResult.Failed("部分私有修补文件未能删除。")
-        }.getOrElse { error ->
-            PatchArtifactCleanupResult.Failed(error.message ?: "无法删除私有修补文件。")
-        }
+        return PatchWorkspaceCleanupResult.Deleted(deleted, releasedBytes)
     }
 
     fun latestAwaitingGameUninstall(): PatchTransaction? = latestResumable()
@@ -141,21 +136,26 @@ internal class PatchTransactionStore {
         }.getOrNull()
     }
 
-    private fun PatchTransaction.isCleanupCandidate(directory: File): Boolean =
-        stage in CLEANUP_STAGES &&
-            signedArtifactNames.isNotEmpty() &&
-            signedArtifactNames.distinct().size == signedArtifactNames.size &&
-            signedArtifactNames.all { it == File(it).name } &&
-            signedArtifactNames.all { name -> File(directory, "signed/$name").isFile }
+    private fun cleanupWorkspaces(reservedWorkspaceIds: Set<String>): List<File> = root.listFiles()
+        .orEmpty()
+        .filter { directory ->
+            directory.isDirectory &&
+                directory.name !in reservedWorkspaceIds &&
+                isDirectChildOfRoot(directory) &&
+                read(directory.name)?.stage != PatchStage.AwaitingSystemInstall
+        }
+        .filter { directorySize(it) > 0L }
+
+    private fun isDirectChildOfRoot(directory: File): Boolean = runCatching {
+        directory.canonicalFile.parentFile == root.canonicalFile
+    }.getOrDefault(false)
 
     private fun directorySize(directory: File): Long = directory.walkTopDown()
         .filter(File::isFile)
-        .fold(0L) { total, file ->
-            if (Long.MAX_VALUE - total < file.length()) Long.MAX_VALUE else total + file.length()
-        }
+        .fold(0L) { total, file -> saturatedAdd(total, file.length()) }
 
-    private fun isSafeTransactionId(id: String): Boolean =
-        id.isNotBlank() && id == File(id).name && !id.contains("..")
+    private fun saturatedAdd(total: Long, additional: Long): Long =
+        if (Long.MAX_VALUE - total < additional) Long.MAX_VALUE else total + additional
 
     private fun PatchTransaction.isPreparedForRecovery(): Boolean =
         stage in RESUMABLE_STAGES &&
@@ -165,17 +165,11 @@ internal class PatchTransactionStore {
             artifactDigests.size == signedArtifactNames.size &&
             artifactDigests.all { it.matches(SHA256_PATTERN) }
 
-    companion object {
+    private companion object {
         private val SHA256_PATTERN = Regex("[0-9a-fA-F]{64}")
         private val RESUMABLE_STAGES = setOf(
             PatchStage.AwaitingGameUninstall,
             PatchStage.AwaitingInstallPermission,
-        )
-        private val CLEANUP_STAGES = setOf(
-            PatchStage.AwaitingGameUninstall,
-            PatchStage.AwaitingInstallPermission,
-            PatchStage.Completed,
-            PatchStage.Failed,
         )
     }
 }
