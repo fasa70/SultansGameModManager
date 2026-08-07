@@ -5,6 +5,7 @@
 #include "modloader/mod_file_index.h"
 #include "modloader/mod_lifecycle.h"
 #include "modloader/mod_path.h"
+#include "modloader/official_canary.h"
 #include "modloader/resource_overrides.h"
 #include "modloader/runtime_state.h"
 
@@ -90,6 +91,76 @@ void TestReadyBackendRouteIsTerminal() {
           "started staged route must become ready");
     Check(!route.MarkFailed(modloader::BackendRoute::kStagedNative),
           "ready staged route must remain terminal");
+}
+
+void TestOfficialCanaryCompletion() {
+    modloader::OfficialCanaryCompletion completion;
+    const void* promise = reinterpret_cast<void*>(0x1000);
+    Check(completion.BeginRefreshCall(), "official refresh call must start once");
+    Check(!completion.BeginRefreshCall(), "official refresh call must be exactly once");
+    Check(completion.TrackPromise(promise) ==
+              modloader::OfficialCanaryDecision::kPending,
+          "tracked promise must remain pending before completion");
+    Check(completion.ObservePromise(
+              reinterpret_cast<void*>(0x2000),
+              modloader::OfficialPromiseCompletion::kResolved) ==
+              modloader::OfficialCanaryDecision::kUnchanged,
+          "unrelated promise completion must be ignored");
+    Check(completion.ObservePromise(
+              promise, modloader::OfficialPromiseCompletion::kResolved) ==
+              modloader::OfficialCanaryDecision::kPending,
+          "promise resolution alone must wait for LoadConfig iterator");
+    Check(completion.ObserveLoadConfig(true) ==
+              modloader::OfficialCanaryDecision::kReady,
+          "promise resolution and iterator return must make official route ready");
+    Check(completion.ObservePromise(
+              promise, modloader::OfficialPromiseCompletion::kRejected) ==
+              modloader::OfficialCanaryDecision::kReady,
+          "ready official completion must remain terminal");
+}
+
+void TestOfficialCanaryPromiseState() {
+    const void* promise = reinterpret_cast<void*>(0x3000);
+
+    modloader::OfficialCanaryCompletion resolved;
+    Check(resolved.BeginRefreshCall(), "resolved state test must start");
+    Check(resolved.ObservePromise(
+              promise, modloader::OfficialPromiseCompletion::kResolved) ==
+              modloader::OfficialCanaryDecision::kUnchanged,
+          "completion before promise identity is known must be ignored");
+    Check(resolved.TrackPromise(promise) ==
+              modloader::OfficialCanaryDecision::kPending,
+          "resolved state test must track promise");
+    Check(resolved.ObservePromiseState(
+              promise, modloader::OfficialPromiseState::kResolved) ==
+              modloader::OfficialCanaryDecision::kPending,
+          "resolved promise state must still wait for LoadConfig iterator");
+    Check(resolved.ObserveLoadConfig(true) ==
+              modloader::OfficialCanaryDecision::kReady,
+          "resolved state and iterator return must make route ready");
+
+    modloader::OfficialCanaryCompletion rejected;
+    Check(rejected.BeginRefreshCall(), "rejected state test must start");
+    Check(rejected.TrackPromise(promise) ==
+              modloader::OfficialCanaryDecision::kPending,
+          "rejected state test must track promise");
+    Check(rejected.ObservePromiseState(
+              promise, modloader::OfficialPromiseState::kRejected) ==
+              modloader::OfficialCanaryDecision::kFailed,
+          "rejected promise state must fail the route");
+
+    modloader::OfficialCanaryCompletion pending;
+    Check(pending.BeginRefreshCall(), "pending state test must start");
+    Check(pending.TrackPromise(promise) ==
+              modloader::OfficialCanaryDecision::kPending,
+          "pending state test must track promise");
+    Check(pending.ObservePromiseState(
+              promise, modloader::OfficialPromiseState::kPending) ==
+              modloader::OfficialCanaryDecision::kPending,
+          "pending promise state must not complete the route");
+    Check(pending.ObserveLoadConfig(false) ==
+              modloader::OfficialCanaryDecision::kFailed,
+          "null LoadConfig iterator must fail closed");
 }
 
 void TestModPath() {
@@ -544,6 +615,8 @@ void TestModFileIndex() {
 int main() {
     TestBackendRoute();
     TestReadyBackendRouteIsTerminal();
+    TestOfficialCanaryCompletion();
+    TestOfficialCanaryPromiseState();
     TestModPath();
     TestSingleStarter();
     TestReadyTerminalState();

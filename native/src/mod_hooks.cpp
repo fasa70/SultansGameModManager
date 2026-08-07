@@ -9,6 +9,7 @@
 #include "modloader/mod_lifecycle.h"
 #include "modloader/mod_root.h"
 #include "modloader/native_mod_loader.h"
+#include "modloader/official_canary.h"
 #include "modloader/resource_overrides.h"
 #include "modloader/resource_hooks.h"
 #include "modloader/mod_file_index.h"
@@ -30,6 +31,8 @@ namespace modloader {
 namespace {
 
 using LoadConfigFunction = void* (*)(void*, int, const void*);
+using OfficialPromiseResolveFunction = void (*)(void*, const void*);
+using OfficialPromiseRejectFunction = void (*)(void*, void*, const void*);
 using LoadSingleFileFunction = void (*)(void*, void*, void*, void*, const void*);
 using PostProcessFunction = void (*)(void*, const void*);
 using LoadUserArchiveFunction = bool (*)(void*, std::int32_t, const void*);
@@ -41,7 +44,15 @@ BackendRouteController g_backend_route;
 std::unique_ptr<LifecycleGate> g_lifecycle;
 std::mutex g_setup_mutex;
 std::mutex g_config_hook_mutex;
+std::mutex g_official_promise_mutex;
 std::atomic<bool> g_official_invocation_started{false};
+OfficialCanaryCompletion g_official_completion;
+GcHandle g_official_promise_handle;
+std::atomic<OfficialPromiseResolveFunction> g_official_promise_resolve{nullptr};
+std::atomic<OfficialPromiseRejectFunction> g_official_promise_reject{nullptr};
+std::atomic<void*> g_official_promise_resolve_target{nullptr};
+std::atomic<void*> g_official_promise_reject_target{nullptr};
+std::atomic<bool> g_official_promise_hooks_active{false};
 const Il2CppApi* g_api = nullptr;
 RuntimeController* g_runtime = nullptr;
 LoadConfigFunction g_load_config = nullptr;
@@ -586,6 +597,128 @@ bool InstallArchiveHook() {
     return true;
 }
 
+void ReleaseOfficialPromise() noexcept {
+    std::lock_guard<std::mutex> lock(g_official_promise_mutex);
+    g_official_promise_handle.Reset();
+}
+
+void PublishOfficialDecision(OfficialCanaryDecision decision,
+                             bool release_promise = true) noexcept {
+    if (g_runtime == nullptr) {
+        return;
+    }
+    if (decision == OfficialCanaryDecision::kReady) {
+        if (!g_backend_route.MarkReady(BackendRoute::kOfficialCanary)) {
+            return;
+        }
+        if (g_runtime->MarkReady()) {
+            NotifyModsApplied(kOfficialModsAppliedCount);
+        }
+        if (release_promise) {
+            ReleaseOfficialPromise();
+        }
+        LogMessage("official_canary=ready target=refresh_mods");
+        LogState(g_runtime->state());
+    } else if (decision == OfficialCanaryDecision::kFailed) {
+        g_backend_route.MarkFailed(BackendRoute::kOfficialCanary);
+        g_runtime->Fail(FailureCode::kOfficialInvocationFailed);
+        if (release_promise) {
+            ReleaseOfficialPromise();
+        }
+        LogMessage("official_canary=failed target=refresh_mods completion=rejected");
+        LogFailure(g_runtime->failure());
+    }
+}
+
+void OnOfficialPromiseResolve(void* promise, const void* method) {
+    if (g_official_promise_hooks_active.load(std::memory_order_acquire)) {
+        const OfficialCanaryDecision decision =
+            g_official_completion.ObservePromise(
+                promise, OfficialPromiseCompletion::kResolved);
+        PublishOfficialDecision(decision, false);
+        if (decision != OfficialCanaryDecision::kUnchanged) {
+            const OfficialPromiseResolveFunction original =
+                g_official_promise_resolve.load(std::memory_order_acquire);
+            if (original != nullptr) {
+                original(promise, method);
+            }
+            ReleaseOfficialPromise();
+            return;
+        }
+    }
+    const OfficialPromiseResolveFunction original =
+        g_official_promise_resolve.load(std::memory_order_acquire);
+    if (original != nullptr) {
+        original(promise, method);
+    }
+}
+
+void OnOfficialPromiseReject(void* promise, void* exception, const void* method) {
+    if (g_official_promise_hooks_active.load(std::memory_order_acquire)) {
+        const OfficialCanaryDecision decision =
+            g_official_completion.ObservePromise(
+                promise, OfficialPromiseCompletion::kRejected);
+        PublishOfficialDecision(decision, false);
+        if (decision != OfficialCanaryDecision::kUnchanged) {
+            const OfficialPromiseRejectFunction original =
+                g_official_promise_reject.load(std::memory_order_acquire);
+            if (original != nullptr) {
+                original(promise, exception, method);
+            }
+            ReleaseOfficialPromise();
+            return;
+        }
+    }
+    const OfficialPromiseRejectFunction original =
+        g_official_promise_reject.load(std::memory_order_acquire);
+    if (original != nullptr) {
+        original(promise, exception, method);
+    }
+}
+
+bool InstallOfficialPromiseHooks(const Il2CppRuntime& runtime) {
+    const auto promise_image = runtime.FindImage({"Promise.dll", "Il2CppPromise.dll"});
+    if (!promise_image.has_value()) {
+        return false;
+    }
+    const auto promise_class = runtime.FindClass(
+        *promise_image, {"RSG", "Il2CppRSG"}, "Promise");
+    if (!promise_class.has_value()) {
+        return false;
+    }
+    const auto resolve = runtime.FindMethod(*promise_class, "Resolve", 0);
+    const auto reject = runtime.FindMethod(*promise_class, "Reject", 1);
+    if (!resolve.has_value() || !reject.has_value()) {
+        return false;
+    }
+    const auto resolve_code = runtime.MethodCode(*resolve);
+    const auto reject_code = runtime.MethodCode(*reject);
+    if (!resolve_code.has_value() || !reject_code.has_value()) {
+        return false;
+    }
+    void* resolve_original = nullptr;
+    void* reject_original = nullptr;
+    if (!g_hooks.Replace(*resolve_code, reinterpret_cast<void*>(OnOfficialPromiseResolve),
+                         &resolve_original) ||
+        resolve_original == nullptr ||
+        !g_hooks.Replace(*reject_code, reinterpret_cast<void*>(OnOfficialPromiseReject),
+                         &reject_original) ||
+        reject_original == nullptr) {
+        g_hooks.Rollback();
+        return false;
+    }
+    g_official_promise_resolve.store(
+        reinterpret_cast<OfficialPromiseResolveFunction>(resolve_original),
+        std::memory_order_release);
+    g_official_promise_reject.store(
+        reinterpret_cast<OfficialPromiseRejectFunction>(reject_original),
+        std::memory_order_release);
+    g_official_promise_resolve_target.store(*resolve_code, std::memory_order_release);
+    g_official_promise_reject_target.store(*reject_code, std::memory_order_release);
+    g_official_promise_hooks_active.store(true, std::memory_order_release);
+    return true;
+}
+
 struct OfficialBackendContext {
     void* datapool = nullptr;
     void* load_user_mods = nullptr;
@@ -653,9 +786,18 @@ std::optional<OfficialBackendContext> FindOfficialBackendContext(
         !refresh_mods.has_value() || !mod_loader_run.has_value()) {
         return std::nullopt;
     }
+    const auto load_user_code = runtime.MethodCode(*load_user_mods);
+    const auto refresh_code = runtime.MethodCode(*refresh_mods);
     const auto run_code = runtime.MethodCode(*mod_loader_run);
     const GameProfile& profile = SupportedGameProfile();
-    if (!run_code.has_value() || !MatchesFingerprint(profile.mod_loader_run)) {
+    const auto base = reinterpret_cast<std::uintptr_t>(g_api->image_base);
+    if (!load_user_code.has_value() || !refresh_code.has_value() ||
+        !run_code.has_value() ||
+        *load_user_code != reinterpret_cast<void*>(TargetAddress(
+            profile, HookTarget::kLoadUserMods, base)) ||
+        *refresh_code != reinterpret_cast<void*>(TargetAddress(
+            profile, HookTarget::kRefreshMods, base)) ||
+        !MatchesFingerprint(profile.mod_loader_run)) {
         return std::nullopt;
     }
     const auto actual_class = runtime.ObjectClass(*datapool);
@@ -717,18 +859,81 @@ void RunOfficialCanaryOnce() noexcept {
             return;
         }
         LogMessage("official_canary=invoke target=refresh_mods");
+        if (!g_official_completion.BeginRefreshCall()) {
+            g_official_completion.Fail();
+            PublishOfficialDecision(OfficialCanaryDecision::kFailed);
+            return;
+        }
         const auto refresh_promise = InvokeOfficialRefresh(
             runtime, context->refresh_mods, context->datapool);
         if (!refresh_promise.has_value()) {
-            g_backend_route.MarkFailed(BackendRoute::kOfficialCanary);
-            g_runtime->Fail(FailureCode::kOfficialInvocationFailed);
+            g_official_completion.Fail();
+            PublishOfficialDecision(OfficialCanaryDecision::kFailed);
             LogMessage("official_canary=failed target=refresh_mods");
-            LogFailure(g_runtime->failure());
             return;
         }
-        LogMessage("official_canary=started target=refresh_mods promise=returned");
-        LogMessage("official_canary=pending target=refresh_mods reason=promise_completion_unobserved");
+        bool retained = false;
+        {
+            std::lock_guard<std::mutex> lock(g_official_promise_mutex);
+            g_official_promise_handle = runtime.Retain(*refresh_promise, false);
+            retained = g_official_promise_handle.valid();
+        }
+        if (!retained) {
+            g_official_completion.Fail();
+            PublishOfficialDecision(OfficialCanaryDecision::kFailed);
+            LogMessage("official_canary=failed target=refresh_mods reason=gchandle");
+            return;
+        }
+        const Il2CppRuntime promise_runtime(*g_api);
+        const auto promise_class = promise_runtime.ObjectClass(*refresh_promise);
+        if (!promise_class.has_value()) {
+            g_official_completion.Fail();
+            PublishOfficialDecision(OfficialCanaryDecision::kFailed);
+            LogMessage("official_canary=failed target=refresh_mods reason=promise_class");
+            return;
+        }
+        const auto promise_resolve = promise_runtime.FindMethod(*promise_class, "Resolve", 0);
+        const auto promise_reject = promise_runtime.FindMethod(*promise_class, "Reject", 1);
+        const auto promise_resolve_code = promise_resolve.has_value()
+            ? promise_runtime.MethodCode(*promise_resolve)
+            : std::nullopt;
+        const auto promise_reject_code = promise_reject.has_value()
+            ? promise_runtime.MethodCode(*promise_reject)
+            : std::nullopt;
+        if (!promise_resolve_code.has_value() || !promise_reject_code.has_value() ||
+            *promise_resolve_code !=
+                g_official_promise_resolve_target.load(std::memory_order_acquire) ||
+            *promise_reject_code !=
+                g_official_promise_reject_target.load(std::memory_order_acquire)) {
+            g_official_completion.Fail();
+            PublishOfficialDecision(OfficialCanaryDecision::kFailed);
+            LogMessage("official_canary=failed target=refresh_mods reason=promise_abi");
+            return;
+        }
+        const OfficialCanaryDecision tracked =
+            g_official_completion.TrackPromise(*refresh_promise);
+        const auto promise_state =
+            promise_runtime.InstanceFieldInt32(*refresh_promise, "<CurState>k__BackingField");
+        if (!promise_state.has_value() || *promise_state < 0 || *promise_state > 2) {
+            g_official_completion.Fail();
+            PublishOfficialDecision(OfficialCanaryDecision::kFailed);
+            LogMessage("official_canary=failed target=refresh_mods reason=promise_state");
+            return;
+        }
+        const OfficialCanaryDecision decision =
+            g_official_completion.ObservePromiseState(
+                *refresh_promise,
+                static_cast<OfficialPromiseState>(*promise_state));
+        LogMessage("official_canary=started target=refresh_mods promise=tracked");
+        PublishOfficialDecision(decision == OfficialCanaryDecision::kUnchanged
+            ? tracked
+            : decision);
+        if (decision == OfficialCanaryDecision::kPending) {
+            LogMessage("official_canary=pending target=refresh_mods reason=promise_incomplete");
+        }
     } catch (...) {
+        g_official_completion.Fail();
+        ReleaseOfficialPromise();
         g_backend_route.MarkFailed(BackendRoute::kOfficialCanary);
         g_runtime->Fail(FailureCode::kOfficialInvocationFailed);
         LogMessage("official_canary=failed reason=native_exception");
@@ -737,9 +942,13 @@ void RunOfficialCanaryOnce() noexcept {
 }
 
 void* OnLoadConfig(void* instance, int mode, const void* method) {
-    std::lock_guard<std::mutex> lock(g_config_hook_mutex);
+    LoadConfigFunction load_config = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_config_hook_mutex);
+        load_config = g_load_config;
+    }
     LogMessage("lifecycle=load_config_observed");
-    if (g_load_config == nullptr) {
+    if (load_config == nullptr) {
         if (g_runtime != nullptr) {
             g_runtime->Fail(FailureCode::kHookInstallFailed);
         }
@@ -747,12 +956,15 @@ void* OnLoadConfig(void* instance, int mode, const void* method) {
     }
     if (g_backend_route.route() == BackendRoute::kOfficialCanary) {
         RunOfficialCanaryOnce();
-        return g_load_config(instance, mode, method);
+        void* iterator = load_config(instance, mode, method);
+        PublishOfficialDecision(
+            g_official_completion.ObserveLoadConfig(iterator != nullptr));
+        return iterator;
     }
     InstallPostProcessHooks();
     InstallArchiveHook();
     InstallRecoveryHook();
-    return g_load_config(instance, mode, method);
+    return load_config(instance, mode, method);
 }
 
 }  // namespace
@@ -789,11 +1001,14 @@ bool InstallModHooks(const Il2CppApi& api, RuntimeController& runtime) {
     std::lock_guard<std::mutex> config_hook_lock(g_config_hook_mutex);
     void* config_original = nullptr;
     if (route == BackendRoute::kOfficialCanary) {
-        if (!g_hooks.Replace(
+        Il2CppRuntime il2cpp(api);
+        if (!InstallOfficialPromiseHooks(il2cpp) ||
+            !g_hooks.Replace(
                 reinterpret_cast<void*>(TargetAddress(
                     profile, HookTarget::kLoadConfig, base)),
                 reinterpret_cast<void*>(OnLoadConfig), &config_original) ||
             config_original == nullptr) {
+            g_official_promise_hooks_active.store(false, std::memory_order_release);
             g_hooks.Rollback();
             g_backend_route.MarkFailed(route);
             runtime.Fail(FailureCode::kHookInstallFailed);

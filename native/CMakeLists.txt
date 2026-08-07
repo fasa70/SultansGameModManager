@@ -23,6 +23,7 @@ add_library(modloader_core STATIC
     src/mod_lifecycle.cpp
     src/mod_path.cpp
     src/mod_root.cpp
+    src/official_canary.cpp
     src/resource_overrides.cpp
     src/runtime_state.cpp
 )

@@ -326,6 +326,24 @@ std::optional<void*> Il2CppRuntime::StaticFieldValue(void* klass, std::string_vi
     return value == nullptr ? std::nullopt : std::optional<void*>(value);
 }
 
+std::optional<std::int32_t> Il2CppRuntime::InstanceFieldInt32(
+    void* object, std::string_view name) const {
+    if (object == nullptr || api_.object_get_class == nullptr) {
+        return std::nullopt;
+    }
+    void* klass = api_.object_get_class(object);
+    const auto field = FindField(klass, name);
+    if (!field.has_value() || api_.field_get_offset == nullptr) {
+        return std::nullopt;
+    }
+    const std::int32_t offset = api_.field_get_offset(*field);
+    if (offset < 0) {
+        return std::nullopt;
+    }
+    return *reinterpret_cast<const std::int32_t*>(
+        reinterpret_cast<const std::byte*>(object) + offset);
+}
+
 std::optional<void*> Il2CppRuntime::InstanceFieldValue(void* object,
                                                        std::string_view name) const {
     if (object == nullptr || api_.object_get_class == nullptr) {

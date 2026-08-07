@@ -79,6 +79,8 @@ class Il2CppRuntime {
     std::optional<void*> ValueBox(void* klass, void* value) const;
     GcHandle Retain(void* object, bool pinned) const;
     std::optional<void*> StaticFieldValue(void* klass, std::string_view name) const;
+    std::optional<std::int32_t> InstanceFieldInt32(
+        void* object, std::string_view name) const;
     std::optional<void*> InstanceFieldValue(void* object, std::string_view name) const;
     std::optional<void*> ObjectClass(void* object) const;
     std::optional<void*> ObjectType(void* object) const;

@@ -66,7 +66,9 @@ public final class ModLoaderBootstrap {
         if (context == null || !MOD_TOAST_SHOWN.compareAndSet(false, true)) {
             return;
         }
-        String message = count == 0 ? "未发现可加载的 Mod" : "已加载 " + count + " 个 Mod";
+        String message = count == -1
+                ? "官方 Mod 后端已完成加载"
+                : count == 0 ? "未发现可加载的 Mod" : "已加载 " + count + " 个 Mod";
         new Handler(Looper.getMainLooper()).post(
             () -> Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
         );
