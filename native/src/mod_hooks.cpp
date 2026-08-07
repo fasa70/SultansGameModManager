@@ -31,6 +31,10 @@ namespace modloader {
 namespace {
 
 using LoadConfigFunction = void* (*)(void*, int, const void*);
+using LoadGlobalModsFunction = void* (*)(void*, const void*);
+using ModLoaderActiveModFunction =
+    void (*)(void*, void*, void*, void*, const void*);
+using ModLoaderRunFunction = void (*)(void*, void*, const void*);
 using OfficialPromiseResolveFunction = void (*)(void*, const void*);
 using OfficialPromiseRejectFunction = void (*)(void*, void*, const void*);
 using LoadSingleFileFunction = void (*)(void*, void*, void*, void*, const void*);
@@ -41,6 +45,7 @@ using RiteRenderInitFunction = void (*)(void*, void*, const void*);
 
 HookEngine g_hooks;
 HookEngine g_official_promise_hooks;
+HookEngine g_official_observer_hooks;
 BackendRouteController g_backend_route;
 std::unique_ptr<LifecycleGate> g_lifecycle;
 std::mutex g_setup_mutex;
@@ -54,6 +59,13 @@ std::atomic<OfficialPromiseRejectFunction> g_official_promise_reject{nullptr};
 std::atomic<void*> g_official_promise_resolve_target{nullptr};
 std::atomic<void*> g_official_promise_reject_target{nullptr};
 std::atomic<bool> g_official_promise_hooks_active{false};
+std::mutex g_official_observer_mutex;
+std::mutex g_official_observer_publish_mutex;
+std::atomic<LoadGlobalModsFunction> g_official_load_global_mods{nullptr};
+std::atomic<ModLoaderActiveModFunction> g_official_mod_loader_active_mod{nullptr};
+std::atomic<ModLoaderRunFunction> g_official_mod_loader_run{nullptr};
+std::atomic<void*> g_official_datapool{nullptr};
+std::atomic<bool> g_official_observer_active{false};
 const Il2CppApi* g_api = nullptr;
 RuntimeController* g_runtime = nullptr;
 LoadConfigFunction g_load_config = nullptr;
@@ -83,6 +95,9 @@ bool g_rite_applied = false;
 bool g_event_applied = false;
 bool g_remaining_applied = false;
 ModApplySummary g_summary;
+
+void LogOfficialDatapoolSnapshot(const char* point, void* datapool = nullptr) noexcept;
+bool MatchesFingerprint(const CodeFingerprint& fingerprint);
 
 void* StubPointer(void*) {
     return nullptr;
@@ -728,6 +743,286 @@ struct OfficialBackendContext {
     void* refresh_mods = nullptr;
 };
 
+struct OfficialObserverContext {
+    void* datapool = nullptr;
+    void* load_global_mods = nullptr;
+    void* mod_loader_active_mod = nullptr;
+    void* mod_loader_run = nullptr;
+};
+
+struct OfficialCollectionState {
+    bool field_available = false;
+    void* collection = nullptr;
+};
+
+OfficialCollectionState ReadOfficialCollection(const Il2CppRuntime& runtime,
+                                               void* datapool,
+                                               std::string_view field_name) {
+    const auto datapool_class = runtime.ObjectClass(datapool);
+    if (!datapool_class.has_value()) {
+        return {};
+    }
+    const auto field = runtime.FindField(*datapool_class, field_name);
+    const auto offset = field.has_value() ? runtime.FieldOffset(*datapool_class, field_name)
+                                          : std::nullopt;
+    if (!offset.has_value()) {
+        return {};
+    }
+    return {
+        true,
+        *reinterpret_cast<void**>(
+            reinterpret_cast<std::byte*>(datapool) + *offset),
+    };
+}
+
+std::string OfficialCollectionCount(const Il2CppRuntime& runtime,
+                                    void* datapool,
+                                    std::string_view field_name) {
+    const OfficialCollectionState collection =
+        ReadOfficialCollection(runtime, datapool, field_name);
+    if (!collection.field_available) {
+        return "unavailable";
+    }
+    if (collection.collection == nullptr) {
+        return "null";
+    }
+    const auto collection_class = runtime.ObjectClass(collection.collection);
+    if (!collection_class.has_value()) {
+        return "unavailable";
+    }
+    const auto get_count = runtime.FindMethod(*collection_class, "get_Count", 0);
+    if (!get_count.has_value()) {
+        return "unavailable";
+    }
+    void* exception = nullptr;
+    const auto boxed_count = runtime.Invoke(
+        *get_count, collection.collection, nullptr, &exception);
+    if (exception != nullptr || !boxed_count.has_value()) {
+        return "unavailable";
+    }
+    const auto count_value = runtime.Unbox(*boxed_count);
+    if (!count_value.has_value()) {
+        return "unavailable";
+    }
+    const std::int32_t count = *reinterpret_cast<const std::int32_t*>(*count_value);
+    constexpr std::int32_t kMaximumObservedCollectionCount = 1'000'000;
+    if (count < 0 || count > kMaximumObservedCollectionCount) {
+        return "unavailable";
+    }
+    return std::to_string(count);
+}
+
+void LogOfficialDatapoolSnapshot(const char* point, void* datapool) noexcept {
+    if (g_api == nullptr) {
+        return;
+    }
+    if (datapool == nullptr) {
+        datapool = g_official_datapool.load(std::memory_order_acquire);
+    }
+    if (datapool == nullptr) {
+        const std::string message = std::string("official_observer=snapshot point=") + point +
+            " datapool=null";
+        LogMessage(message.c_str());
+        return;
+    }
+    const Il2CppRuntime runtime(*g_api);
+    const std::string user_mods = OfficialCollectionCount(runtime, datapool, "_user_mods");
+    const std::string mods = OfficialCollectionCount(runtime, datapool, "mods");
+    const std::string active_mods = OfficialCollectionCount(runtime, datapool, "active_mods");
+    const std::string activing_mods = OfficialCollectionCount(runtime, datapool, "activing_mods");
+    const std::string queue = OfficialCollectionCount(runtime, datapool, "active_mods_queue");
+    const std::string message = std::string("official_observer=snapshot point=") + point +
+        " user_mods=" + user_mods + " mods=" + mods +
+        " active_mods=" + active_mods + " activing_mods=" + activing_mods +
+        " queue=" + queue;
+    LogMessage(message.c_str());
+}
+
+void* OnOfficialLoadGlobalMods(void* instance, const void* method) {
+    LogMessage("official_observer=call target=load_global_mods phase=enter");
+    LogOfficialDatapoolSnapshot("load_global_mods_enter", instance);
+    LoadGlobalModsFunction original =
+        g_official_load_global_mods.load(std::memory_order_acquire);
+    if (original == nullptr) {
+        std::lock_guard<std::mutex> publish_lock(g_official_observer_publish_mutex);
+        original = g_official_load_global_mods.load(std::memory_order_acquire);
+    }
+    if (original == nullptr) {
+        LogMessage("official_observer=call target=load_global_mods phase=leave iterator=null reason=trampoline");
+        return nullptr;
+    }
+    void* iterator = original(instance, method);
+    LogOfficialDatapoolSnapshot("load_global_mods_leave", instance);
+    const std::string message = std::string(
+        "official_observer=call target=load_global_mods phase=leave iterator=") +
+        (iterator == nullptr ? "null" : "set");
+    LogMessage(message.c_str());
+    return iterator;
+}
+
+void OnOfficialModLoaderActiveMod(void* instance, void* callback, void* node,
+                                  void* promise, const void* method) {
+    const std::string entered = std::string(
+        "official_observer=call target=mod_loader_active_mod phase=enter callback=") +
+        (callback == nullptr ? "null" : "set") + " node=" +
+        (node == nullptr ? "null" : "set") + " promise=" +
+        (promise == nullptr ? "null" : "set");
+    LogMessage(entered.c_str());
+    LogOfficialDatapoolSnapshot("mod_loader_active_mod_enter");
+    ModLoaderActiveModFunction original =
+        g_official_mod_loader_active_mod.load(std::memory_order_acquire);
+    if (original == nullptr) {
+        std::lock_guard<std::mutex> publish_lock(g_official_observer_publish_mutex);
+        original = g_official_mod_loader_active_mod.load(std::memory_order_acquire);
+    }
+    if (original == nullptr) {
+        LogMessage("official_observer=call target=mod_loader_active_mod phase=leave reason=trampoline");
+        return;
+    }
+    original(instance, callback, node, promise, method);
+    LogOfficialDatapoolSnapshot("mod_loader_active_mod_leave");
+    LogMessage("official_observer=call target=mod_loader_active_mod phase=leave");
+}
+
+void OnOfficialModLoaderRun(void* instance, void* enumerator, const void* method) {
+    const std::string entered = std::string(
+        "official_observer=call target=mod_loader_run phase=enter enumerator=") +
+        (enumerator == nullptr ? "null" : "set");
+    LogMessage(entered.c_str());
+    LogOfficialDatapoolSnapshot("mod_loader_run_enter");
+    ModLoaderRunFunction original =
+        g_official_mod_loader_run.load(std::memory_order_acquire);
+    if (original == nullptr) {
+        std::lock_guard<std::mutex> publish_lock(g_official_observer_publish_mutex);
+        original = g_official_mod_loader_run.load(std::memory_order_acquire);
+    }
+    if (original == nullptr) {
+        LogMessage("official_observer=call target=mod_loader_run phase=leave reason=trampoline");
+        return;
+    }
+    original(instance, enumerator, method);
+    LogOfficialDatapoolSnapshot("mod_loader_run_leave");
+    LogMessage("official_observer=call target=mod_loader_run phase=leave");
+}
+
+bool InstallOfficialActivationObserver(const Il2CppRuntime& runtime,
+                                       const OfficialObserverContext& context) {
+    std::lock_guard<std::mutex> lock(g_official_observer_mutex);
+    if (g_official_observer_active.load(std::memory_order_acquire)) {
+        return true;
+    }
+    const auto load_global_code = runtime.MethodCode(context.load_global_mods);
+    const auto mod_loader_active_code = runtime.MethodCode(
+        context.mod_loader_active_mod);
+    const auto run_code = runtime.MethodCode(context.mod_loader_run);
+    const GameProfile& profile = SupportedGameProfile();
+    const auto base = reinterpret_cast<std::uintptr_t>(g_api->image_base);
+    if (!load_global_code.has_value() || !mod_loader_active_code.has_value() ||
+        !run_code.has_value() ||
+        *load_global_code != reinterpret_cast<void*>(TargetAddress(
+            profile, HookTarget::kLoadGlobalMods, base)) ||
+        reinterpret_cast<std::uintptr_t>(*mod_loader_active_code) !=
+            base + 0x1e88ef0 ||
+        !MatchesFingerprint(profile.mod_loader_run)) {
+        LogMessage("official_observer=unavailable reason=target_validation");
+        return false;
+    }
+
+    void* load_global_original = nullptr;
+    void* mod_loader_active_original = nullptr;
+    void* run_original = nullptr;
+    {
+        // Dobby activates each target before Replace returns. Wrappers that
+        // race installation wait on this mutex until their trampoline is
+        // published or rollback has restored the original entry.
+        std::lock_guard<std::mutex> publish_lock(g_official_observer_publish_mutex);
+        if (!g_official_observer_hooks.Replace(
+                *load_global_code, reinterpret_cast<void*>(OnOfficialLoadGlobalMods),
+                &load_global_original) || load_global_original == nullptr) {
+            g_official_observer_hooks.Rollback();
+            LogMessage("official_observer=unavailable reason=hook_install");
+            return false;
+        }
+        g_official_load_global_mods.store(
+            reinterpret_cast<LoadGlobalModsFunction>(load_global_original),
+            std::memory_order_release);
+
+        if (!g_official_observer_hooks.Replace(
+                *mod_loader_active_code,
+                reinterpret_cast<void*>(OnOfficialModLoaderActiveMod),
+                &mod_loader_active_original) ||
+            mod_loader_active_original == nullptr) {
+            g_official_observer_hooks.Rollback();
+            LogMessage("official_observer=unavailable reason=hook_install");
+            return false;
+        }
+        g_official_mod_loader_active_mod.store(
+            reinterpret_cast<ModLoaderActiveModFunction>(
+                mod_loader_active_original),
+            std::memory_order_release);
+
+        if (!g_official_observer_hooks.Replace(
+                *run_code, reinterpret_cast<void*>(OnOfficialModLoaderRun),
+                &run_original) || run_original == nullptr) {
+            g_official_observer_hooks.Rollback();
+            LogMessage("official_observer=unavailable reason=hook_install");
+            return false;
+        }
+        g_official_mod_loader_run.store(
+            reinterpret_cast<ModLoaderRunFunction>(run_original),
+            std::memory_order_release);
+    }
+    g_official_datapool.store(context.datapool, std::memory_order_release);
+    g_official_observer_active.store(true, std::memory_order_release);
+    LogMessage("official_observer=ready");
+    LogOfficialDatapoolSnapshot("observer_ready", context.datapool);
+    return true;
+}
+
+std::optional<OfficialObserverContext> FindOfficialObserverContext(
+    const Il2CppRuntime& runtime, void* datapool) {
+    const auto core = runtime.FindImage({"Core.dll", "Il2CppCore.dll"});
+    if (!core.has_value()) {
+        LogMessage("official_observer=unavailable reason=core_image");
+        return std::nullopt;
+    }
+    const auto datapool_class = runtime.FindClass(
+        *core, {"", "Il2Cpp"}, "Datapool");
+    const auto mod_loader_class = runtime.FindClass(
+        *core, {"", "Il2Cpp"}, "ModLoader");
+    if (!datapool_class.has_value()) {
+        LogMessage("official_observer=unavailable reason=datapool_class");
+        return std::nullopt;
+    }
+    if (!mod_loader_class.has_value()) {
+        LogMessage("official_observer=unavailable reason=mod_loader_class");
+        return std::nullopt;
+    }
+    const auto load_global_mods = runtime.FindMethod(
+        *datapool_class, "LoadGlobalMods", 0);
+    const auto mod_loader_active_mod = runtime.FindMethod(
+        *mod_loader_class, "ActiveMod", 3);
+    const auto mod_loader_run = runtime.FindMethodByFirstParameter(
+        *mod_loader_class, "Run", 1, "System.Collections.IEnumerator");
+    if (!load_global_mods.has_value()) {
+        LogMessage("official_observer=unavailable reason=load_global_mods_method");
+        return std::nullopt;
+    }
+    if (!mod_loader_active_mod.has_value()) {
+        LogMessage("official_observer=unavailable reason=mod_loader_active_mod_method");
+        return std::nullopt;
+    }
+    if (!mod_loader_run.has_value()) {
+        LogMessage("official_observer=unavailable reason=mod_loader_run_method");
+        return std::nullopt;
+    }
+    return OfficialObserverContext{
+        datapool,
+        *load_global_mods,
+        *mod_loader_active_mod,
+        *mod_loader_run,
+    };
+}
 bool HasOfficialDatapoolState(const Il2CppRuntime& runtime, void* datapool) {
     const auto datapool_class = runtime.ObjectClass(datapool);
     if (!datapool_class.has_value()) {
@@ -772,10 +1067,7 @@ std::optional<OfficialBackendContext> FindOfficialBackendContext(
         *core, {"", "Il2Cpp"}, "GameApplication");
     const auto datapool_class = runtime.FindClass(
         *core, {"", "Il2Cpp"}, "Datapool");
-    const auto mod_loader_class = runtime.FindClass(
-        *core, {"", "Il2Cpp"}, "ModLoader");
-    if (!application.has_value() || !datapool_class.has_value() ||
-        !mod_loader_class.has_value()) {
+    if (!application.has_value() || !datapool_class.has_value()) {
         return std::nullopt;
     }
     const auto datapool = runtime.StaticFieldValue(*application, "datapool");
@@ -783,24 +1075,19 @@ std::optional<OfficialBackendContext> FindOfficialBackendContext(
         *datapool_class, "LoadUserMods", 0);
     const auto refresh_mods = runtime.FindMethod(
         *datapool_class, "RefreshMods", 0);
-    const auto mod_loader_run = runtime.FindMethodByFirstParameter(
-        *mod_loader_class, "Run", 1, "System.Collections.IEnumerator");
     if (!datapool.has_value() || !load_user_mods.has_value() ||
-        !refresh_mods.has_value() || !mod_loader_run.has_value()) {
+        !refresh_mods.has_value()) {
         return std::nullopt;
     }
     const auto load_user_code = runtime.MethodCode(*load_user_mods);
     const auto refresh_code = runtime.MethodCode(*refresh_mods);
-    const auto run_code = runtime.MethodCode(*mod_loader_run);
     const GameProfile& profile = SupportedGameProfile();
     const auto base = reinterpret_cast<std::uintptr_t>(g_api->image_base);
     if (!load_user_code.has_value() || !refresh_code.has_value() ||
-        !run_code.has_value() ||
         *load_user_code != reinterpret_cast<void*>(TargetAddress(
             profile, HookTarget::kLoadUserMods, base)) ||
         *refresh_code != reinterpret_cast<void*>(TargetAddress(
-            profile, HookTarget::kRefreshMods, base)) ||
-        !MatchesFingerprint(profile.mod_loader_run)) {
+            profile, HookTarget::kRefreshMods, base))) {
         return std::nullopt;
     }
     const auto actual_class = runtime.ObjectClass(*datapool);
@@ -860,6 +1147,11 @@ void RunOfficialCanaryOnce() noexcept {
             LogFailure(g_runtime->failure());
             return;
         }
+        const auto observer_context = FindOfficialObserverContext(
+            runtime, context->datapool);
+        if (observer_context.has_value()) {
+            InstallOfficialActivationObserver(runtime, *observer_context);
+        }
         if (!g_backend_route.MarkStarted(BackendRoute::kOfficialCanary)) {
             return;
         }
@@ -872,6 +1164,7 @@ void RunOfficialCanaryOnce() noexcept {
             LogFailure(g_runtime->failure());
             return;
         }
+        LogOfficialDatapoolSnapshot("load_user_mods_leave", context->datapool);
         LogMessage("official_canary=invoke target=refresh_mods");
         if (!g_official_completion.BeginRefreshCall()) {
             g_official_completion.Fail();
@@ -969,8 +1262,8 @@ void* OnLoadConfig(void* instance, int mode, const void* method) {
         return nullptr;
     }
     if (g_backend_route.route() == BackendRoute::kOfficialCanary) {
-        RunOfficialCanaryOnce();
         void* iterator = load_config(instance, mode, method);
+        RunOfficialCanaryOnce();
         PublishOfficialDecision(
             g_official_completion.ObserveLoadConfig(iterator != nullptr));
         return iterator;
