@@ -1,3 +1,4 @@
+#include "modloader/backend_route.h"
 #include "modloader/canonical_dictionary.h"
 #include "modloader/config_catalog.h"
 #include "modloader/game_profile.h"
@@ -60,6 +61,36 @@ class SequenceResolver final : public modloader::Il2CppResolver {
     std::vector<ResolveStatus> statuses_;
     std::atomic<std::size_t> calls_{0};
 };
+
+void TestBackendRoute() {
+    modloader::BackendRouteController route;
+    Check(route.route() == modloader::BackendRoute::kUnselected,
+          "backend route must start unselected");
+    Check(route.Claim(modloader::BackendRoute::kOfficialCanary),
+          "official route must claim an unselected process");
+    Check(!route.Claim(modloader::BackendRoute::kStagedNative),
+          "a second backend must not claim the process");
+    Check(route.MarkStarted(modloader::BackendRoute::kOfficialCanary),
+          "claimed official route must start");
+    Check(route.MarkFailed(modloader::BackendRoute::kOfficialCanary),
+          "started official route must enter terminal failure");
+    Check(!route.MarkReady(modloader::BackendRoute::kOfficialCanary),
+          "failed official route must not become ready");
+    Check(!route.MarkStarted(modloader::BackendRoute::kStagedNative),
+          "failed official route must not hot-switch to staged native");
+}
+
+void TestReadyBackendRouteIsTerminal() {
+    modloader::BackendRouteController route;
+    Check(route.Claim(modloader::BackendRoute::kStagedNative),
+          "staged route must claim an unselected process");
+    Check(route.MarkStarted(modloader::BackendRoute::kStagedNative),
+          "claimed staged route must start");
+    Check(route.MarkReady(modloader::BackendRoute::kStagedNative),
+          "started staged route must become ready");
+    Check(!route.MarkFailed(modloader::BackendRoute::kStagedNative),
+          "ready staged route must remain terminal");
+}
 
 void TestModPath() {
     Check(!modloader::BuildModRoot("").has_value(), "empty path must fail");
@@ -242,7 +273,6 @@ void TestGameProfile() {
         std::memcpy(image.data() + fingerprint.rva, fingerprint.bytes.data(),
                     fingerprint.bytes.size());
     }
-
     const std::uintptr_t image_base = reinterpret_cast<std::uintptr_t>(image.data());
     Check(modloader::MatchesGameProfile(profile, image_base, image_base,
                                         image_base + image.size()),
@@ -254,6 +284,11 @@ void TestGameProfile() {
     Check(modloader::TargetAddress(profile, modloader::HookTarget::kLoadConfig, base) ==
               base + 0x1e4f374,
           "profile must retain verified LoadConfig RVA");
+    Check(modloader::TargetAddress(profile, modloader::HookTarget::kModDatabasePath, base) ==
+              base + 0x1e59698,
+          "profile must label MOD_DB_PATH independently from ModLoader.Run");
+    Check(profile.mod_loader_run.rva == 0x1e88f30,
+          "profile must retain the ModLoader.Run diagnostic target");
 }
 
 void TestLifecycleGate() {
@@ -507,6 +542,8 @@ void TestModFileIndex() {
 }  // namespace
 
 int main() {
+    TestBackendRoute();
+    TestReadyBackendRouteIsTerminal();
     TestModPath();
     TestSingleStarter();
     TestReadyTerminalState();

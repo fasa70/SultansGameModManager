@@ -49,6 +49,10 @@ const char* FailureName(FailureCode failure) {
             return "hook_install_failed";
         case FailureCode::kIl2CppReflectionUnavailable:
             return "il2cpp_reflection_unavailable";
+        case FailureCode::kOfficialPreflightFailed:
+            return "official_preflight_failed";
+        case FailureCode::kOfficialInvocationFailed:
+            return "official_invocation_failed";
     }
     return "unknown";
 }

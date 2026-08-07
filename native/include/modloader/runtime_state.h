@@ -29,6 +29,8 @@ enum class FailureCode : std::int32_t {
     kUnsupportedGameVersion = 8,
     kHookInstallFailed = 9,
     kIl2CppReflectionUnavailable = 10,
+    kOfficialPreflightFailed = 11,
+    kOfficialInvocationFailed = 12,
 };
 
 enum class ResolveStatus {

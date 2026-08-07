@@ -1,6 +1,7 @@
 #include "modloader/mod_hooks.h"
 
 #include "modloader/android_log.h"
+#include "modloader/backend_route.h"
 #include "modloader/bootstrap_notify.h"
 #include "modloader/game_profile.h"
 #include "modloader/hook_engine.h"
@@ -13,6 +14,7 @@
 #include "modloader/mod_file_index.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -20,13 +22,14 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 
 namespace modloader {
 namespace {
 
-using LoadConfigFunction = void (*)(void*, int, const void*);
+using LoadConfigFunction = void* (*)(void*, int, const void*);
 using LoadSingleFileFunction = void (*)(void*, void*, void*, void*, const void*);
 using PostProcessFunction = void (*)(void*, const void*);
 using LoadUserArchiveFunction = bool (*)(void*, std::int32_t, const void*);
@@ -34,8 +37,11 @@ using LoadUserArchiveDataFunction = void (*)(void*, const void*);
 using RiteRenderInitFunction = void (*)(void*, void*, const void*);
 
 HookEngine g_hooks;
+BackendRouteController g_backend_route;
 std::unique_ptr<LifecycleGate> g_lifecycle;
 std::mutex g_setup_mutex;
+std::mutex g_config_hook_mutex;
+std::atomic<bool> g_official_invocation_started{false};
 const Il2CppApi* g_api = nullptr;
 RuntimeController* g_runtime = nullptr;
 LoadConfigFunction g_load_config = nullptr;
@@ -70,13 +76,7 @@ void* StubPointer(void*) {
     return nullptr;
 }
 
-int StubInteger(void*) {
-    return 0;
-}
-
-void* StubModLoaderRun() {
-    return nullptr;
-}
+void StubVoid(void*) {}
 
 void Schedule(std::chrono::milliseconds delay, std::function<void()> callback) {
     std::thread([delay, callback = std::move(callback)]() mutable {
@@ -121,6 +121,9 @@ void MergeSummary(const ModApplySummary& stage) {
 }
 
 void ApplyStage(ModApplyStage stage, bool* applied) {
+    if (g_backend_route.route() != BackendRoute::kStagedNative) {
+        return;
+    }
     std::lock_guard<std::mutex> lock(g_apply_mutex);
     if (*applied || g_api == nullptr) {
         return;
@@ -175,6 +178,9 @@ void OnLoadSingleFile(void* instance, void* path, void* config_name,
 }
 
 void OnInjectionWindow(RuntimeController* runtime) {
+    if (g_backend_route.route() != BackendRoute::kStagedNative) {
+        return;
+    }
     LogMessage("lifecycle=window_reached");
     const std::string mod_root = GetModRoot();
     if (g_api == nullptr || mod_root.empty()) {
@@ -240,6 +246,7 @@ void OnInjectionWindow(RuntimeController* runtime) {
                       resource_hooks.rejected_resources);
         LogMessage(message);
     }
+    g_backend_route.MarkReady(BackendRoute::kStagedNative);
     if (runtime->MarkReady()) {
         NotifyModsApplied(g_summary.discovered_mods);
     }
@@ -579,12 +586,173 @@ bool InstallArchiveHook() {
     return true;
 }
 
-void OnLoadConfig(void* instance, int mode, const void* method) {
+struct OfficialBackendContext {
+    void* datapool = nullptr;
+    void* load_user_mods = nullptr;
+    void* refresh_mods = nullptr;
+};
+
+bool HasOfficialDatapoolState(const Il2CppRuntime& runtime, void* datapool) {
+    const auto datapool_class = runtime.ObjectClass(datapool);
+    if (!datapool_class.has_value()) {
+        return false;
+    }
+    constexpr std::string_view kRequiredReferences[] = {
+        "_user_mods",
+        "mods",
+        "active_mods",
+        "activing_mods",
+        "active_mods_queue",
+    };
+    for (const std::string_view field_name : kRequiredReferences) {
+        // A valid field may legitimately contain null before its first official
+        // initialization. Validate the field contract, not its current value.
+        if (!runtime.FindField(*datapool_class, field_name).has_value()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool MatchesFingerprint(const CodeFingerprint& fingerprint) {
+    if (g_api == nullptr || g_api->image_base == nullptr ||
+        fingerprint.rva > g_api->image_size ||
+        fingerprint.bytes.size() > g_api->image_size - fingerprint.rva) {
+        return false;
+    }
+    const auto* address = reinterpret_cast<const std::uint8_t*>(g_api->image_base) +
+        fingerprint.rva;
+    return std::equal(
+        fingerprint.bytes.begin(), fingerprint.bytes.end(), address);
+}
+
+std::optional<OfficialBackendContext> FindOfficialBackendContext(
+    const Il2CppRuntime& runtime) {
+    const auto core = runtime.FindImage({"Core.dll", "Il2CppCore.dll"});
+    if (!core.has_value()) {
+        return std::nullopt;
+    }
+    const auto application = runtime.FindClass(
+        *core, {"", "Il2Cpp"}, "GameApplication");
+    const auto datapool_class = runtime.FindClass(
+        *core, {"", "Il2Cpp"}, "Datapool");
+    const auto mod_loader_class = runtime.FindClass(
+        *core, {"", "Il2Cpp"}, "ModLoader");
+    if (!application.has_value() || !datapool_class.has_value() ||
+        !mod_loader_class.has_value()) {
+        return std::nullopt;
+    }
+    const auto datapool = runtime.StaticFieldValue(*application, "datapool");
+    const auto load_user_mods = runtime.FindMethod(
+        *datapool_class, "LoadUserMods", 0);
+    const auto refresh_mods = runtime.FindMethod(
+        *datapool_class, "RefreshMods", 0);
+    const auto mod_loader_run = runtime.FindMethodByFirstParameter(
+        *mod_loader_class, "Run", 1, "System.Collections.IEnumerator");
+    if (!datapool.has_value() || !load_user_mods.has_value() ||
+        !refresh_mods.has_value() || !mod_loader_run.has_value()) {
+        return std::nullopt;
+    }
+    const auto run_code = runtime.MethodCode(*mod_loader_run);
+    const GameProfile& profile = SupportedGameProfile();
+    if (!run_code.has_value() || !MatchesFingerprint(profile.mod_loader_run)) {
+        return std::nullopt;
+    }
+    const auto actual_class = runtime.ObjectClass(*datapool);
+    if (!actual_class.has_value() || *actual_class != *datapool_class ||
+        !HasOfficialDatapoolState(runtime, *datapool)) {
+        return std::nullopt;
+    }
+    return OfficialBackendContext{
+        *datapool,
+        *load_user_mods,
+        *refresh_mods,
+    };
+}
+
+bool InvokeOfficialEntry(const Il2CppRuntime& runtime,
+                         void* method,
+                         void* datapool) {
+    return runtime.InvokeVoid(method, datapool, nullptr);
+}
+
+std::optional<void*> InvokeOfficialRefresh(const Il2CppRuntime& runtime,
+                                           void* method,
+                                           void* datapool) {
+    return runtime.Invoke(method, datapool, nullptr);
+}
+
+void RunOfficialCanaryOnce() noexcept {
+    bool expected = false;
+    if (!g_official_invocation_started.compare_exchange_strong(
+            expected, true, std::memory_order_acq_rel)) {
+        return;
+    }
+    if (g_api == nullptr || g_runtime == nullptr ||
+        !g_backend_route.Is(
+            BackendRoute::kOfficialCanary,
+            BackendRoutePhase::kPreflight)) {
+        return;
+    }
+    try {
+        Il2CppRuntime runtime(*g_api);
+        const auto context = FindOfficialBackendContext(runtime);
+        if (!context.has_value()) {
+            g_backend_route.MarkFailed(BackendRoute::kOfficialCanary);
+            g_runtime->Fail(FailureCode::kOfficialPreflightFailed);
+            LogMessage("official_canary=failed phase=preflight");
+            LogFailure(g_runtime->failure());
+            return;
+        }
+        if (!g_backend_route.MarkStarted(BackendRoute::kOfficialCanary)) {
+            return;
+        }
+        LogMessage("official_canary=invoke target=load_user_mods");
+        if (!InvokeOfficialEntry(runtime, context->load_user_mods,
+                                 context->datapool)) {
+            g_backend_route.MarkFailed(BackendRoute::kOfficialCanary);
+            g_runtime->Fail(FailureCode::kOfficialInvocationFailed);
+            LogMessage("official_canary=failed target=load_user_mods");
+            LogFailure(g_runtime->failure());
+            return;
+        }
+        LogMessage("official_canary=invoke target=refresh_mods");
+        const auto refresh_promise = InvokeOfficialRefresh(
+            runtime, context->refresh_mods, context->datapool);
+        if (!refresh_promise.has_value()) {
+            g_backend_route.MarkFailed(BackendRoute::kOfficialCanary);
+            g_runtime->Fail(FailureCode::kOfficialInvocationFailed);
+            LogMessage("official_canary=failed target=refresh_mods");
+            LogFailure(g_runtime->failure());
+            return;
+        }
+        LogMessage("official_canary=started target=refresh_mods promise=returned");
+        LogMessage("official_canary=pending target=refresh_mods reason=promise_completion_unobserved");
+    } catch (...) {
+        g_backend_route.MarkFailed(BackendRoute::kOfficialCanary);
+        g_runtime->Fail(FailureCode::kOfficialInvocationFailed);
+        LogMessage("official_canary=failed reason=native_exception");
+        LogFailure(g_runtime->failure());
+    }
+}
+
+void* OnLoadConfig(void* instance, int mode, const void* method) {
+    std::lock_guard<std::mutex> lock(g_config_hook_mutex);
     LogMessage("lifecycle=load_config_observed");
+    if (g_load_config == nullptr) {
+        if (g_runtime != nullptr) {
+            g_runtime->Fail(FailureCode::kHookInstallFailed);
+        }
+        return nullptr;
+    }
+    if (g_backend_route.route() == BackendRoute::kOfficialCanary) {
+        RunOfficialCanaryOnce();
+        return g_load_config(instance, mode, method);
+    }
     InstallPostProcessHooks();
     InstallArchiveHook();
     InstallRecoveryHook();
-    g_load_config(instance, mode, method);
+    return g_load_config(instance, mode, method);
 }
 
 }  // namespace
@@ -601,30 +769,77 @@ bool InstallModHooks(const Il2CppApi& api, RuntimeController& runtime) {
     }
     LogMessage("profile=accepted");
 
+    const BackendRoute route = CompiledBackendRoute();
+    if (!g_backend_route.Claim(route)) {
+        runtime.Fail(FailureCode::kHookInstallFailed);
+        return false;
+    }
+    char route_message[128]{};
+    std::snprintf(route_message, sizeof(route_message),
+                  "backend=%s phase=preflight", BackendRouteName(route));
+    LogMessage(route_message);
+
     g_api = &api;
     g_runtime = &runtime;
-    g_lifecycle = std::make_unique<LifecycleGate>(
-        Schedule, [&runtime]() { OnInjectionWindow(&runtime); });
+    if (route == BackendRoute::kStagedNative) {
+        g_lifecycle = std::make_unique<LifecycleGate>(
+            Schedule, [&runtime]() { OnInjectionWindow(&runtime); });
+    }
 
-    void* original = nullptr;
-    if (!g_hooks.Replace(reinterpret_cast<void*>(TargetAddress(profile, HookTarget::kRefreshMods, base)),
-                         reinterpret_cast<void*>(StubPointer), &original) ||
-        !g_hooks.Replace(reinterpret_cast<void*>(TargetAddress(profile, HookTarget::kLoadUserMods, base)),
-                         reinterpret_cast<void*>(StubInteger), &original) ||
-        !g_hooks.Replace(reinterpret_cast<void*>(TargetAddress(profile, HookTarget::kLoadGlobalMods, base)),
-                         reinterpret_cast<void*>(StubInteger), &original) ||
-        !g_hooks.Replace(reinterpret_cast<void*>(TargetAddress(profile, HookTarget::kModLoaderRun, base)),
-                         reinterpret_cast<void*>(StubModLoaderRun), &original) ||
-        !g_hooks.Replace(reinterpret_cast<void*>(TargetAddress(profile, HookTarget::kLoadConfig, base)),
-                         reinterpret_cast<void*>(OnLoadConfig), &original)) {
+    std::lock_guard<std::mutex> config_hook_lock(g_config_hook_mutex);
+    void* config_original = nullptr;
+    if (route == BackendRoute::kOfficialCanary) {
+        if (!g_hooks.Replace(
+                reinterpret_cast<void*>(TargetAddress(
+                    profile, HookTarget::kLoadConfig, base)),
+                reinterpret_cast<void*>(OnLoadConfig), &config_original) ||
+            config_original == nullptr) {
+            g_hooks.Rollback();
+            g_backend_route.MarkFailed(route);
+            runtime.Fail(FailureCode::kHookInstallFailed);
+            return false;
+        }
+    } else {
+        void* refresh_original = nullptr;
+        void* user_original = nullptr;
+        void* global_original = nullptr;
+        if (!g_hooks.Replace(
+                reinterpret_cast<void*>(TargetAddress(
+                    profile, HookTarget::kRefreshMods, base)),
+                reinterpret_cast<void*>(StubPointer), &refresh_original) ||
+            !g_hooks.Replace(
+                reinterpret_cast<void*>(TargetAddress(
+                    profile, HookTarget::kLoadUserMods, base)),
+                reinterpret_cast<void*>(StubVoid), &user_original) ||
+            !g_hooks.Replace(
+                reinterpret_cast<void*>(TargetAddress(
+                    profile, HookTarget::kLoadGlobalMods, base)),
+                reinterpret_cast<void*>(StubPointer), &global_original) ||
+            !g_hooks.Replace(
+                reinterpret_cast<void*>(TargetAddress(
+                    profile, HookTarget::kLoadConfig, base)),
+                reinterpret_cast<void*>(OnLoadConfig), &config_original) ||
+            refresh_original == nullptr || user_original == nullptr ||
+            global_original == nullptr || config_original == nullptr) {
+            g_hooks.Rollback();
+            g_lifecycle.reset();
+            g_backend_route.MarkFailed(route);
+            runtime.Fail(FailureCode::kHookInstallFailed);
+            return false;
+        }
+    }
+    g_load_config = reinterpret_cast<LoadConfigFunction>(config_original);
+    if (route == BackendRoute::kStagedNative &&
+        !g_backend_route.MarkStarted(route)) {
         g_hooks.Rollback();
         g_lifecycle.reset();
         runtime.Fail(FailureCode::kHookInstallFailed);
         return false;
     }
-    g_load_config = reinterpret_cast<LoadConfigFunction>(original);
 
-    LogMessage("hooks=stub_and_load_config_installed");
+    std::snprintf(route_message, sizeof(route_message),
+                  "hooks=installed backend=%s", BackendRouteName(route));
+    LogMessage(route_message);
     return true;
 }
 

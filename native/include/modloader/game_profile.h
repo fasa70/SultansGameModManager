@@ -11,7 +11,9 @@ enum class HookTarget : std::size_t {
     kRefreshMods,
     kLoadUserMods,
     kLoadGlobalMods,
-    kModLoaderRun,
+    // This fingerprint identifies the MOD_DB_PATH getter. It is retained for
+    // version validation but must never be replaced as ModLoader.Run.
+    kModDatabasePath,
     kLoadConfig,
     kCount,
 };
@@ -24,6 +26,9 @@ struct CodeFingerprint {
 struct GameProfile {
     std::string_view name;
     std::array<CodeFingerprint, static_cast<std::size_t>(HookTarget::kCount)> fingerprints;
+    // Diagnostic-only target used when the official route resolves
+    // ModLoader.Run. It does not gate the base profile by itself.
+    CodeFingerprint mod_loader_run;
 };
 
 const GameProfile& SupportedGameProfile();

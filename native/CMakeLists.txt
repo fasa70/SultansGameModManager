@@ -3,11 +3,19 @@ project(sultans_modloader LANGUAGES CXX)
 
 option(MODLOADER_BUILD_HOST_TESTS "Build host-side core tests" OFF)
 
+set(MODLOADER_BACKEND_MODE "0" CACHE STRING
+    "Backend mode: 0=staged native, 1=official canary")
+set_property(CACHE MODLOADER_BACKEND_MODE PROPERTY STRINGS 0 1)
+if(NOT MODLOADER_BACKEND_MODE MATCHES "^[01]$")
+    message(FATAL_ERROR "MODLOADER_BACKEND_MODE must be 0 or 1")
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(modloader_core STATIC
+    src/backend_route.cpp
     src/canonical_dictionary.cpp
     src/config_catalog.cpp
     src/game_profile.cpp
@@ -19,6 +27,9 @@ add_library(modloader_core STATIC
     src/runtime_state.cpp
 )
 target_include_directories(modloader_core PUBLIC include)
+target_compile_definitions(modloader_core PUBLIC
+    MODLOADER_BACKEND_MODE=${MODLOADER_BACKEND_MODE}
+)
 target_compile_options(modloader_core PRIVATE -Wall -Wextra -Wpedantic -Werror)
 set_target_properties(modloader_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
@@ -57,6 +68,9 @@ if(ANDROID)
         src/resource_hooks.cpp
     )
     target_include_directories(modloader PRIVATE include)
+    target_compile_definitions(modloader PRIVATE
+        MODLOADER_BACKEND_MODE=${MODLOADER_BACKEND_MODE}
+    )
     target_compile_options(modloader PRIVATE
         -Wall -Wextra -Wpedantic -Werror
         -fvisibility=hidden -fvisibility-inlines-hidden
