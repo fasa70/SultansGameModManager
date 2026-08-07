@@ -54,6 +54,17 @@ if(ANDROID)
     set(Plugin.SymbolResolver OFF CACHE BOOL "" FORCE)
     add_subdirectory(third_party/dobby EXCLUDE_FROM_ALL)
 
+    # Dobby 0c29f64 has a circular include between platform.h and common.h.
+    # Some Android sources include platform.h first, before OSMemory is declared.
+    # Preloading common.h makes the cycle resolve in the supported order without
+    # modifying the pinned third-party source.
+    set(DOBBY_COMMON_HEADER
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/dobby/source/dobby/common.h")
+    target_compile_options(dobby PRIVATE
+        "$<$<COMPILE_LANGUAGE:CXX>:-include${DOBBY_COMMON_HEADER}>")
+    target_compile_options(dobby_static PRIVATE
+        "$<$<COMPILE_LANGUAGE:CXX>:-include${DOBBY_COMMON_HEADER}>")
+
     add_library(modloader SHARED
         src/android_log.cpp
         src/bootstrap_jni.cpp
