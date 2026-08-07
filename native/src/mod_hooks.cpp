@@ -40,6 +40,7 @@ using LoadUserArchiveDataFunction = void (*)(void*, const void*);
 using RiteRenderInitFunction = void (*)(void*, void*, const void*);
 
 HookEngine g_hooks;
+HookEngine g_official_promise_hooks;
 BackendRouteController g_backend_route;
 std::unique_ptr<LifecycleGate> g_lifecycle;
 std::mutex g_setup_mutex;
@@ -698,13 +699,15 @@ bool InstallOfficialPromiseHooks(const Il2CppRuntime& runtime) {
     }
     void* resolve_original = nullptr;
     void* reject_original = nullptr;
-    if (!g_hooks.Replace(*resolve_code, reinterpret_cast<void*>(OnOfficialPromiseResolve),
-                         &resolve_original) ||
+    if (!g_official_promise_hooks.Replace(
+            *resolve_code, reinterpret_cast<void*>(OnOfficialPromiseResolve),
+            &resolve_original) ||
         resolve_original == nullptr ||
-        !g_hooks.Replace(*reject_code, reinterpret_cast<void*>(OnOfficialPromiseReject),
-                         &reject_original) ||
+        !g_official_promise_hooks.Replace(
+            *reject_code, reinterpret_cast<void*>(OnOfficialPromiseReject),
+            &reject_original) ||
         reject_original == nullptr) {
-        g_hooks.Rollback();
+        g_official_promise_hooks.Rollback();
         return false;
     }
     g_official_promise_resolve.store(
@@ -838,6 +841,17 @@ void RunOfficialCanaryOnce() noexcept {
     }
     try {
         Il2CppRuntime runtime(*g_api);
+        if (!g_official_promise_hooks_active.load(std::memory_order_acquire)) {
+            if (!InstallOfficialPromiseHooks(runtime)) {
+                g_official_completion.Fail();
+                g_backend_route.MarkFailed(BackendRoute::kOfficialCanary);
+                g_runtime->Fail(FailureCode::kHookInstallFailed);
+                LogMessage("official_canary=failed phase=preflight reason=promise_hooks");
+                LogFailure(g_runtime->failure());
+                return;
+            }
+            LogMessage("official_canary=promise_hooks_installed");
+        }
         const auto context = FindOfficialBackendContext(runtime);
         if (!context.has_value()) {
             g_backend_route.MarkFailed(BackendRoute::kOfficialCanary);
@@ -993,28 +1007,28 @@ bool InstallModHooks(const Il2CppApi& api, RuntimeController& runtime) {
 
     g_api = &api;
     g_runtime = &runtime;
-    if (route == BackendRoute::kStagedNative) {
-        g_lifecycle = std::make_unique<LifecycleGate>(
-            Schedule, [&runtime]() { OnInjectionWindow(&runtime); });
-    }
-
-    std::lock_guard<std::mutex> config_hook_lock(g_config_hook_mutex);
-    void* config_original = nullptr;
     if (route == BackendRoute::kOfficialCanary) {
-        Il2CppRuntime il2cpp(api);
-        if (!InstallOfficialPromiseHooks(il2cpp) ||
-            !g_hooks.Replace(
+        // Install only the RVA-gated lifecycle hook on the resolver worker.
+        // All IL2CPP metadata access is deferred to the natural UnityMain
+        // LoadConfig callback, after the managed domain is fully initialized.
+        std::lock_guard<std::mutex> config_hook_lock(g_config_hook_mutex);
+        void* config_original = nullptr;
+        if (!g_hooks.Replace(
                 reinterpret_cast<void*>(TargetAddress(
                     profile, HookTarget::kLoadConfig, base)),
                 reinterpret_cast<void*>(OnLoadConfig), &config_original) ||
             config_original == nullptr) {
-            g_official_promise_hooks_active.store(false, std::memory_order_release);
             g_hooks.Rollback();
             g_backend_route.MarkFailed(route);
             runtime.Fail(FailureCode::kHookInstallFailed);
             return false;
         }
+        g_load_config = reinterpret_cast<LoadConfigFunction>(config_original);
     } else {
+        g_lifecycle = std::make_unique<LifecycleGate>(
+            Schedule, [&runtime]() { OnInjectionWindow(&runtime); });
+        std::lock_guard<std::mutex> config_hook_lock(g_config_hook_mutex);
+        void* config_original = nullptr;
         void* refresh_original = nullptr;
         void* user_original = nullptr;
         void* global_original = nullptr;
@@ -1042,8 +1056,8 @@ bool InstallModHooks(const Il2CppApi& api, RuntimeController& runtime) {
             runtime.Fail(FailureCode::kHookInstallFailed);
             return false;
         }
+        g_load_config = reinterpret_cast<LoadConfigFunction>(config_original);
     }
-    g_load_config = reinterpret_cast<LoadConfigFunction>(config_original);
     if (route == BackendRoute::kStagedNative &&
         !g_backend_route.MarkStarted(route)) {
         g_hooks.Rollback();
