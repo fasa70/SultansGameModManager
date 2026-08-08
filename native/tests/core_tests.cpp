@@ -5,6 +5,7 @@
 #include "modloader/mod_file_index.h"
 #include "modloader/mod_lifecycle.h"
 #include "modloader/mod_path.h"
+#include "modloader/official_observer_validation.h"
 #include "modloader/official_canary.h"
 #include "modloader/resource_overrides.h"
 #include "modloader/runtime_state.h"
@@ -352,14 +353,76 @@ void TestGameProfile() {
     Check(!modloader::MatchesGameProfile(profile, image_base, image_base,
                                          image_base + image.size()),
           "one mismatched fingerprint must reject profile");
+    Check(modloader::TargetAddress(profile, modloader::HookTarget::kRefreshMods, base) ==
+              base + 0x1e59984,
+          "profile must retain verified RefreshMods RVA");
+    Check(modloader::TargetAddress(profile, modloader::HookTarget::kLoadUserMods, base) ==
+              base + 0x1e59568,
+          "profile must retain verified LoadUserMods RVA");
+    Check(modloader::TargetAddress(profile, modloader::HookTarget::kLoadGlobalMods, base) ==
+              base + 0x1e59fa4,
+          "profile must retain verified LoadGlobalMods RVA");
     Check(modloader::TargetAddress(profile, modloader::HookTarget::kLoadConfig, base) ==
               base + 0x1e4f374,
           "profile must retain verified LoadConfig RVA");
     Check(modloader::TargetAddress(profile, modloader::HookTarget::kModDatabasePath, base) ==
               base + 0x1e59698,
           "profile must label MOD_DB_PATH independently from ModLoader.Run");
+    Check(modloader::kOfficialModLoaderActiveModRva == 0x1e88ef0,
+          "observer must retain the verified ModLoader.ActiveMod RVA");
     Check(profile.mod_loader_run.rva == 0x1e88f30,
           "profile must retain the ModLoader.Run diagnostic target");
+}
+
+void TestOfficialObserverValidation() {
+    const auto& profile = modloader::SupportedGameProfile();
+    constexpr std::uintptr_t base = 0x10000000;
+    const std::uintptr_t load_global = modloader::TargetAddress(
+        profile, modloader::HookTarget::kLoadGlobalMods, base);
+    const std::uintptr_t active_mod =
+        base + modloader::kOfficialModLoaderActiveModRva;
+    const std::uintptr_t run = base + profile.mod_loader_run.rva;
+    using Validation = modloader::OfficialObserverValidation;
+
+    Check(modloader::ValidateOfficialObserverTargets(
+              profile, base, load_global, active_mod, run, true) ==
+              Validation::kValid,
+          "verified observer targets must pass");
+    Check(modloader::ValidateOfficialObserverTargets(
+              profile, base, 0, active_mod, run, true) ==
+              Validation::kLoadGlobalModsMethodCode,
+          "missing LoadGlobalMods code must fail precisely");
+    Check(modloader::ValidateOfficialObserverTargets(
+              profile, base, load_global, 0, run, true) ==
+              Validation::kModLoaderActiveModMethodCode,
+          "missing ActiveMod code must fail precisely");
+    Check(modloader::ValidateOfficialObserverTargets(
+              profile, base, load_global, active_mod, 0, true) ==
+              Validation::kModLoaderRunMethodCode,
+          "missing Run code must fail precisely");
+    Check(modloader::ValidateOfficialObserverTargets(
+              profile, base, load_global + 4, active_mod, run, true) ==
+              Validation::kLoadGlobalModsTarget,
+          "LoadGlobalMods target drift must fail precisely");
+    Check(modloader::ValidateOfficialObserverTargets(
+              profile, base, load_global, active_mod + 4, run, true) ==
+              Validation::kModLoaderActiveModTarget,
+          "ActiveMod target drift must fail precisely");
+    Check(modloader::ValidateOfficialObserverTargets(
+              profile, base, load_global, active_mod, run + 4, true) ==
+              Validation::kModLoaderRunTarget,
+          "Run target drift must fail precisely");
+    Check(modloader::ValidateOfficialObserverTargets(
+              profile, base, load_global, active_mod, run, false) ==
+              Validation::kModLoaderRunFingerprint,
+          "Run fingerprint drift must fail precisely");
+    Check(std::string(modloader::OfficialObserverValidationReason(
+              Validation::kModLoaderRunTarget)) == "mod_loader_run_target",
+          "observer validation reason must be stable and address-free");
+    Check(modloader::ValidateOfficialObserverTargets(
+              profile, static_cast<std::uintptr_t>(-2), load_global,
+              active_mod, run, true) == Validation::kLoadGlobalModsTarget,
+          "overflowed target arithmetic must fail closed");
 }
 
 void TestLifecycleGate() {
@@ -627,6 +690,7 @@ int main() {
     TestResolverTimeout();
     TestResolverFailures();
     TestGameProfile();
+    TestOfficialObserverValidation();
     TestLifecycleGate();
     TestConfigCatalog();
     TestCanonicalDictionaryTransaction();

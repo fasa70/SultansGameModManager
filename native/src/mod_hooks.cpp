@@ -10,6 +10,7 @@
 #include "modloader/mod_root.h"
 #include "modloader/native_mod_loader.h"
 #include "modloader/official_canary.h"
+#include "modloader/official_observer_validation.h"
 #include "modloader/resource_overrides.h"
 #include "modloader/resource_hooks.h"
 #include "modloader/mod_file_index.h"
@@ -51,6 +52,7 @@ std::unique_ptr<LifecycleGate> g_lifecycle;
 std::mutex g_setup_mutex;
 std::mutex g_config_hook_mutex;
 std::mutex g_official_promise_mutex;
+std::mutex g_official_promise_publish_mutex;
 std::atomic<bool> g_official_invocation_started{false};
 OfficialCanaryCompletion g_official_completion;
 GcHandle g_official_promise_handle;
@@ -59,7 +61,17 @@ std::atomic<OfficialPromiseRejectFunction> g_official_promise_reject{nullptr};
 std::atomic<void*> g_official_promise_resolve_target{nullptr};
 std::atomic<void*> g_official_promise_reject_target{nullptr};
 std::atomic<bool> g_official_promise_hooks_active{false};
+
+enum class OfficialObserverState : std::uint8_t {
+    kUnprepared,
+    kInstalling,
+    kReady,
+    kRejected,
+};
+
 std::mutex g_official_observer_mutex;
+OfficialObserverState g_official_observer_state =
+    OfficialObserverState::kUnprepared;
 std::mutex g_official_observer_publish_mutex;
 std::atomic<LoadGlobalModsFunction> g_official_load_global_mods{nullptr};
 std::atomic<ModLoaderActiveModFunction> g_official_mod_loader_active_mod{nullptr};
@@ -636,7 +648,9 @@ void PublishOfficialDecision(OfficialCanaryDecision decision,
         LogMessage("official_canary=ready target=refresh_mods");
         LogState(g_runtime->state());
     } else if (decision == OfficialCanaryDecision::kFailed) {
-        g_backend_route.MarkFailed(BackendRoute::kOfficialCanary);
+        if (!g_backend_route.MarkFailed(BackendRoute::kOfficialCanary)) {
+            return;
+        }
         g_runtime->Fail(FailureCode::kOfficialInvocationFailed);
         if (release_promise) {
             ReleaseOfficialPromise();
@@ -646,50 +660,67 @@ void PublishOfficialDecision(OfficialCanaryDecision decision,
     }
 }
 
-void OnOfficialPromiseResolve(void* promise, const void* method) {
-    if (g_official_promise_hooks_active.load(std::memory_order_acquire)) {
-        const OfficialCanaryDecision decision =
-            g_official_completion.ObservePromise(
-                promise, OfficialPromiseCompletion::kResolved);
-        PublishOfficialDecision(decision, false);
-        if (decision != OfficialCanaryDecision::kUnchanged) {
-            const OfficialPromiseResolveFunction original =
-                g_official_promise_resolve.load(std::memory_order_acquire);
-            if (original != nullptr) {
-                original(promise, method);
-            }
-            ReleaseOfficialPromise();
-            return;
-        }
-    }
-    const OfficialPromiseResolveFunction original =
+OfficialPromiseResolveFunction OfficialPromiseResolveOriginal() {
+    OfficialPromiseResolveFunction original =
         g_official_promise_resolve.load(std::memory_order_acquire);
+    if (original == nullptr) {
+        std::lock_guard<std::mutex> publish_lock(
+            g_official_promise_publish_mutex);
+        original = g_official_promise_resolve.load(
+            std::memory_order_acquire);
+    }
+    return original;
+}
+
+OfficialPromiseRejectFunction OfficialPromiseRejectOriginal() {
+    OfficialPromiseRejectFunction original =
+        g_official_promise_reject.load(std::memory_order_acquire);
+    if (original == nullptr) {
+        std::lock_guard<std::mutex> publish_lock(
+            g_official_promise_publish_mutex);
+        original = g_official_promise_reject.load(
+            std::memory_order_acquire);
+    }
+    return original;
+}
+
+void OnOfficialPromiseResolve(void* promise, const void* method) {
+    const OfficialPromiseResolveFunction original =
+        OfficialPromiseResolveOriginal();
     if (original != nullptr) {
         original(promise, method);
     }
+    if (!g_official_promise_hooks_active.load(std::memory_order_acquire)) {
+        return;
+    }
+    const OfficialCanaryDecision decision =
+        g_official_completion.ObservePromise(
+            promise, OfficialPromiseCompletion::kResolved);
+    if (decision == OfficialCanaryDecision::kUnchanged) {
+        return;
+    }
+    LogOfficialDatapoolSnapshot("refresh_mods_resolved");
+    PublishOfficialDecision(decision, false);
+    ReleaseOfficialPromise();
 }
 
 void OnOfficialPromiseReject(void* promise, void* exception, const void* method) {
-    if (g_official_promise_hooks_active.load(std::memory_order_acquire)) {
-        const OfficialCanaryDecision decision =
-            g_official_completion.ObservePromise(
-                promise, OfficialPromiseCompletion::kRejected);
-        PublishOfficialDecision(decision, false);
-        if (decision != OfficialCanaryDecision::kUnchanged) {
-            const OfficialPromiseRejectFunction original =
-                g_official_promise_reject.load(std::memory_order_acquire);
-            if (original != nullptr) {
-                original(promise, exception, method);
-            }
-            ReleaseOfficialPromise();
-            return;
-        }
-    }
     const OfficialPromiseRejectFunction original =
-        g_official_promise_reject.load(std::memory_order_acquire);
+        OfficialPromiseRejectOriginal();
     if (original != nullptr) {
         original(promise, exception, method);
     }
+    if (!g_official_promise_hooks_active.load(std::memory_order_acquire)) {
+        return;
+    }
+    const OfficialCanaryDecision decision =
+        g_official_completion.ObservePromise(
+            promise, OfficialPromiseCompletion::kRejected);
+    if (decision == OfficialCanaryDecision::kUnchanged) {
+        return;
+    }
+    PublishOfficialDecision(decision, false);
+    ReleaseOfficialPromise();
 }
 
 bool InstallOfficialPromiseHooks(const Il2CppRuntime& runtime) {
@@ -714,25 +745,36 @@ bool InstallOfficialPromiseHooks(const Il2CppRuntime& runtime) {
     }
     void* resolve_original = nullptr;
     void* reject_original = nullptr;
-    if (!g_official_promise_hooks.Replace(
-            *resolve_code, reinterpret_cast<void*>(OnOfficialPromiseResolve),
-            &resolve_original) ||
-        resolve_original == nullptr ||
-        !g_official_promise_hooks.Replace(
-            *reject_code, reinterpret_cast<void*>(OnOfficialPromiseReject),
-            &reject_original) ||
-        reject_original == nullptr) {
-        g_official_promise_hooks.Rollback();
-        return false;
+    {
+        std::lock_guard<std::mutex> publish_lock(
+            g_official_promise_publish_mutex);
+        if (!g_official_promise_hooks.Replace(
+                *resolve_code, reinterpret_cast<void*>(OnOfficialPromiseResolve),
+                &resolve_original) ||
+            resolve_original == nullptr) {
+            g_official_promise_hooks.Rollback();
+            return false;
+        }
+        g_official_promise_resolve.store(
+            reinterpret_cast<OfficialPromiseResolveFunction>(resolve_original),
+            std::memory_order_release);
+        if (!g_official_promise_hooks.Replace(
+                *reject_code, reinterpret_cast<void*>(OnOfficialPromiseReject),
+                &reject_original) ||
+            reject_original == nullptr) {
+            // Keep the already-installed Resolve wrapper as a transparent
+            // pass-through. Destroying its live trampoline can strand a call
+            // that entered while this publish mutex was held.
+            return false;
+        }
+        g_official_promise_reject.store(
+            reinterpret_cast<OfficialPromiseRejectFunction>(reject_original),
+            std::memory_order_release);
     }
-    g_official_promise_resolve.store(
-        reinterpret_cast<OfficialPromiseResolveFunction>(resolve_original),
-        std::memory_order_release);
-    g_official_promise_reject.store(
-        reinterpret_cast<OfficialPromiseRejectFunction>(reject_original),
-        std::memory_order_release);
-    g_official_promise_resolve_target.store(*resolve_code, std::memory_order_release);
-    g_official_promise_reject_target.store(*reject_code, std::memory_order_release);
+    g_official_promise_resolve_target.store(
+        *resolve_code, std::memory_order_release);
+    g_official_promise_reject_target.store(
+        *reject_code, std::memory_order_release);
     g_official_promise_hooks_active.store(true, std::memory_order_release);
     return true;
 }
@@ -749,6 +791,9 @@ struct OfficialObserverContext {
     void* mod_loader_active_mod = nullptr;
     void* mod_loader_run = nullptr;
 };
+
+std::optional<OfficialObserverContext> FindOfficialObserverContext(
+    const Il2CppRuntime& runtime, void* datapool);
 
 struct OfficialCollectionState {
     bool field_available = false;
@@ -908,25 +953,56 @@ void OnOfficialModLoaderRun(void* instance, void* enumerator, const void* method
 bool InstallOfficialActivationObserver(const Il2CppRuntime& runtime,
                                        const OfficialObserverContext& context) {
     std::lock_guard<std::mutex> lock(g_official_observer_mutex);
-    if (g_official_observer_active.load(std::memory_order_acquire)) {
+    if (g_official_observer_state == OfficialObserverState::kReady) {
         return true;
     }
+    if (g_official_observer_state == OfficialObserverState::kRejected) {
+        return false;
+    }
+    if (g_official_observer_state == OfficialObserverState::kUnprepared) {
+        g_official_observer_state = OfficialObserverState::kInstalling;
+    }
+    if (g_official_observer_state != OfficialObserverState::kInstalling) {
+        return false;
+    }
+
+    const auto fail = [](const char* reason) {
+        // Once Dobby has published a trampoline, retain that transparent
+        // forwarding hook on an observer rejection. Destroying a live
+        // trampoline can strand a wrapper that already entered the target.
+        // The rejected state prevents any canary invocation or retry.
+        g_official_observer_active.store(false, std::memory_order_release);
+        g_official_observer_state = OfficialObserverState::kRejected;
+        const std::string message = std::string(
+            "official_observer=unavailable reason=") + reason;
+        LogMessage(message.c_str());
+    };
+
     const auto load_global_code = runtime.MethodCode(context.load_global_mods);
     const auto mod_loader_active_code = runtime.MethodCode(
         context.mod_loader_active_mod);
     const auto run_code = runtime.MethodCode(context.mod_loader_run);
     const GameProfile& profile = SupportedGameProfile();
     const auto base = reinterpret_cast<std::uintptr_t>(g_api->image_base);
-    if (!load_global_code.has_value() || !mod_loader_active_code.has_value() ||
-        !run_code.has_value() ||
-        *load_global_code != reinterpret_cast<void*>(TargetAddress(
-            profile, HookTarget::kLoadGlobalMods, base)) ||
-        reinterpret_cast<std::uintptr_t>(*mod_loader_active_code) !=
-            base + 0x1e88ef0 ||
-        !MatchesFingerprint(profile.mod_loader_run)) {
-        LogMessage("official_observer=unavailable reason=target_validation");
+    const OfficialObserverValidation validation =
+        ValidateOfficialObserverTargets(
+            profile,
+            base,
+            load_global_code.has_value()
+                ? reinterpret_cast<std::uintptr_t>(*load_global_code)
+                : 0,
+            mod_loader_active_code.has_value()
+                ? reinterpret_cast<std::uintptr_t>(*mod_loader_active_code)
+                : 0,
+            run_code.has_value()
+                ? reinterpret_cast<std::uintptr_t>(*run_code)
+                : 0,
+            MatchesFingerprint(profile.mod_loader_run));
+    if (validation != OfficialObserverValidation::kValid) {
+        fail(OfficialObserverValidationReason(validation));
         return false;
     }
+
 
     void* load_global_original = nullptr;
     void* mod_loader_active_original = nullptr;
@@ -934,13 +1010,13 @@ bool InstallOfficialActivationObserver(const Il2CppRuntime& runtime,
     {
         // Dobby activates each target before Replace returns. Wrappers that
         // race installation wait on this mutex until their trampoline is
-        // published or rollback has restored the original entry.
+        // published; a rejected partial installation remains transparent and
+        // is never used to start the canary.
         std::lock_guard<std::mutex> publish_lock(g_official_observer_publish_mutex);
         if (!g_official_observer_hooks.Replace(
                 *load_global_code, reinterpret_cast<void*>(OnOfficialLoadGlobalMods),
                 &load_global_original) || load_global_original == nullptr) {
-            g_official_observer_hooks.Rollback();
-            LogMessage("official_observer=unavailable reason=hook_install");
+            fail("hook_install");
             return false;
         }
         g_official_load_global_mods.store(
@@ -952,8 +1028,7 @@ bool InstallOfficialActivationObserver(const Il2CppRuntime& runtime,
                 reinterpret_cast<void*>(OnOfficialModLoaderActiveMod),
                 &mod_loader_active_original) ||
             mod_loader_active_original == nullptr) {
-            g_official_observer_hooks.Rollback();
-            LogMessage("official_observer=unavailable reason=hook_install");
+            fail("hook_install");
             return false;
         }
         g_official_mod_loader_active_mod.store(
@@ -964,8 +1039,7 @@ bool InstallOfficialActivationObserver(const Il2CppRuntime& runtime,
         if (!g_official_observer_hooks.Replace(
                 *run_code, reinterpret_cast<void*>(OnOfficialModLoaderRun),
                 &run_original) || run_original == nullptr) {
-            g_official_observer_hooks.Rollback();
-            LogMessage("official_observer=unavailable reason=hook_install");
+            fail("hook_install");
             return false;
         }
         g_official_mod_loader_run.store(
@@ -974,9 +1048,38 @@ bool InstallOfficialActivationObserver(const Il2CppRuntime& runtime,
     }
     g_official_datapool.store(context.datapool, std::memory_order_release);
     g_official_observer_active.store(true, std::memory_order_release);
+    g_official_observer_state = OfficialObserverState::kReady;
     LogMessage("official_observer=ready");
     LogOfficialDatapoolSnapshot("observer_ready", context.datapool);
     return true;
+}
+
+bool PrepareOfficialActivationObserver(const Il2CppRuntime& runtime,
+                                       void* datapool) {
+    {
+        std::lock_guard<std::mutex> lock(g_official_observer_mutex);
+        if (g_official_observer_state == OfficialObserverState::kReady) {
+            return true;
+        }
+        if (g_official_observer_state == OfficialObserverState::kRejected ||
+            g_official_observer_state == OfficialObserverState::kInstalling) {
+            return false;
+        }
+        g_official_observer_state = OfficialObserverState::kInstalling;
+    }
+    if (datapool == nullptr) {
+        LogMessage("official_observer=unavailable reason=datapool_instance");
+        std::lock_guard<std::mutex> lock(g_official_observer_mutex);
+        g_official_observer_state = OfficialObserverState::kRejected;
+        return false;
+    }
+    const auto context = FindOfficialObserverContext(runtime, datapool);
+    if (!context.has_value()) {
+        std::lock_guard<std::mutex> lock(g_official_observer_mutex);
+        g_official_observer_state = OfficialObserverState::kRejected;
+        return false;
+    }
+    return InstallOfficialActivationObserver(runtime, *context);
 }
 
 std::optional<OfficialObserverContext> FindOfficialObserverContext(
@@ -1114,17 +1217,22 @@ std::optional<void*> InvokeOfficialRefresh(const Il2CppRuntime& runtime,
     return runtime.Invoke(method, datapool, nullptr);
 }
 
-void RunOfficialCanaryOnce() noexcept {
+bool RunOfficialCanaryOnce() noexcept {
     bool expected = false;
     if (!g_official_invocation_started.compare_exchange_strong(
             expected, true, std::memory_order_acq_rel)) {
-        return;
+        return false;
     }
     if (g_api == nullptr || g_runtime == nullptr ||
+        !g_official_observer_active.load(std::memory_order_acquire) ||
         !g_backend_route.Is(
             BackendRoute::kOfficialCanary,
             BackendRoutePhase::kPreflight)) {
-        return;
+        if (g_runtime != nullptr) {
+            g_backend_route.MarkFailed(BackendRoute::kOfficialCanary);
+            g_runtime->Fail(FailureCode::kOfficialPreflightFailed);
+        }
+        return false;
     }
     try {
         Il2CppRuntime runtime(*g_api);
@@ -1135,7 +1243,7 @@ void RunOfficialCanaryOnce() noexcept {
                 g_runtime->Fail(FailureCode::kHookInstallFailed);
                 LogMessage("official_canary=failed phase=preflight reason=promise_hooks");
                 LogFailure(g_runtime->failure());
-                return;
+                return false;
             }
             LogMessage("official_canary=promise_hooks_installed");
         }
@@ -1145,15 +1253,10 @@ void RunOfficialCanaryOnce() noexcept {
             g_runtime->Fail(FailureCode::kOfficialPreflightFailed);
             LogMessage("official_canary=failed phase=preflight");
             LogFailure(g_runtime->failure());
-            return;
-        }
-        const auto observer_context = FindOfficialObserverContext(
-            runtime, context->datapool);
-        if (observer_context.has_value()) {
-            InstallOfficialActivationObserver(runtime, *observer_context);
+            return false;
         }
         if (!g_backend_route.MarkStarted(BackendRoute::kOfficialCanary)) {
-            return;
+            return false;
         }
         LogMessage("official_canary=invoke target=load_user_mods");
         if (!InvokeOfficialEntry(runtime, context->load_user_mods,
@@ -1162,14 +1265,14 @@ void RunOfficialCanaryOnce() noexcept {
             g_runtime->Fail(FailureCode::kOfficialInvocationFailed);
             LogMessage("official_canary=failed target=load_user_mods");
             LogFailure(g_runtime->failure());
-            return;
+            return false;
         }
         LogOfficialDatapoolSnapshot("load_user_mods_leave", context->datapool);
         LogMessage("official_canary=invoke target=refresh_mods");
         if (!g_official_completion.BeginRefreshCall()) {
             g_official_completion.Fail();
             PublishOfficialDecision(OfficialCanaryDecision::kFailed);
-            return;
+            return false;
         }
         const auto refresh_promise = InvokeOfficialRefresh(
             runtime, context->refresh_mods, context->datapool);
@@ -1177,7 +1280,7 @@ void RunOfficialCanaryOnce() noexcept {
             g_official_completion.Fail();
             PublishOfficialDecision(OfficialCanaryDecision::kFailed);
             LogMessage("official_canary=failed target=refresh_mods");
-            return;
+            return false;
         }
         bool retained = false;
         {
@@ -1189,7 +1292,7 @@ void RunOfficialCanaryOnce() noexcept {
             g_official_completion.Fail();
             PublishOfficialDecision(OfficialCanaryDecision::kFailed);
             LogMessage("official_canary=failed target=refresh_mods reason=gchandle");
-            return;
+            return false;
         }
         const Il2CppRuntime promise_runtime(*g_api);
         const auto promise_class = promise_runtime.ObjectClass(*refresh_promise);
@@ -1197,7 +1300,7 @@ void RunOfficialCanaryOnce() noexcept {
             g_official_completion.Fail();
             PublishOfficialDecision(OfficialCanaryDecision::kFailed);
             LogMessage("official_canary=failed target=refresh_mods reason=promise_class");
-            return;
+            return false;
         }
         const auto promise_resolve = promise_runtime.FindMethod(*promise_class, "Resolve", 0);
         const auto promise_reject = promise_runtime.FindMethod(*promise_class, "Reject", 1);
@@ -1215,22 +1318,26 @@ void RunOfficialCanaryOnce() noexcept {
             g_official_completion.Fail();
             PublishOfficialDecision(OfficialCanaryDecision::kFailed);
             LogMessage("official_canary=failed target=refresh_mods reason=promise_abi");
-            return;
+            return false;
         }
         const OfficialCanaryDecision tracked =
             g_official_completion.TrackPromise(*refresh_promise);
-        const auto promise_state =
-            promise_runtime.InstanceFieldInt32(*refresh_promise, "<CurState>k__BackingField");
+        const auto promise_state = promise_runtime.InstanceFieldInt32(
+            *refresh_promise, "<CurState>k__BackingField");
         if (!promise_state.has_value() || *promise_state < 0 || *promise_state > 2) {
             g_official_completion.Fail();
             PublishOfficialDecision(OfficialCanaryDecision::kFailed);
             LogMessage("official_canary=failed target=refresh_mods reason=promise_state");
-            return;
+            return false;
         }
         const OfficialCanaryDecision decision =
             g_official_completion.ObservePromiseState(
                 *refresh_promise,
                 static_cast<OfficialPromiseState>(*promise_state));
+        if (*promise_state ==
+            static_cast<std::int32_t>(OfficialPromiseState::kResolved)) {
+            LogOfficialDatapoolSnapshot("refresh_mods_resolved", context->datapool);
+        }
         LogMessage("official_canary=started target=refresh_mods promise=tracked");
         PublishOfficialDecision(decision == OfficialCanaryDecision::kUnchanged
             ? tracked
@@ -1238,6 +1345,7 @@ void RunOfficialCanaryOnce() noexcept {
         if (decision == OfficialCanaryDecision::kPending) {
             LogMessage("official_canary=pending target=refresh_mods reason=promise_incomplete");
         }
+        return true;
     } catch (...) {
         g_official_completion.Fail();
         ReleaseOfficialPromise();
@@ -1245,6 +1353,7 @@ void RunOfficialCanaryOnce() noexcept {
         g_runtime->Fail(FailureCode::kOfficialInvocationFailed);
         LogMessage("official_canary=failed reason=native_exception");
         LogFailure(g_runtime->failure());
+        return false;
     }
 }
 
@@ -1262,10 +1371,31 @@ void* OnLoadConfig(void* instance, int mode, const void* method) {
         return nullptr;
     }
     if (g_backend_route.route() == BackendRoute::kOfficialCanary) {
+        bool observer_ready = false;
+        try {
+            if (g_api != nullptr) {
+                Il2CppRuntime runtime(*g_api);
+                observer_ready = PrepareOfficialActivationObserver(runtime, instance);
+            }
+        } catch (...) {
+            LogMessage("official_observer=unavailable reason=native_exception");
+        }
+        if (!observer_ready) {
+            g_backend_route.MarkFailed(BackendRoute::kOfficialCanary);
+            if (g_runtime != nullptr) {
+                g_runtime->Fail(FailureCode::kOfficialPreflightFailed);
+            }
+            LogMessage("official_canary=failed phase=preflight reason=observer");
+        }
         void* iterator = load_config(instance, mode, method);
-        RunOfficialCanaryOnce();
-        PublishOfficialDecision(
-            g_official_completion.ObserveLoadConfig(iterator != nullptr));
+        if (!observer_ready) {
+            return iterator;
+        }
+        const bool tracking_started = RunOfficialCanaryOnce();
+        if (tracking_started) {
+            PublishOfficialDecision(
+                g_official_completion.ObserveLoadConfig(iterator != nullptr));
+        }
         return iterator;
     }
     InstallPostProcessHooks();
