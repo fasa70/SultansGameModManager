@@ -75,4 +75,88 @@ const char* OfficialObserverValidationReason(
     return "unknown";
 }
 
+
+OfficialUiObserverValidation ValidateOfficialUiObserverTargets(
+    const GameProfile& profile,
+    std::uintptr_t image_base,
+    std::uintptr_t panel_on_enable_code,
+    std::uintptr_t panel_show_mods_code,
+    std::uintptr_t panel_refresh_mods_code,
+    std::uintptr_t item_setup_code,
+    bool panel_on_enable_fingerprint_matches,
+    bool panel_show_mods_fingerprint_matches,
+    bool panel_refresh_mods_fingerprint_matches,
+    bool item_setup_fingerprint_matches) noexcept {
+    if (panel_on_enable_code == 0) {
+        return OfficialUiObserverValidation::kPanelOnEnableMethodCode;
+    }
+    if (panel_show_mods_code == 0) {
+        return OfficialUiObserverValidation::kPanelShowModsMethodCode;
+    }
+    if (panel_refresh_mods_code == 0) {
+        return OfficialUiObserverValidation::kPanelRefreshModsMethodCode;
+    }
+    if (item_setup_code == 0) {
+        return OfficialUiObserverValidation::kItemSetupMethodCode;
+    }
+    const OfficialUiObserverProfile& targets = profile.ui_observer;
+    if (!MatchesTarget(image_base, targets.panel_on_enable.rva, panel_on_enable_code)) {
+        return OfficialUiObserverValidation::kPanelOnEnableTarget;
+    }
+    if (!MatchesTarget(image_base, targets.panel_show_mods.rva, panel_show_mods_code)) {
+        return OfficialUiObserverValidation::kPanelShowModsTarget;
+    }
+    if (!MatchesTarget(image_base, targets.panel_refresh_mods.rva, panel_refresh_mods_code)) {
+        return OfficialUiObserverValidation::kPanelRefreshModsTarget;
+    }
+    if (!MatchesTarget(image_base, targets.item_setup.rva, item_setup_code)) {
+        return OfficialUiObserverValidation::kItemSetupTarget;
+    }
+    if (!panel_on_enable_fingerprint_matches) {
+        return OfficialUiObserverValidation::kPanelOnEnableFingerprint;
+    }
+    if (!panel_show_mods_fingerprint_matches) {
+        return OfficialUiObserverValidation::kPanelShowModsFingerprint;
+    }
+    if (!panel_refresh_mods_fingerprint_matches) {
+        return OfficialUiObserverValidation::kPanelRefreshModsFingerprint;
+    }
+    return item_setup_fingerprint_matches
+        ? OfficialUiObserverValidation::kValid
+        : OfficialUiObserverValidation::kItemSetupFingerprint;
+}
+
+const char* OfficialUiObserverValidationReason(
+    OfficialUiObserverValidation validation) noexcept {
+    switch (validation) {
+        case OfficialUiObserverValidation::kValid:
+            return "none";
+        case OfficialUiObserverValidation::kPanelOnEnableMethodCode:
+            return "panel_on_enable_method_code";
+        case OfficialUiObserverValidation::kPanelShowModsMethodCode:
+            return "panel_show_mods_method_code";
+        case OfficialUiObserverValidation::kPanelRefreshModsMethodCode:
+            return "panel_refresh_mods_method_code";
+        case OfficialUiObserverValidation::kItemSetupMethodCode:
+            return "item_setup_method_code";
+        case OfficialUiObserverValidation::kPanelOnEnableTarget:
+            return "panel_on_enable_target";
+        case OfficialUiObserverValidation::kPanelShowModsTarget:
+            return "panel_show_mods_target";
+        case OfficialUiObserverValidation::kPanelRefreshModsTarget:
+            return "panel_refresh_mods_target";
+        case OfficialUiObserverValidation::kItemSetupTarget:
+            return "item_setup_target";
+        case OfficialUiObserverValidation::kPanelOnEnableFingerprint:
+            return "panel_on_enable_fingerprint";
+        case OfficialUiObserverValidation::kPanelShowModsFingerprint:
+            return "panel_show_mods_fingerprint";
+        case OfficialUiObserverValidation::kPanelRefreshModsFingerprint:
+            return "panel_refresh_mods_fingerprint";
+        case OfficialUiObserverValidation::kItemSetupFingerprint:
+            return "item_setup_fingerprint";
+    }
+    return "unknown";
+}
+
 }  // namespace modloader

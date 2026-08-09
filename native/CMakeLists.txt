@@ -26,6 +26,7 @@ add_library(modloader_core STATIC
     src/official_canary.cpp
     src/official_observer_validation.cpp
     src/resource_overrides.cpp
+    src/resource_uri.cpp
     src/runtime_state.cpp
 )
 target_include_directories(modloader_core PUBLIC include)
@@ -78,7 +79,11 @@ if(ANDROID)
         src/mod_hooks.cpp
         src/native_mod_loader.cpp
         src/node_post_process.cpp
+        src/official_resource_uri_hooks.cpp
         src/resource_hooks.cpp
+        src/resource_uri.cpp
+        src/tmp_glyph_hooks.cpp
+        src/ui_reveal_hooks.cpp
     )
     target_include_directories(modloader PRIVATE include)
     target_compile_definitions(modloader PRIVATE

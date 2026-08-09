@@ -9,11 +9,13 @@
 #include "modloader/mod_lifecycle.h"
 #include "modloader/mod_root.h"
 #include "modloader/native_mod_loader.h"
-#include "modloader/official_canary.h"
 #include "modloader/official_observer_validation.h"
+#include "modloader/official_resource_uri_hooks.h"
 #include "modloader/resource_overrides.h"
 #include "modloader/resource_hooks.h"
 #include "modloader/mod_file_index.h"
+#include "modloader/tmp_glyph_hooks.h"
+#include "modloader/ui_reveal_hooks.h"
 
 #include <algorithm>
 #include <atomic>
@@ -36,8 +38,8 @@ using LoadGlobalModsFunction = void* (*)(void*, const void*);
 using ModLoaderActiveModFunction =
     void (*)(void*, void*, void*, void*, const void*);
 using ModLoaderRunFunction = void (*)(void*, void*, const void*);
-using OfficialPromiseResolveFunction = void (*)(void*, const void*);
-using OfficialPromiseRejectFunction = void (*)(void*, void*, const void*);
+using ModPanelVoidFunction = void (*)(void*, const void*);
+using ModItemSetupFunction = void (*)(void*, void*, void*, const void*);
 using LoadSingleFileFunction = void (*)(void*, void*, void*, void*, const void*);
 using PostProcessFunction = void (*)(void*, const void*);
 using LoadUserArchiveFunction = bool (*)(void*, std::int32_t, const void*);
@@ -45,22 +47,13 @@ using LoadUserArchiveDataFunction = void (*)(void*, const void*);
 using RiteRenderInitFunction = void (*)(void*, void*, const void*);
 
 HookEngine g_hooks;
-HookEngine g_official_promise_hooks;
 HookEngine g_official_observer_hooks;
+HookEngine g_official_compatibility_hooks;
+HookEngine g_official_ui_hooks;
 BackendRouteController g_backend_route;
 std::unique_ptr<LifecycleGate> g_lifecycle;
 std::mutex g_setup_mutex;
 std::mutex g_config_hook_mutex;
-std::mutex g_official_promise_mutex;
-std::mutex g_official_promise_publish_mutex;
-std::atomic<bool> g_official_invocation_started{false};
-OfficialCanaryCompletion g_official_completion;
-GcHandle g_official_promise_handle;
-std::atomic<OfficialPromiseResolveFunction> g_official_promise_resolve{nullptr};
-std::atomic<OfficialPromiseRejectFunction> g_official_promise_reject{nullptr};
-std::atomic<void*> g_official_promise_resolve_target{nullptr};
-std::atomic<void*> g_official_promise_reject_target{nullptr};
-std::atomic<bool> g_official_promise_hooks_active{false};
 
 enum class OfficialObserverState : std::uint8_t {
     kUnprepared,
@@ -78,6 +71,26 @@ std::atomic<ModLoaderActiveModFunction> g_official_mod_loader_active_mod{nullptr
 std::atomic<ModLoaderRunFunction> g_official_mod_loader_run{nullptr};
 std::atomic<void*> g_official_datapool{nullptr};
 std::atomic<bool> g_official_observer_active{false};
+
+enum class OfficialUiObserverState : std::uint8_t {
+    kUnprepared,
+    kInstalling,
+    kReady,
+    kRejected,
+};
+
+HookEngine g_official_ui_observer_hooks;
+std::mutex g_official_ui_observer_mutex;
+OfficialUiObserverState g_official_ui_observer_state =
+    OfficialUiObserverState::kUnprepared;
+std::mutex g_official_ui_observer_publish_mutex;
+std::atomic<ModPanelVoidFunction> g_official_panel_on_enable{nullptr};
+std::atomic<ModPanelVoidFunction> g_official_panel_show_mods{nullptr};
+std::atomic<ModPanelVoidFunction> g_official_panel_refresh_mods{nullptr};
+std::atomic<ModItemSetupFunction> g_official_item_setup{nullptr};
+std::atomic<std::int32_t> g_official_panel_mods_offset{-1};
+std::atomic<bool> g_official_ui_observer_active{false};
+std::atomic<bool> g_official_compatibility_installed{false};
 const Il2CppApi* g_api = nullptr;
 RuntimeController* g_runtime = nullptr;
 LoadConfigFunction g_load_config = nullptr;
@@ -625,166 +638,6 @@ bool InstallArchiveHook() {
     return true;
 }
 
-void ReleaseOfficialPromise() noexcept {
-    std::lock_guard<std::mutex> lock(g_official_promise_mutex);
-    g_official_promise_handle.Reset();
-}
-
-void PublishOfficialDecision(OfficialCanaryDecision decision,
-                             bool release_promise = true) noexcept {
-    if (g_runtime == nullptr) {
-        return;
-    }
-    if (decision == OfficialCanaryDecision::kReady) {
-        if (!g_backend_route.MarkReady(BackendRoute::kOfficialCanary)) {
-            return;
-        }
-        if (g_runtime->MarkReady()) {
-            NotifyModsApplied(kOfficialModsAppliedCount);
-        }
-        if (release_promise) {
-            ReleaseOfficialPromise();
-        }
-        LogMessage("official_canary=ready target=refresh_mods");
-        LogState(g_runtime->state());
-    } else if (decision == OfficialCanaryDecision::kFailed) {
-        if (!g_backend_route.MarkFailed(BackendRoute::kOfficialCanary)) {
-            return;
-        }
-        g_runtime->Fail(FailureCode::kOfficialInvocationFailed);
-        if (release_promise) {
-            ReleaseOfficialPromise();
-        }
-        LogMessage("official_canary=failed target=refresh_mods completion=rejected");
-        LogFailure(g_runtime->failure());
-    }
-}
-
-OfficialPromiseResolveFunction OfficialPromiseResolveOriginal() {
-    OfficialPromiseResolveFunction original =
-        g_official_promise_resolve.load(std::memory_order_acquire);
-    if (original == nullptr) {
-        std::lock_guard<std::mutex> publish_lock(
-            g_official_promise_publish_mutex);
-        original = g_official_promise_resolve.load(
-            std::memory_order_acquire);
-    }
-    return original;
-}
-
-OfficialPromiseRejectFunction OfficialPromiseRejectOriginal() {
-    OfficialPromiseRejectFunction original =
-        g_official_promise_reject.load(std::memory_order_acquire);
-    if (original == nullptr) {
-        std::lock_guard<std::mutex> publish_lock(
-            g_official_promise_publish_mutex);
-        original = g_official_promise_reject.load(
-            std::memory_order_acquire);
-    }
-    return original;
-}
-
-void OnOfficialPromiseResolve(void* promise, const void* method) {
-    const OfficialPromiseResolveFunction original =
-        OfficialPromiseResolveOriginal();
-    if (original != nullptr) {
-        original(promise, method);
-    }
-    if (!g_official_promise_hooks_active.load(std::memory_order_acquire)) {
-        return;
-    }
-    const OfficialCanaryDecision decision =
-        g_official_completion.ObservePromise(
-            promise, OfficialPromiseCompletion::kResolved);
-    if (decision == OfficialCanaryDecision::kUnchanged) {
-        return;
-    }
-    LogOfficialDatapoolSnapshot("refresh_mods_resolved");
-    PublishOfficialDecision(decision, false);
-    ReleaseOfficialPromise();
-}
-
-void OnOfficialPromiseReject(void* promise, void* exception, const void* method) {
-    const OfficialPromiseRejectFunction original =
-        OfficialPromiseRejectOriginal();
-    if (original != nullptr) {
-        original(promise, exception, method);
-    }
-    if (!g_official_promise_hooks_active.load(std::memory_order_acquire)) {
-        return;
-    }
-    const OfficialCanaryDecision decision =
-        g_official_completion.ObservePromise(
-            promise, OfficialPromiseCompletion::kRejected);
-    if (decision == OfficialCanaryDecision::kUnchanged) {
-        return;
-    }
-    PublishOfficialDecision(decision, false);
-    ReleaseOfficialPromise();
-}
-
-bool InstallOfficialPromiseHooks(const Il2CppRuntime& runtime) {
-    const auto promise_image = runtime.FindImage({"Promise.dll", "Il2CppPromise.dll"});
-    if (!promise_image.has_value()) {
-        return false;
-    }
-    const auto promise_class = runtime.FindClass(
-        *promise_image, {"RSG", "Il2CppRSG"}, "Promise");
-    if (!promise_class.has_value()) {
-        return false;
-    }
-    const auto resolve = runtime.FindMethod(*promise_class, "Resolve", 0);
-    const auto reject = runtime.FindMethod(*promise_class, "Reject", 1);
-    if (!resolve.has_value() || !reject.has_value()) {
-        return false;
-    }
-    const auto resolve_code = runtime.MethodCode(*resolve);
-    const auto reject_code = runtime.MethodCode(*reject);
-    if (!resolve_code.has_value() || !reject_code.has_value()) {
-        return false;
-    }
-    void* resolve_original = nullptr;
-    void* reject_original = nullptr;
-    {
-        std::lock_guard<std::mutex> publish_lock(
-            g_official_promise_publish_mutex);
-        if (!g_official_promise_hooks.Replace(
-                *resolve_code, reinterpret_cast<void*>(OnOfficialPromiseResolve),
-                &resolve_original) ||
-            resolve_original == nullptr) {
-            g_official_promise_hooks.Rollback();
-            return false;
-        }
-        g_official_promise_resolve.store(
-            reinterpret_cast<OfficialPromiseResolveFunction>(resolve_original),
-            std::memory_order_release);
-        if (!g_official_promise_hooks.Replace(
-                *reject_code, reinterpret_cast<void*>(OnOfficialPromiseReject),
-                &reject_original) ||
-            reject_original == nullptr) {
-            // Keep the already-installed Resolve wrapper as a transparent
-            // pass-through. Destroying its live trampoline can strand a call
-            // that entered while this publish mutex was held.
-            return false;
-        }
-        g_official_promise_reject.store(
-            reinterpret_cast<OfficialPromiseRejectFunction>(reject_original),
-            std::memory_order_release);
-    }
-    g_official_promise_resolve_target.store(
-        *resolve_code, std::memory_order_release);
-    g_official_promise_reject_target.store(
-        *reject_code, std::memory_order_release);
-    g_official_promise_hooks_active.store(true, std::memory_order_release);
-    return true;
-}
-
-struct OfficialBackendContext {
-    void* datapool = nullptr;
-    void* load_user_mods = nullptr;
-    void* refresh_mods = nullptr;
-};
-
 struct OfficialObserverContext {
     void* datapool = nullptr;
     void* load_global_mods = nullptr;
@@ -835,26 +688,50 @@ std::string OfficialCollectionCount(const Il2CppRuntime& runtime,
     if (!collection_class.has_value()) {
         return "unavailable";
     }
-    const auto get_count = runtime.FindMethod(*collection_class, "get_Count", 0);
-    if (!get_count.has_value()) {
+    std::optional<std::int32_t> count_offset = runtime.FieldOffset(*collection_class, "_size");
+    if (!count_offset.has_value()) {
+        count_offset = runtime.FieldOffset(*collection_class, "_count");
+    }
+    if (!count_offset.has_value()) {
         return "unavailable";
     }
-    void* exception = nullptr;
-    const auto boxed_count = runtime.Invoke(
-        *get_count, collection.collection, nullptr, &exception);
-    if (exception != nullptr || !boxed_count.has_value()) {
-        return "unavailable";
-    }
-    const auto count_value = runtime.Unbox(*boxed_count);
-    if (!count_value.has_value()) {
-        return "unavailable";
-    }
-    const std::int32_t count = *reinterpret_cast<const std::int32_t*>(*count_value);
+    const std::int32_t count = *reinterpret_cast<const std::int32_t*>(
+        reinterpret_cast<const std::byte*>(collection.collection) + *count_offset);
     constexpr std::int32_t kMaximumObservedCollectionCount = 1'000'000;
     if (count < 0 || count > kMaximumObservedCollectionCount) {
         return "unavailable";
     }
     return std::to_string(count);
+}
+
+std::string OfficialPanelModsCount(void* panel) noexcept {
+    if (g_api == nullptr || panel == nullptr) {
+        return panel == nullptr ? "null" : "unavailable";
+    }
+    const std::int32_t mods_offset =
+        g_official_panel_mods_offset.load(std::memory_order_acquire);
+    if (mods_offset < 0) {
+        return "unavailable";
+    }
+    void* mods = *reinterpret_cast<void**>(
+        reinterpret_cast<std::byte*>(panel) + mods_offset);
+    if (mods == nullptr) {
+        return "null";
+    }
+    const Il2CppRuntime runtime(*g_api);
+    const auto collection_class = runtime.ObjectClass(mods);
+    if (!collection_class.has_value()) {
+        return "unavailable";
+    }
+    const auto size_offset = runtime.FieldOffset(*collection_class, "_size");
+    if (!size_offset.has_value()) {
+        return "unavailable";
+    }
+    const std::int32_t count = *reinterpret_cast<const std::int32_t*>(
+        reinterpret_cast<const std::byte*>(mods) + *size_offset);
+    constexpr std::int32_t kMaximumObservedCollectionCount = 1'000'000;
+    return count >= 0 && count <= kMaximumObservedCollectionCount
+        ? std::to_string(count) : "unavailable";
 }
 
 void LogOfficialDatapoolSnapshot(const char* point, void* datapool) noexcept {
@@ -881,6 +758,199 @@ void LogOfficialDatapoolSnapshot(const char* point, void* datapool) noexcept {
         " active_mods=" + active_mods + " activing_mods=" + activing_mods +
         " queue=" + queue;
     LogMessage(message.c_str());
+}
+
+void LogOfficialUiSnapshot(const char* point, void* panel) noexcept {
+    if (!g_official_ui_observer_active.load(std::memory_order_acquire)) {
+        return;
+    }
+    void* datapool = g_official_datapool.load(std::memory_order_acquire);
+    if (g_api == nullptr || datapool == nullptr) {
+        const std::string message = std::string("official_ui_observer=snapshot point=") + point +
+            " datapool=" + (datapool == nullptr ? "null" : "unavailable") +
+            " panel_mods=" + OfficialPanelModsCount(panel);
+        LogMessage(message.c_str());
+        return;
+    }
+    const Il2CppRuntime runtime(*g_api);
+    const std::string message = std::string("official_ui_observer=snapshot point=") + point +
+        " user_mods=" + OfficialCollectionCount(runtime, datapool, "_user_mods") +
+        " mods=" + OfficialCollectionCount(runtime, datapool, "mods") +
+        " active_mods=" + OfficialCollectionCount(runtime, datapool, "active_mods") +
+        " panel_mods=" + OfficialPanelModsCount(panel);
+    LogMessage(message.c_str());
+}
+
+void OnOfficialPanelOnEnable(void* panel, const void* method) {
+    if (g_official_ui_observer_active.load(std::memory_order_acquire)) {
+        LogMessage("official_ui_observer=call target=panel_on_enable phase=enter");
+        LogOfficialUiSnapshot("panel_on_enable_enter", panel);
+    }
+    ModPanelVoidFunction original = g_official_panel_on_enable.load(std::memory_order_acquire);
+    if (original == nullptr) {
+        std::lock_guard<std::mutex> lock(g_official_ui_observer_publish_mutex);
+        original = g_official_panel_on_enable.load(std::memory_order_acquire);
+    }
+    if (original == nullptr) {
+        LogMessage("official_ui_observer=call target=panel_on_enable phase=leave reason=trampoline");
+        return;
+    }
+    original(panel, method);
+    if (g_official_ui_observer_active.load(std::memory_order_acquire)) {
+        LogOfficialUiSnapshot("panel_on_enable_leave", panel);
+        LogMessage("official_ui_observer=call target=panel_on_enable phase=leave");
+    }
+}
+
+void OnOfficialPanelShowMods(void* panel, const void* method) {
+    if (g_official_ui_observer_active.load(std::memory_order_acquire)) {
+        LogMessage("official_ui_observer=call target=show_mods phase=enter");
+        LogOfficialUiSnapshot("show_mods_enter", panel);
+    }
+    ModPanelVoidFunction original = g_official_panel_show_mods.load(std::memory_order_acquire);
+    if (original == nullptr) {
+        std::lock_guard<std::mutex> lock(g_official_ui_observer_publish_mutex);
+        original = g_official_panel_show_mods.load(std::memory_order_acquire);
+    }
+    if (original == nullptr) {
+        LogMessage("official_ui_observer=call target=show_mods phase=leave reason=trampoline");
+        return;
+    }
+    original(panel, method);
+    if (g_official_ui_observer_active.load(std::memory_order_acquire)) {
+        LogOfficialUiSnapshot("show_mods_leave", panel);
+        LogMessage("official_ui_observer=call target=show_mods phase=leave");
+    }
+}
+
+void OnOfficialPanelRefreshMods(void* panel, const void* method) {
+    if (g_official_ui_observer_active.load(std::memory_order_acquire)) {
+        LogMessage("official_ui_observer=call target=refresh_mods phase=enter");
+        LogOfficialUiSnapshot("refresh_mods_enter", panel);
+    }
+    ModPanelVoidFunction original = g_official_panel_refresh_mods.load(std::memory_order_acquire);
+    if (original == nullptr) {
+        std::lock_guard<std::mutex> lock(g_official_ui_observer_publish_mutex);
+        original = g_official_panel_refresh_mods.load(std::memory_order_acquire);
+    }
+    if (original == nullptr) {
+        LogMessage("official_ui_observer=call target=refresh_mods phase=leave reason=trampoline");
+        return;
+    }
+    original(panel, method);
+    if (g_official_ui_observer_active.load(std::memory_order_acquire)) {
+        LogOfficialUiSnapshot("refresh_mods_leave", panel);
+        LogMessage("official_ui_observer=call target=refresh_mods phase=leave");
+    }
+}
+
+void OnOfficialItemSetup(void* item, void* node, void* panel, const void* method) {
+    if (g_official_ui_observer_active.load(std::memory_order_acquire)) {
+        const std::string message = std::string("official_ui_observer=call target=item_setup phase=enter item=") +
+            (item == nullptr ? "null" : "set") + " node=" +
+            (node == nullptr ? "null" : "set") + " parent=" +
+            (panel == nullptr ? "null" : "set");
+        LogMessage(message.c_str());
+        LogOfficialUiSnapshot("item_setup_enter", panel);
+    }
+    ModItemSetupFunction original = g_official_item_setup.load(std::memory_order_acquire);
+    if (original == nullptr) {
+        std::lock_guard<std::mutex> lock(g_official_ui_observer_publish_mutex);
+        original = g_official_item_setup.load(std::memory_order_acquire);
+    }
+    if (original == nullptr) {
+        LogMessage("official_ui_observer=call target=item_setup phase=leave reason=trampoline");
+        return;
+    }
+    original(item, node, panel, method);
+    if (g_official_ui_observer_active.load(std::memory_order_acquire)) {
+        LogOfficialUiSnapshot("item_setup_leave", panel);
+        LogMessage("official_ui_observer=call target=item_setup phase=leave");
+    }
+}
+
+bool PrepareOfficialUiObserver(const Il2CppRuntime& runtime) {
+    {
+        std::lock_guard<std::mutex> lock(g_official_ui_observer_mutex);
+        if (g_official_ui_observer_state == OfficialUiObserverState::kReady) return true;
+        if (g_official_ui_observer_state != OfficialUiObserverState::kUnprepared) return false;
+        g_official_ui_observer_state = OfficialUiObserverState::kInstalling;
+    }
+    const auto fail = [](const char* reason) {
+        g_official_ui_observer_active.store(false, std::memory_order_release);
+        std::lock_guard<std::mutex> lock(g_official_ui_observer_mutex);
+        g_official_ui_observer_state = OfficialUiObserverState::kRejected;
+        const std::string message = std::string("official_ui_observer=unavailable reason=") + reason;
+        LogMessage(message.c_str());
+    };
+    const auto game = runtime.FindImage({"Il2CppGame.dll", "Game.dll"});
+    if (!game.has_value()) { fail("game_image"); return false; }
+    const auto panel_class = runtime.FindClass(*game, {"Il2Cpp"}, "ModPanelController");
+    const auto item_class = runtime.FindClass(*game, {"Il2Cpp"}, "ModItemController");
+    if (!panel_class.has_value() || !item_class.has_value()) { fail("class"); return false; }
+    const auto on_enable = runtime.FindMethod(*panel_class, "OnEnable", 0);
+    const auto show_mods = runtime.FindMethod(*panel_class, "ShowMods", 0);
+    const auto refresh_mods = runtime.FindMethod(*panel_class, "RefreshMods", 0);
+    const auto item_setup = runtime.FindMethodByParameterTypes(
+        *item_class, "Setup", {"Il2Cpp.ModNode", "Il2Cpp.ModPanelController"});
+    const auto mods_offset = runtime.FieldOffset(*panel_class, "mods");
+    if (!on_enable || !show_mods || !refresh_mods || !item_setup || !mods_offset) {
+        fail("member"); return false;
+    }
+    const auto on_enable_code = runtime.MethodCode(*on_enable);
+    const auto show_mods_code = runtime.MethodCode(*show_mods);
+    const auto refresh_mods_code = runtime.MethodCode(*refresh_mods);
+    const auto item_setup_code = runtime.MethodCode(*item_setup);
+    const GameProfile& profile = SupportedGameProfile();
+    const auto base = reinterpret_cast<std::uintptr_t>(g_api->image_base);
+    const OfficialUiObserverValidation validation = ValidateOfficialUiObserverTargets(
+        profile, base,
+        on_enable_code ? reinterpret_cast<std::uintptr_t>(*on_enable_code) : 0,
+        show_mods_code ? reinterpret_cast<std::uintptr_t>(*show_mods_code) : 0,
+        refresh_mods_code ? reinterpret_cast<std::uintptr_t>(*refresh_mods_code) : 0,
+        item_setup_code ? reinterpret_cast<std::uintptr_t>(*item_setup_code) : 0,
+        MatchesFingerprint(profile.ui_observer.panel_on_enable),
+        MatchesFingerprint(profile.ui_observer.panel_show_mods),
+        MatchesFingerprint(profile.ui_observer.panel_refresh_mods),
+        MatchesFingerprint(profile.ui_observer.item_setup));
+    if (validation != OfficialUiObserverValidation::kValid) {
+        fail(OfficialUiObserverValidationReason(validation)); return false;
+    }
+    void* on_enable_original = nullptr;
+    void* show_mods_original = nullptr;
+    void* refresh_mods_original = nullptr;
+    void* item_setup_original = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_official_ui_observer_publish_mutex);
+        if (!g_official_ui_observer_hooks.Replace(*on_enable_code,
+                reinterpret_cast<void*>(OnOfficialPanelOnEnable), &on_enable_original) ||
+            on_enable_original == nullptr) { fail("hook_install"); return false; }
+        g_official_panel_on_enable.store(reinterpret_cast<ModPanelVoidFunction>(on_enable_original),
+            std::memory_order_release);
+        if (!g_official_ui_observer_hooks.Replace(*show_mods_code,
+                reinterpret_cast<void*>(OnOfficialPanelShowMods), &show_mods_original) ||
+            show_mods_original == nullptr) { fail("hook_install"); return false; }
+        g_official_panel_show_mods.store(reinterpret_cast<ModPanelVoidFunction>(show_mods_original),
+            std::memory_order_release);
+        if (!g_official_ui_observer_hooks.Replace(*refresh_mods_code,
+                reinterpret_cast<void*>(OnOfficialPanelRefreshMods), &refresh_mods_original) ||
+            refresh_mods_original == nullptr) { fail("hook_install"); return false; }
+        g_official_panel_refresh_mods.store(reinterpret_cast<ModPanelVoidFunction>(refresh_mods_original),
+            std::memory_order_release);
+        if (!g_official_ui_observer_hooks.Replace(*item_setup_code,
+                reinterpret_cast<void*>(OnOfficialItemSetup), &item_setup_original) ||
+            item_setup_original == nullptr) { fail("hook_install"); return false; }
+        g_official_item_setup.store(reinterpret_cast<ModItemSetupFunction>(item_setup_original),
+            std::memory_order_release);
+    }
+    g_official_panel_mods_offset.store(*mods_offset, std::memory_order_release);
+    g_official_ui_observer_active.store(true, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lock(g_official_ui_observer_mutex);
+        g_official_ui_observer_state = OfficialUiObserverState::kReady;
+    }
+    LogMessage("official_ui_observer=ready");
+    return true;
 }
 
 void* OnOfficialLoadGlobalMods(void* instance, const void* method) {
@@ -1054,6 +1124,35 @@ bool InstallOfficialActivationObserver(const Il2CppRuntime& runtime,
     return true;
 }
 
+bool InstallOfficialCompatibilityHooks() {
+    bool expected = false;
+    if (!g_official_compatibility_installed.compare_exchange_strong(
+            expected, true, std::memory_order_acq_rel)) {
+        return true;
+    }
+    if (g_api == nullptr) {
+        return false;
+    }
+    const std::string mod_root = GetModRoot();
+    const OfficialResourceUriStats uri = InstallOfficialResourceUriHooks(
+        *g_api, mod_root, &g_official_compatibility_hooks);
+    const TmpGlyphHookStats glyph = InstallTmpGlyphHook(
+        *g_api, &g_official_compatibility_hooks);
+    const UiRevealStats ui = InstallOfficialUiRevealHook(
+        *g_api, &g_official_ui_hooks);
+    char message[256]{};
+    std::snprintf(message, sizeof(message),
+                  "official_compatibility uri_sprite=%s uri_audio=%s uri_texture=%s "
+                  "tmp_glyph=%s ui_reveal=%s activation=manual_ui_only",
+                  uri.sprite_ready ? "ready" : "unavailable",
+                  uri.audio_ready ? "ready" : "unavailable",
+                  uri.texture_ready ? "ready" : "unavailable",
+                  glyph.ready ? "ready" : "unavailable",
+                  ui.ready ? "ready" : "unavailable");
+    LogMessage(message);
+    return uri.sprite_ready && uri.audio_ready && uri.texture_ready && glyph.ready && ui.ready;
+}
+
 bool PrepareOfficialActivationObserver(const Il2CppRuntime& runtime,
                                        void* datapool) {
     {
@@ -1126,28 +1225,6 @@ std::optional<OfficialObserverContext> FindOfficialObserverContext(
         *mod_loader_run,
     };
 }
-bool HasOfficialDatapoolState(const Il2CppRuntime& runtime, void* datapool) {
-    const auto datapool_class = runtime.ObjectClass(datapool);
-    if (!datapool_class.has_value()) {
-        return false;
-    }
-    constexpr std::string_view kRequiredReferences[] = {
-        "_user_mods",
-        "mods",
-        "active_mods",
-        "activing_mods",
-        "active_mods_queue",
-    };
-    for (const std::string_view field_name : kRequiredReferences) {
-        // A valid field may legitimately contain null before its first official
-        // initialization. Validate the field contract, not its current value.
-        if (!runtime.FindField(*datapool_class, field_name).has_value()) {
-            return false;
-        }
-    }
-    return true;
-}
-
 bool MatchesFingerprint(const CodeFingerprint& fingerprint) {
     if (g_api == nullptr || g_api->image_base == nullptr ||
         fingerprint.rva > g_api->image_size ||
@@ -1158,203 +1235,6 @@ bool MatchesFingerprint(const CodeFingerprint& fingerprint) {
         fingerprint.rva;
     return std::equal(
         fingerprint.bytes.begin(), fingerprint.bytes.end(), address);
-}
-
-std::optional<OfficialBackendContext> FindOfficialBackendContext(
-    const Il2CppRuntime& runtime) {
-    const auto core = runtime.FindImage({"Core.dll", "Il2CppCore.dll"});
-    if (!core.has_value()) {
-        return std::nullopt;
-    }
-    const auto application = runtime.FindClass(
-        *core, {"", "Il2Cpp"}, "GameApplication");
-    const auto datapool_class = runtime.FindClass(
-        *core, {"", "Il2Cpp"}, "Datapool");
-    if (!application.has_value() || !datapool_class.has_value()) {
-        return std::nullopt;
-    }
-    const auto datapool = runtime.StaticFieldValue(*application, "datapool");
-    const auto load_user_mods = runtime.FindMethod(
-        *datapool_class, "LoadUserMods", 0);
-    const auto refresh_mods = runtime.FindMethod(
-        *datapool_class, "RefreshMods", 0);
-    if (!datapool.has_value() || !load_user_mods.has_value() ||
-        !refresh_mods.has_value()) {
-        return std::nullopt;
-    }
-    const auto load_user_code = runtime.MethodCode(*load_user_mods);
-    const auto refresh_code = runtime.MethodCode(*refresh_mods);
-    const GameProfile& profile = SupportedGameProfile();
-    const auto base = reinterpret_cast<std::uintptr_t>(g_api->image_base);
-    if (!load_user_code.has_value() || !refresh_code.has_value() ||
-        *load_user_code != reinterpret_cast<void*>(TargetAddress(
-            profile, HookTarget::kLoadUserMods, base)) ||
-        *refresh_code != reinterpret_cast<void*>(TargetAddress(
-            profile, HookTarget::kRefreshMods, base))) {
-        return std::nullopt;
-    }
-    const auto actual_class = runtime.ObjectClass(*datapool);
-    if (!actual_class.has_value() || *actual_class != *datapool_class ||
-        !HasOfficialDatapoolState(runtime, *datapool)) {
-        return std::nullopt;
-    }
-    return OfficialBackendContext{
-        *datapool,
-        *load_user_mods,
-        *refresh_mods,
-    };
-}
-
-bool InvokeOfficialEntry(const Il2CppRuntime& runtime,
-                         void* method,
-                         void* datapool) {
-    return runtime.InvokeVoid(method, datapool, nullptr);
-}
-
-std::optional<void*> InvokeOfficialRefresh(const Il2CppRuntime& runtime,
-                                           void* method,
-                                           void* datapool) {
-    return runtime.Invoke(method, datapool, nullptr);
-}
-
-bool RunOfficialCanaryOnce() noexcept {
-    bool expected = false;
-    if (!g_official_invocation_started.compare_exchange_strong(
-            expected, true, std::memory_order_acq_rel)) {
-        return false;
-    }
-    if (g_api == nullptr || g_runtime == nullptr ||
-        !g_official_observer_active.load(std::memory_order_acquire) ||
-        !g_backend_route.Is(
-            BackendRoute::kOfficialCanary,
-            BackendRoutePhase::kPreflight)) {
-        if (g_runtime != nullptr) {
-            g_backend_route.MarkFailed(BackendRoute::kOfficialCanary);
-            g_runtime->Fail(FailureCode::kOfficialPreflightFailed);
-        }
-        return false;
-    }
-    try {
-        Il2CppRuntime runtime(*g_api);
-        if (!g_official_promise_hooks_active.load(std::memory_order_acquire)) {
-            if (!InstallOfficialPromiseHooks(runtime)) {
-                g_official_completion.Fail();
-                g_backend_route.MarkFailed(BackendRoute::kOfficialCanary);
-                g_runtime->Fail(FailureCode::kHookInstallFailed);
-                LogMessage("official_canary=failed phase=preflight reason=promise_hooks");
-                LogFailure(g_runtime->failure());
-                return false;
-            }
-            LogMessage("official_canary=promise_hooks_installed");
-        }
-        const auto context = FindOfficialBackendContext(runtime);
-        if (!context.has_value()) {
-            g_backend_route.MarkFailed(BackendRoute::kOfficialCanary);
-            g_runtime->Fail(FailureCode::kOfficialPreflightFailed);
-            LogMessage("official_canary=failed phase=preflight");
-            LogFailure(g_runtime->failure());
-            return false;
-        }
-        if (!g_backend_route.MarkStarted(BackendRoute::kOfficialCanary)) {
-            return false;
-        }
-        LogMessage("official_canary=invoke target=load_user_mods");
-        if (!InvokeOfficialEntry(runtime, context->load_user_mods,
-                                 context->datapool)) {
-            g_backend_route.MarkFailed(BackendRoute::kOfficialCanary);
-            g_runtime->Fail(FailureCode::kOfficialInvocationFailed);
-            LogMessage("official_canary=failed target=load_user_mods");
-            LogFailure(g_runtime->failure());
-            return false;
-        }
-        LogOfficialDatapoolSnapshot("load_user_mods_leave", context->datapool);
-        LogMessage("official_canary=invoke target=refresh_mods");
-        if (!g_official_completion.BeginRefreshCall()) {
-            g_official_completion.Fail();
-            PublishOfficialDecision(OfficialCanaryDecision::kFailed);
-            return false;
-        }
-        const auto refresh_promise = InvokeOfficialRefresh(
-            runtime, context->refresh_mods, context->datapool);
-        if (!refresh_promise.has_value()) {
-            g_official_completion.Fail();
-            PublishOfficialDecision(OfficialCanaryDecision::kFailed);
-            LogMessage("official_canary=failed target=refresh_mods");
-            return false;
-        }
-        bool retained = false;
-        {
-            std::lock_guard<std::mutex> lock(g_official_promise_mutex);
-            g_official_promise_handle = runtime.Retain(*refresh_promise, false);
-            retained = g_official_promise_handle.valid();
-        }
-        if (!retained) {
-            g_official_completion.Fail();
-            PublishOfficialDecision(OfficialCanaryDecision::kFailed);
-            LogMessage("official_canary=failed target=refresh_mods reason=gchandle");
-            return false;
-        }
-        const Il2CppRuntime promise_runtime(*g_api);
-        const auto promise_class = promise_runtime.ObjectClass(*refresh_promise);
-        if (!promise_class.has_value()) {
-            g_official_completion.Fail();
-            PublishOfficialDecision(OfficialCanaryDecision::kFailed);
-            LogMessage("official_canary=failed target=refresh_mods reason=promise_class");
-            return false;
-        }
-        const auto promise_resolve = promise_runtime.FindMethod(*promise_class, "Resolve", 0);
-        const auto promise_reject = promise_runtime.FindMethod(*promise_class, "Reject", 1);
-        const auto promise_resolve_code = promise_resolve.has_value()
-            ? promise_runtime.MethodCode(*promise_resolve)
-            : std::nullopt;
-        const auto promise_reject_code = promise_reject.has_value()
-            ? promise_runtime.MethodCode(*promise_reject)
-            : std::nullopt;
-        if (!promise_resolve_code.has_value() || !promise_reject_code.has_value() ||
-            *promise_resolve_code !=
-                g_official_promise_resolve_target.load(std::memory_order_acquire) ||
-            *promise_reject_code !=
-                g_official_promise_reject_target.load(std::memory_order_acquire)) {
-            g_official_completion.Fail();
-            PublishOfficialDecision(OfficialCanaryDecision::kFailed);
-            LogMessage("official_canary=failed target=refresh_mods reason=promise_abi");
-            return false;
-        }
-        const OfficialCanaryDecision tracked =
-            g_official_completion.TrackPromise(*refresh_promise);
-        const auto promise_state = promise_runtime.InstanceFieldInt32(
-            *refresh_promise, "<CurState>k__BackingField");
-        if (!promise_state.has_value() || *promise_state < 0 || *promise_state > 2) {
-            g_official_completion.Fail();
-            PublishOfficialDecision(OfficialCanaryDecision::kFailed);
-            LogMessage("official_canary=failed target=refresh_mods reason=promise_state");
-            return false;
-        }
-        const OfficialCanaryDecision decision =
-            g_official_completion.ObservePromiseState(
-                *refresh_promise,
-                static_cast<OfficialPromiseState>(*promise_state));
-        if (*promise_state ==
-            static_cast<std::int32_t>(OfficialPromiseState::kResolved)) {
-            LogOfficialDatapoolSnapshot("refresh_mods_resolved", context->datapool);
-        }
-        LogMessage("official_canary=started target=refresh_mods promise=tracked");
-        PublishOfficialDecision(decision == OfficialCanaryDecision::kUnchanged
-            ? tracked
-            : decision);
-        if (decision == OfficialCanaryDecision::kPending) {
-            LogMessage("official_canary=pending target=refresh_mods reason=promise_incomplete");
-        }
-        return true;
-    } catch (...) {
-        g_official_completion.Fail();
-        ReleaseOfficialPromise();
-        g_backend_route.MarkFailed(BackendRoute::kOfficialCanary);
-        g_runtime->Fail(FailureCode::kOfficialInvocationFailed);
-        LogMessage("official_canary=failed reason=native_exception");
-        LogFailure(g_runtime->failure());
-        return false;
-    }
 }
 
 void* OnLoadConfig(void* instance, int mode, const void* method) {
@@ -1372,31 +1252,29 @@ void* OnLoadConfig(void* instance, int mode, const void* method) {
     }
     if (g_backend_route.route() == BackendRoute::kOfficialCanary) {
         bool observer_ready = false;
+        bool compatibility_ready = false;
+        bool ui_observer_ready = false;
         try {
             if (g_api != nullptr) {
                 Il2CppRuntime runtime(*g_api);
                 observer_ready = PrepareOfficialActivationObserver(runtime, instance);
+                compatibility_ready = InstallOfficialCompatibilityHooks();
+                ui_observer_ready = PrepareOfficialUiObserver(runtime);
             }
         } catch (...) {
-            LogMessage("official_observer=unavailable reason=native_exception");
+            LogMessage("official_compatibility unavailable reason=native_exception");
         }
-        if (!observer_ready) {
+        if (!ui_observer_ready) {
+            LogMessage("official_ui_observer=unavailable reason=prepare");
+        }
+        if (!observer_ready || !compatibility_ready) {
             g_backend_route.MarkFailed(BackendRoute::kOfficialCanary);
             if (g_runtime != nullptr) {
                 g_runtime->Fail(FailureCode::kOfficialPreflightFailed);
             }
-            LogMessage("official_canary=failed phase=preflight reason=observer");
+            LogMessage("official_canary=failed phase=preflight reason=compatibility");
         }
-        void* iterator = load_config(instance, mode, method);
-        if (!observer_ready) {
-            return iterator;
-        }
-        const bool tracking_started = RunOfficialCanaryOnce();
-        if (tracking_started) {
-            PublishOfficialDecision(
-                g_official_completion.ObserveLoadConfig(iterator != nullptr));
-        }
-        return iterator;
+        return load_config(instance, mode, method);
     }
     InstallPostProcessHooks();
     InstallArchiveHook();

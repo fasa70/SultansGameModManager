@@ -8,6 +8,37 @@ namespace modloader {
 
 constexpr std::uintptr_t kOfficialModLoaderActiveModRva = 0x1e88ef0;
 
+enum class OfficialUiObserverValidation : std::uint8_t {
+    kValid = 0,
+    kPanelOnEnableMethodCode,
+    kPanelShowModsMethodCode,
+    kPanelRefreshModsMethodCode,
+    kItemSetupMethodCode,
+    kPanelOnEnableTarget,
+    kPanelShowModsTarget,
+    kPanelRefreshModsTarget,
+    kItemSetupTarget,
+    kPanelOnEnableFingerprint,
+    kPanelShowModsFingerprint,
+    kPanelRefreshModsFingerprint,
+    kItemSetupFingerprint,
+};
+
+OfficialUiObserverValidation ValidateOfficialUiObserverTargets(
+    const GameProfile& profile,
+    std::uintptr_t image_base,
+    std::uintptr_t panel_on_enable_code,
+    std::uintptr_t panel_show_mods_code,
+    std::uintptr_t panel_refresh_mods_code,
+    std::uintptr_t item_setup_code,
+    bool panel_on_enable_fingerprint_matches,
+    bool panel_show_mods_fingerprint_matches,
+    bool panel_refresh_mods_fingerprint_matches,
+    bool item_setup_fingerprint_matches) noexcept;
+
+const char* OfficialUiObserverValidationReason(
+    OfficialUiObserverValidation validation) noexcept;
+
 enum class OfficialObserverValidation : std::uint8_t {
     kValid = 0,
     kLoadGlobalModsMethodCode,

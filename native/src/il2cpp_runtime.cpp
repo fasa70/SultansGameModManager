@@ -203,6 +203,45 @@ std::optional<void*> Il2CppRuntime::FindMethodByFirstParameter(
     }
     return std::nullopt;
 }
+std::optional<void*> Il2CppRuntime::FindMethodByParameterTypes(
+    void* klass, std::string_view name,
+    const std::vector<std::string_view>& parameter_types) const {
+    if (klass == nullptr || api_.class_get_methods == nullptr || api_.method_get_name == nullptr ||
+        api_.method_get_param_count == nullptr || api_.method_get_param == nullptr ||
+        api_.type_get_name == nullptr || api_.free_memory == nullptr) {
+        return std::nullopt;
+    }
+    void* matching = nullptr;
+    void* iterator = nullptr;
+    while (void* method = api_.class_get_methods(klass, &iterator)) {
+        if (!IsMatchingName(api_.method_get_name(method), name) ||
+            api_.method_get_param_count(method) != parameter_types.size() ||
+            !MethodCode(method).has_value()) {
+            continue;
+        }
+        bool matches = true;
+        for (std::size_t index = 0; index < parameter_types.size(); ++index) {
+            const void* parameter = api_.method_get_param(method, index);
+            char* parameter_name = parameter == nullptr ? nullptr : api_.type_get_name(parameter);
+            matches = matches && parameter_name != nullptr &&
+                std::string_view(parameter_name) == parameter_types[index];
+            if (parameter_name != nullptr) {
+                api_.free_memory(parameter_name);
+            }
+            if (!matches) {
+                break;
+            }
+        }
+        if (!matches) {
+            continue;
+        }
+        if (matching != nullptr) {
+            return std::nullopt;
+        }
+        matching = method;
+    }
+    return matching == nullptr ? std::nullopt : std::optional<void*>(matching);
+}
 std::optional<void*> Il2CppRuntime::FindField(void* klass, std::string_view name) const {
     if (klass == nullptr || api_.class_get_fields == nullptr || api_.field_get_name == nullptr) {
         return std::nullopt;

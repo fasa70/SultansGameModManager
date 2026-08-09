@@ -37,6 +37,7 @@ using Il2CppRuntimeClassInit = void (*)(void* klass);
 using Il2CppRuntimeInvoke = void* (*)(const void* method, void* object, void** parameters,
                                       void** exception);
 using Il2CppArrayNew = void* (*)(void* element_class, std::size_t length);
+using Il2CppArrayLength = std::size_t (*)(void* array);
 using Il2CppObjectNew = void* (*)(void* klass);
 using Il2CppClassFromType = void* (*)(const void* type);
 using Il2CppObjectGetClass = void* (*)(void* object);
@@ -45,6 +46,7 @@ using Il2CppValueBox = void* (*)(void* klass, void* value);
 using Il2CppObjectUnbox = void* (*)(void* object);
 using Il2CppGcHandleNew = std::uint32_t (*)(void* object, bool pinned);
 using Il2CppGcHandleFree = void (*)(std::uint32_t handle);
+using Il2CppResolveIcall = void* (*)(const char* name);
 
 struct Il2CppApi {
     void* library_handle = nullptr;
@@ -79,6 +81,7 @@ struct Il2CppApi {
     Il2CppRuntimeClassInit runtime_class_init = nullptr;
     Il2CppRuntimeInvoke runtime_invoke = nullptr;
     Il2CppArrayNew array_new = nullptr;
+    Il2CppArrayLength array_length = nullptr;
     Il2CppObjectNew object_new = nullptr;
     Il2CppClassFromType class_from_type = nullptr;
     Il2CppObjectGetClass object_get_class = nullptr;
@@ -87,6 +90,7 @@ struct Il2CppApi {
     Il2CppObjectUnbox object_unbox = nullptr;
     Il2CppGcHandleNew gchandle_new = nullptr;
     Il2CppGcHandleFree gchandle_free = nullptr;
+    Il2CppResolveIcall resolve_icall = nullptr;
 };
 
 Il2CppResolver& GetAndroidIl2CppResolver();

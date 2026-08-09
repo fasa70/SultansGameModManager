@@ -68,6 +68,9 @@ class Il2CppRuntime {
     std::optional<void*> FindMethodByFirstParameter(void* klass, std::string_view name,
                                                     std::uint32_t parameter_count,
                                                     std::string_view first_parameter_type) const;
+    std::optional<void*> FindMethodByParameterTypes(
+        void* klass, std::string_view name,
+        const std::vector<std::string_view>& parameter_types) const;
     std::optional<void*> FindField(void* klass, std::string_view name) const;
     std::vector<InstanceField> InstanceFields(void* klass) const;
     std::optional<std::int32_t> FieldOffset(void* klass, std::string_view name) const;

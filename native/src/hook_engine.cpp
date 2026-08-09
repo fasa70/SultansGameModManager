@@ -16,6 +16,15 @@ bool HookEngine::Replace(void* target, void* replacement, void** original) {
     return true;
 }
 
+bool HookEngine::Instrument(void* target, InstrumentCallback callback) {
+    if (target == nullptr || callback == nullptr || count_ == kMaxHooks ||
+        DobbyInstrument(target, reinterpret_cast<dobby_instrument_callback_t>(callback)) != 0) {
+        return false;
+    }
+    hooks_[count_++] = {target};
+    return true;
+}
+
 void HookEngine::Rollback() {
     while (count_ != 0) {
         --count_;

@@ -8,6 +8,7 @@
 #include "modloader/official_observer_validation.h"
 #include "modloader/official_canary.h"
 #include "modloader/resource_overrides.h"
+#include "modloader/resource_uri.h"
 #include "modloader/runtime_state.h"
 
 #include <atomic>
@@ -372,6 +373,14 @@ void TestGameProfile() {
           "observer must retain the verified ModLoader.ActiveMod RVA");
     Check(profile.mod_loader_run.rva == 0x1e88f30,
           "profile must retain the ModLoader.Run diagnostic target");
+    Check(profile.tmp_glyph.update_rva == 0x1e88b38 &&
+              profile.tmp_glyph.call_rva == 0x1e88cac,
+          "profile must retain the TMP glyph compatibility targets");
+    Check(profile.ui_observer.panel_on_enable.rva == 0x1f1fa94 &&
+              profile.ui_observer.panel_show_mods.rva == 0x1f1fb54 &&
+              profile.ui_observer.panel_refresh_mods.rva == 0x1f1fd90 &&
+              profile.ui_observer.item_setup.rva == 0x1f1dff0,
+          "profile must retain verified UI observer targets");
 }
 
 void TestOfficialObserverValidation() {
@@ -423,6 +432,78 @@ void TestOfficialObserverValidation() {
               profile, static_cast<std::uintptr_t>(-2), load_global,
               active_mod, run, true) == Validation::kLoadGlobalModsTarget,
           "overflowed target arithmetic must fail closed");
+}
+
+void TestOfficialUiObserverValidation() {
+    const auto& profile = modloader::SupportedGameProfile();
+    constexpr std::uintptr_t base = 0x10000000;
+    const auto& targets = profile.ui_observer;
+    const std::uintptr_t on_enable = base + targets.panel_on_enable.rva;
+    const std::uintptr_t show_mods = base + targets.panel_show_mods.rva;
+    const std::uintptr_t refresh_mods = base + targets.panel_refresh_mods.rva;
+    const std::uintptr_t item_setup = base + targets.item_setup.rva;
+    using Validation = modloader::OfficialUiObserverValidation;
+
+    Check(modloader::ValidateOfficialUiObserverTargets(
+              profile, base, on_enable, show_mods, refresh_mods, item_setup,
+              true, true, true, true) == Validation::kValid,
+          "verified UI observer targets must pass");
+    Check(modloader::ValidateOfficialUiObserverTargets(
+              profile, base, 0, show_mods, refresh_mods, item_setup,
+              true, true, true, true) == Validation::kPanelOnEnableMethodCode,
+          "missing panel OnEnable code must fail precisely");
+    Check(modloader::ValidateOfficialUiObserverTargets(
+              profile, base, on_enable, 0, refresh_mods, item_setup,
+              true, true, true, true) == Validation::kPanelShowModsMethodCode,
+          "missing ShowMods code must fail precisely");
+    Check(modloader::ValidateOfficialUiObserverTargets(
+              profile, base, on_enable, show_mods, 0, item_setup,
+              true, true, true, true) == Validation::kPanelRefreshModsMethodCode,
+          "missing RefreshMods code must fail precisely");
+    Check(modloader::ValidateOfficialUiObserverTargets(
+              profile, base, on_enable, show_mods, refresh_mods, 0,
+              true, true, true, true) == Validation::kItemSetupMethodCode,
+          "missing item Setup code must fail precisely");
+    Check(modloader::ValidateOfficialUiObserverTargets(
+              profile, base, on_enable + 4, show_mods, refresh_mods, item_setup,
+              true, true, true, true) == Validation::kPanelOnEnableTarget,
+          "panel OnEnable target drift must fail precisely");
+    Check(modloader::ValidateOfficialUiObserverTargets(
+              profile, base, on_enable, show_mods + 4, refresh_mods, item_setup,
+              true, true, true, true) == Validation::kPanelShowModsTarget,
+          "ShowMods target drift must fail precisely");
+    Check(modloader::ValidateOfficialUiObserverTargets(
+              profile, base, on_enable, show_mods, refresh_mods + 4, item_setup,
+              true, true, true, true) == Validation::kPanelRefreshModsTarget,
+          "RefreshMods target drift must fail precisely");
+    Check(modloader::ValidateOfficialUiObserverTargets(
+              profile, base, on_enable, show_mods, refresh_mods, item_setup + 4,
+              true, true, true, true) == Validation::kItemSetupTarget,
+          "Setup target drift must fail despite matching RefreshMods bytes");
+    Check(modloader::ValidateOfficialUiObserverTargets(
+              profile, base, on_enable, show_mods, refresh_mods, item_setup,
+              false, true, true, true) == Validation::kPanelOnEnableFingerprint,
+          "panel OnEnable fingerprint drift must fail precisely");
+    Check(modloader::ValidateOfficialUiObserverTargets(
+              profile, base, on_enable, show_mods, refresh_mods, item_setup,
+              true, false, true, true) == Validation::kPanelShowModsFingerprint,
+          "ShowMods fingerprint drift must fail precisely");
+    Check(modloader::ValidateOfficialUiObserverTargets(
+              profile, base, on_enable, show_mods, refresh_mods, item_setup,
+              true, true, false, true) == Validation::kPanelRefreshModsFingerprint,
+          "RefreshMods fingerprint drift must fail precisely");
+    Check(modloader::ValidateOfficialUiObserverTargets(
+              profile, base, on_enable, show_mods, refresh_mods, item_setup,
+              true, true, true, false) == Validation::kItemSetupFingerprint,
+          "Setup fingerprint drift must fail precisely");
+    Check(std::string(modloader::OfficialUiObserverValidationReason(
+              Validation::kItemSetupTarget)) == "item_setup_target",
+          "UI observer validation reason must be stable and address-free");
+    Check(modloader::ValidateOfficialUiObserverTargets(
+              profile, static_cast<std::uintptr_t>(-2), on_enable, show_mods,
+              refresh_mods, item_setup, true, true, true, true) ==
+              Validation::kPanelOnEnableTarget,
+          "overflowed UI target arithmetic must fail closed");
 }
 
 void TestLifecycleGate() {
@@ -593,6 +674,27 @@ void TestCanonicalIntDictionaryTransaction() {
           "integer rollback must verify removal of a new entry");
 }
 
+void TestResourceUriModes() {
+    constexpr std::string_view root = "/storage/emulated/0/Android/data/pkg/files/Mod";
+    constexpr std::string_view path =
+        "/storage/emulated/0/Android/data/pkg/files/Mod/a/image/card.png";
+    Check(modloader::MakeOfficialResourceArgument(
+              path, root, modloader::ResourceArgumentMode::kFileUri) ==
+              "file:///storage/emulated/0/Android/data/pkg/files/Mod/a/image/card.png",
+          "file URI mode must use three-slash absolute URI");
+    Check(modloader::MakeOfficialResourceArgument(
+              path, root, modloader::ResourceArgumentMode::kAbsolutePath) == path,
+          "immediate mode must preserve absolute path");
+    Check(!modloader::MakeOfficialResourceArgument(
+              "/storage/emulated/0/Android/data/pkg/files/Mod/../outside.png", root,
+              modloader::ResourceArgumentMode::kFileUri).has_value(),
+          "unsafe resource path must be rejected");
+    Check(!modloader::MakeOfficialResourceArgument(
+              "/storage/emulated/0/Android/data/pkg/files/Other/x.png", root,
+              modloader::ResourceArgumentMode::kFileUri).has_value(),
+          "resource outside Mod root must be rejected");
+}
+
 void TestResourceOverrideIndex() {
     modloader::ModFileIndex index;
     index.mods = {
@@ -691,10 +793,12 @@ int main() {
     TestResolverFailures();
     TestGameProfile();
     TestOfficialObserverValidation();
+    TestOfficialUiObserverValidation();
     TestLifecycleGate();
     TestConfigCatalog();
     TestCanonicalDictionaryTransaction();
     TestCanonicalIntDictionaryTransaction();
+    TestResourceUriModes();
     TestResourceOverrideIndex();
     TestModFileIndex();
 

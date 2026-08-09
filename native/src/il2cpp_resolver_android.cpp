@@ -133,6 +133,7 @@ class AndroidIl2CppResolver final : public Il2CppResolver {
         api_.runtime_invoke = Resolve<Il2CppRuntimeInvoke>(
             api_.library_handle, "il2cpp_runtime_invoke");
         api_.array_new = Resolve<Il2CppArrayNew>(api_.library_handle, "il2cpp_array_new");
+        api_.array_length = Resolve<Il2CppArrayLength>(api_.library_handle, "il2cpp_array_length");
         api_.object_new = Resolve<Il2CppObjectNew>(api_.library_handle, "il2cpp_object_new");
         api_.class_from_type = Resolve<Il2CppClassFromType>(
             api_.library_handle, "il2cpp_class_from_type");
@@ -146,6 +147,8 @@ class AndroidIl2CppResolver final : public Il2CppResolver {
             api_.library_handle, "il2cpp_gchandle_new");
         api_.gchandle_free = Resolve<Il2CppGcHandleFree>(
             api_.library_handle, "il2cpp_gchandle_free");
+        api_.resolve_icall = Resolve<Il2CppResolveIcall>(
+            api_.library_handle, "il2cpp_resolve_icall");
         if (api_.domain_get == nullptr || api_.thread_attach == nullptr ||
             api_.thread_current == nullptr || api_.thread_detach == nullptr ||
             api_.domain_assembly_open == nullptr ||
@@ -161,6 +164,7 @@ class AndroidIl2CppResolver final : public Il2CppResolver {
             api_.field_set_value == nullptr ||
             api_.field_static_get_value == nullptr || api_.runtime_class_init == nullptr ||
             api_.runtime_invoke == nullptr || api_.array_new == nullptr ||
+            api_.array_length == nullptr || api_.resolve_icall == nullptr ||
             api_.object_new == nullptr || api_.object_get_class == nullptr ||
             api_.string_new == nullptr || api_.value_box == nullptr ||
             api_.object_unbox == nullptr || api_.gchandle_new == nullptr ||

@@ -6,7 +6,10 @@ namespace modloader {
 
 class HookEngine {
   public:
+    using InstrumentCallback = void (*)(void*, void*);
+
     bool Replace(void* target, void* replacement, void** original);
+    bool Instrument(void* target, InstrumentCallback callback);
     void Rollback();
 
   private:
