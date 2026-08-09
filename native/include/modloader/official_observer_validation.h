@@ -3,6 +3,7 @@
 #include "modloader/game_profile.h"
 
 #include <cstdint>
+#include <string>
 
 namespace modloader {
 
@@ -38,6 +39,20 @@ OfficialUiObserverValidation ValidateOfficialUiObserverTargets(
 
 const char* OfficialUiObserverValidationReason(
     OfficialUiObserverValidation validation) noexcept;
+
+struct OfficialUiObserverMembers {
+    bool panel_on_enable;
+    bool panel_show_mods;
+    bool panel_refresh_mods;
+    bool item_setup;
+    bool panel_mods;
+};
+
+bool OfficialUiObserverMembersReady(
+    const OfficialUiObserverMembers& members) noexcept;
+
+std::string OfficialUiObserverMissingMembers(
+    const OfficialUiObserverMembers& members);
 
 enum class OfficialObserverValidation : std::uint8_t {
     kValid = 0,

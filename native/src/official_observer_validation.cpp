@@ -76,6 +76,30 @@ const char* OfficialObserverValidationReason(
 }
 
 
+bool OfficialUiObserverMembersReady(
+    const OfficialUiObserverMembers& members) noexcept {
+    return members.panel_on_enable && members.panel_show_mods &&
+        members.panel_refresh_mods && members.item_setup &&
+        members.panel_mods;
+}
+
+std::string OfficialUiObserverMissingMembers(
+    const OfficialUiObserverMembers& members) {
+    std::string missing;
+    const auto append = [&missing](const char* label) {
+        if (!missing.empty()) {
+            missing += '|';
+        }
+        missing += label;
+    };
+    if (!members.panel_on_enable) append("panel_on_enable");
+    if (!members.panel_show_mods) append("panel_show_mods");
+    if (!members.panel_refresh_mods) append("panel_refresh_mods");
+    if (!members.item_setup) append("item_setup");
+    if (!members.panel_mods) append("panel_mods");
+    return missing;
+}
+
 OfficialUiObserverValidation ValidateOfficialUiObserverTargets(
     const GameProfile& profile,
     std::uintptr_t image_base,

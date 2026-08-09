@@ -504,6 +504,22 @@ void TestOfficialUiObserverValidation() {
               refresh_mods, item_setup, true, true, true, true) ==
               Validation::kPanelOnEnableTarget,
           "overflowed UI target arithmetic must fail closed");
+
+    using Members = modloader::OfficialUiObserverMembers;
+    const Members ready{true, true, true, true, true};
+    Check(modloader::OfficialUiObserverMembersReady(ready),
+          "complete UI observer members must be ready");
+    Check(modloader::OfficialUiObserverMissingMembers(ready).empty(),
+          "complete UI observer members must have no missing label");
+    const Members setup_missing{true, true, true, false, true};
+    Check(!modloader::OfficialUiObserverMembersReady(setup_missing),
+          "missing Setup member must reject observer preparation");
+    Check(modloader::OfficialUiObserverMissingMembers(setup_missing) == "item_setup",
+          "missing Setup label must be stable");
+    const Members multiple_missing{false, true, false, true, false};
+    Check(modloader::OfficialUiObserverMissingMembers(multiple_missing) ==
+              "panel_on_enable|panel_refresh_mods|panel_mods",
+          "multiple missing member labels must use stable code order");
 }
 
 void TestLifecycleGate() {

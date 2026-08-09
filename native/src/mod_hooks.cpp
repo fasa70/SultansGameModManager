@@ -894,8 +894,18 @@ bool PrepareOfficialUiObserver(const Il2CppRuntime& runtime) {
     const auto item_setup = runtime.FindMethodByParameterTypes(
         *item_class, "Setup", {"Il2Cpp.ModNode", "Il2Cpp.ModPanelController"});
     const auto mods_offset = runtime.FieldOffset(*panel_class, "<mods>k__BackingField");
-    if (!on_enable || !show_mods || !refresh_mods || !item_setup || !mods_offset) {
-        fail("member"); return false;
+    const OfficialUiObserverMembers members{
+        on_enable.has_value(),
+        show_mods.has_value(),
+        refresh_mods.has_value(),
+        item_setup.has_value(),
+        mods_offset.has_value(),
+    };
+    if (!OfficialUiObserverMembersReady(members)) {
+        const std::string message =
+            std::string("member missing=") + OfficialUiObserverMissingMembers(members);
+        fail(message.c_str());
+        return false;
     }
     const auto on_enable_code = runtime.MethodCode(*on_enable);
     const auto show_mods_code = runtime.MethodCode(*show_mods);
