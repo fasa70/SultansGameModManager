@@ -119,15 +119,21 @@ cd android/manager
 
 #### 构建原生库
 
+发布 loader 必须显式启用 official backend 的全部兼容门禁，避免复用旧 CMake cache 构建出诊断变体：
+
 ```bash
 cmake -S native -B native/build-android -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
-  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-21 \
-  -DCMAKE_BUILD_TYPE=Release
+  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-35 \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DMODLOADER_BACKEND_MODE=1 \
+  -DMODLOADER_OFFICIAL_URI_HOOKS=ON \
+  -DMODLOADER_OFFICIAL_URI_TEXTURE_HOOK=ON \
+  -DMODLOADER_OFFICIAL_TMP_GLYPH_HOOKS=ON
 cmake --build native/build-android
 ```
 
-输出：`native/build-android/libmodloader.so`。
+输出：`native/build-android/libmodloader.so`。发布构建还必须满足 ELF64/AArch64、所有 `PT_LOAD` 为 `0x4000` 对齐且没有 `TEXTREL`。完整的模板重建、hash pin、Manager release 和测试流程见 [构建指南](docs/build.md)。
 
 ### 技术栈
 
@@ -266,15 +272,21 @@ Output: `android/manager/app/build/outputs/apk/debug/app-debug.apk`.
 
 #### Build the native library
 
+Release loader builds must explicitly enable the official backend and every compatibility gate so an old CMake cache cannot silently produce a diagnostic variant:
+
 ```bash
 cmake -S native -B native/build-android -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
-  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-21 \
-  -DCMAKE_BUILD_TYPE=Release
+  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-35 \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DMODLOADER_BACKEND_MODE=1 \
+  -DMODLOADER_OFFICIAL_URI_HOOKS=ON \
+  -DMODLOADER_OFFICIAL_URI_TEXTURE_HOOK=ON \
+  -DMODLOADER_OFFICIAL_TMP_GLYPH_HOOKS=ON
 cmake --build native/build-android
 ```
 
-Output: `native/build-android/libmodloader.so`.
+Output: `native/build-android/libmodloader.so`. Release artifacts must be ELF64/AArch64, have `0x4000` alignment on every `PT_LOAD`, and contain no `TEXTREL`. See the [build guide](docs/build.md) for template regeneration, hash pins, Manager release builds, and tests.
 
 #### Release build
 

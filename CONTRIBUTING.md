@@ -48,13 +48,18 @@ cd android/manager
 - **No silent modification**: The app never modifies the game directory, APKs, or system settings without explicit user confirmation
 - **Private data stays local**: Cached mods, download artifacts, and Steam session tokens are stored in the app's private directory only
 - **Verifiable**: Every signing, extraction, and installation step produces verifiable results before proceeding
+- **Base APK boundary**: Never modify the game's DEX, manifest, resources, or native libraries; only re-sign the base and install the same-signature loader split
+- **Official profile gate**: Keep the frozen package/version/ABI and exact metadata/code-fingerprint checks fail-closed; do not broaden matching from runtime success alone
+- **No direct activation**: Native compatibility hooks may observe the official activation chain, but must not directly invoke the game's ModLoader activation entry points
 
 ### Pull Requests
 
-1. Run `./gradlew :core:model:test :core:apk:test :core:storage:test` and ensure all pass
-2. If modifying native code, verify `cmake --build native/build-host && ./native/build-host/modloader_core_tests` passes
-3. If modifying Android framework code, run `./gradlew :app:connectedDebugAndroidTest` on an emulator or device
-4. Keep PRs focused — one concern per PR
+1. Run the Manager JVM suite:
+   `./gradlew :core:model:test :core:apk:test :core:storage:test :core:workshop:test :core:steam-protocol:test :core:workshop-download:test :app:testDebugUnitTest`
+2. If modifying native code, configure the official backend with all release gates enabled, build the host tests, and run `ctest --test-dir native/build-host --output-on-failure`.
+3. If modifying the frozen split or native loader, verify the unsigned template, ZIP_STORED native entry, embedded native SHA, complete template SHA, and production/test pins as described in [docs/build.md](docs/build.md).
+4. Run `./gradlew :app:connectedDebugAndroidTest` only when an emulator/device is explicitly available and installation is authorized; otherwise record it as skipped rather than claiming it passed.
+5. Keep PRs focused — one concern per PR
 
 ## License
 

@@ -4,6 +4,8 @@
 
 Sultan's Game Mod Manager adds official Windows mod support to the Android version of *Sultan's Game*. The game uses Unity with IL2CPP scripting backend, and while the Windows build has built-in mod loading (directory scanning, JSON config merging, resource overrides), the Android build has this functionality present in the native library but disabled or inaccessible due to code paths that differ from Windows.
 
+The currently frozen official Android profile targets package `com.gametree.sultan.pd`, version code `10005` (`1.0.5`), and `arm64-v8a`. The release loader combines the official Mod UI reveal, resource URI compatibility, and TMP glyph-field compatibility gates. Unknown profiles fail closed rather than receiving a best-effort patch.
+
 The solution has three layers:
 
 1. **Native loader** (`libmodloader.so`) — injected into the game process to intercept IL2CPP runtime calls and inject mod data
@@ -76,14 +78,17 @@ Analysis of the official APK shows it uses v1+v2 (not v3). We match this to avoi
 When the game process starts and `libmodloader.so` is loaded:
 
 1. **Wait for IL2CPP** — poll `libil2cpp.so` exports until `il2cpp_domain_get` and other required symbols are available
-2. **Verify game profile** — check in-memory byte patterns against the known-good game version to confirm compatibility
-3. **Install hooks** — use Dobby to intercept four crash-prone functions (`RefreshMods`, `LoadUserMods`, `LoadGlobalMods`, `ModLoader.Run`) and replace them with no-ops
-4. **Observe config loading** — hook `LoadConfig` and `LoadRitePostProcess` to detect when the game has finished loading its built-in configuration
-5. **Apply mod pipeline** — staged pipeline:
+2. **Verify game profile** — check exact package/version/ABI metadata plus in-memory byte patterns and method signatures against the frozen official profile
+3. **Install official compatibility gates** — when the release flags are enabled, install the official UI reveal/observer, resource URI/Texture, and TMP glyph-field hooks; any failed gate rejects the compatibility state
+4. **Install lifecycle hooks** — intercept the crash-prone automatic refresh/load entry points only to prevent unsafe duplicate paths; this is separate from the official observer and does not fabricate activation
+5. **Observe config loading** — hook `LoadConfig` and `LoadRitePostProcess` to detect when the game has finished loading its built-in configuration
+6. **Apply mod pipeline** — staged pipeline:
    - `kUpgrade`: Upgrade shop config (high-priority, single mod file)
    - `kRite` / `kEvent`: Rite and event directories (per-ID JSON files with post-processing)
    - `kRemaining`: All other single-file and directory configs, including single-object merges (variable.json, credits.json, sfx_config.json)
-6. **Resource overrides** — PNG/WAV file replacement via IL2CPP resource hooks
+7. **Resource overrides** — PNG/WAV file replacement via IL2CPP resource hooks; URI-based loaders receive `file://` arguments while `LoadSpriteImmediate` retains an absolute filesystem path
+
+The complete release combination and its device evidence are recorded in [official Android compatibility validation](official-android-compatibility-validation.md). The Manager's unsigned frozen template is the artifact used by future patch operations; the Manager does not compile a new native library at patch time.
 
 ## Mod Format
 
