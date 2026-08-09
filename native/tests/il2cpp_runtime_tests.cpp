@@ -13,6 +13,7 @@ struct FakeMethod {
     void* code = nullptr;
     const char* name = nullptr;
     std::vector<const char*> parameters;
+    std::uint32_t flags = 0;
 };
 
 struct FakeField {
@@ -68,6 +69,13 @@ std::uint32_t MethodParameterCount(const void* method) {
 const void* MethodParameter(const void* method, std::uint32_t index) {
     const auto& parameters = static_cast<const FakeMethod*>(method)->parameters;
     return index < parameters.size() ? parameters[index] : nullptr;
+}
+
+std::uint32_t MethodFlags(const void* method, std::uint32_t* implementation_flags) {
+    if (implementation_flags != nullptr) {
+        *implementation_flags = 0;
+    }
+    return static_cast<const FakeMethod*>(method)->flags;
 }
 
 char* TypeName(const void* type) {
@@ -132,6 +140,7 @@ modloader::Il2CppApi MakeApi() {
     api.method_get_name = MethodName;
     api.method_get_param_count = MethodParameterCount;
     api.method_get_param = MethodParameter;
+    api.method_get_flags = MethodFlags;
     api.type_get_name = TypeName;
     api.free_memory = FreeMemory;
     api.class_get_fields = GetFields;
@@ -189,6 +198,46 @@ void TestDuplicateSetupRejects() {
           "duplicate exact Setup signatures must reject");
     Check(g_allocations == g_frees,
           "duplicate signature type names must be released");
+}
+
+void TestUniqueMethodFlags() {
+    constexpr std::uint32_t kMethodAttributeStatic = 0x0010;
+    FakeMethod instance{reinterpret_cast<void*>(ExecutableStub), "LoadSprite",
+                        {"System.String"}, 0};
+    FakeMethod static_method{reinterpret_cast<void*>(ExecutableStub), "GetTexture",
+                             {"System.String"}, kMethodAttributeStatic};
+    FakeMethod wrong_static{reinterpret_cast<void*>(ExecutableStub), "GetTexture",
+                            {"System.Int32"}, kMethodAttributeStatic};
+    FakeMetadata metadata{{&instance, &static_method, &wrong_static}, {}};
+    g_metadata = &metadata;
+    ResetAllocationCounts();
+
+    const modloader::Il2CppRuntime runtime(MakeApi());
+    Check(runtime.FindUniqueMethod(
+              &metadata, "LoadSprite", {"System.String"}, false) == &instance,
+          "unique instance String method must resolve");
+    Check(runtime.FindUniqueMethod(
+              &metadata, "GetTexture", {"System.String"}, true) == &static_method,
+          "unique static String method must resolve");
+    Check(!runtime.FindUniqueMethod(
+               &metadata, "GetTexture", {"System.String"}, false).has_value(),
+          "static method must reject an instance requirement");
+
+    FakeMethod duplicate{reinterpret_cast<void*>(ExecutableStub), "GetTexture",
+                         {"System.String"}, kMethodAttributeStatic};
+    metadata.methods.push_back(&duplicate);
+    Check(!runtime.FindUniqueMethod(
+               &metadata, "GetTexture", {"System.String"}, true).has_value(),
+          "duplicate exact static methods must reject");
+    Check(g_allocations == g_frees,
+          "unique method signature names must be released");
+
+    modloader::Il2CppApi api_without_flags = MakeApi();
+    api_without_flags.method_get_flags = nullptr;
+    const modloader::Il2CppRuntime runtime_without_flags(api_without_flags);
+    Check(!runtime_without_flags.FindUniqueMethod(
+               &metadata, "GetTexture", {"System.String"}, true).has_value(),
+          "missing method flags metadata must fail closed");
 }
 
 void TestMetadataDescription() {
@@ -282,6 +331,7 @@ void TestReferenceInstanceFieldGate() {
 int main() {
     TestExactUniqueSetup();
     TestDuplicateSetupRejects();
+    TestUniqueMethodFlags();
     TestMetadataDescription();
     TestReferenceInstanceFieldGate();
     if (failures != 0) {

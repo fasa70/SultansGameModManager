@@ -1,11 +1,19 @@
 #include "modloader/official_resource_uri_hooks.h"
 
 #include "modloader/android_log.h"
+#include "modloader/game_profile.h"
 #include "modloader/il2cpp_runtime.h"
 #include "modloader/resource_uri.h"
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wvariadic-macros"
+#include <dobby.h>
+#pragma clang diagnostic pop
+
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -16,32 +24,44 @@
 namespace modloader {
 namespace {
 
-using StringLoader = void* (*)(void*, void*, const void*);
-using StaticStringLoader = void* (*)(void*, const void*);
+struct UriTarget {
+    void* code = nullptr;
+    ResourceArgumentMode mode = ResourceArgumentMode::kFileUri;
+    std::uint8_t argument_index = 0;
+    const char* label = nullptr;
+};
 
 struct UriState {
     const Il2CppApi* api = nullptr;
     std::unique_ptr<Il2CppRuntime> runtime;
     std::string mod_root;
-    void* sprite_original = nullptr;
-    void* audio_original = nullptr;
-    void* texture_original = nullptr;
-    void* immediate_original = nullptr;
+    std::vector<UriTarget> targets;
     std::atomic<std::size_t> rewrites{0};
 };
 
-UriState* g_state = nullptr;
+std::atomic<UriState*> g_state{nullptr};
+std::atomic<bool> g_active{false};
 std::mutex g_install_mutex;
 
-void* RewriteArgument(void* path, ResourceArgumentMode mode, const char* loader) {
-    UriState* state = g_state;
-    if (state == nullptr) {
+bool MatchesCode(const Il2CppApi& api, const CodeFingerprint& fingerprint,
+                 void* code) {
+    if (api.image_base == nullptr || code == nullptr ||
+        fingerprint.rva > api.image_size ||
+        fingerprint.bytes.size() > api.image_size - fingerprint.rva) {
+        return false;
+    }
+    const auto* expected = reinterpret_cast<const std::uint8_t*>(api.image_base) +
+        fingerprint.rva;
+    return code == expected && std::equal(
+        fingerprint.bytes.begin(), fingerprint.bytes.end(), expected);
+}
+
+void* RewriteArgument(UriState* state, void* path, ResourceArgumentMode mode,
+                      const char* loader) {
+    if (state == nullptr || path == nullptr) {
         return path;
     }
     const auto* bytes = reinterpret_cast<const std::byte*>(path);
-    if (path == nullptr) {
-        return path;
-    }
     const std::int32_t length = *reinterpret_cast<const std::int32_t*>(bytes + 0x10);
     if (length < 0 || length > 16 * 1024) {
         return path;
@@ -55,7 +75,8 @@ void* RewriteArgument(void* path, ResourceArgumentMode mode, const char* loader)
         }
         source.push_back(static_cast<char>(text[index]));
     }
-    const auto argument = MakeOfficialResourceArgument(source, state->mod_root, mode);
+    const auto argument = MakeOfficialResourceArgument(
+        source, state->mod_root, mode);
     if (!argument.has_value()) {
         return path;
     }
@@ -75,42 +96,46 @@ void* RewriteArgument(void* path, ResourceArgumentMode mode, const char* loader)
     return *managed;
 }
 
-void* SpriteHook(void* instance, void* path, const void* method) {
-    UriState* state = g_state;
-    const auto original = state == nullptr ? nullptr :
-        reinterpret_cast<StringLoader>(state->sprite_original);
-    return original == nullptr ? nullptr : original(
-        instance, RewriteArgument(path, ResourceArgumentMode::kFileUri, "LoadSprite"), method);
+void OnUriEntry(void* address, void* raw_context) {
+    UriState* state = g_state.load(std::memory_order_acquire);
+    auto* context = static_cast<DobbyRegisterContext*>(raw_context);
+    if (state == nullptr || context == nullptr ||
+        !g_active.load(std::memory_order_acquire)) {
+        return;
+    }
+    const auto target = std::find_if(
+        state->targets.begin(), state->targets.end(),
+        [address](const UriTarget& candidate) {
+            return candidate.code == address;
+        });
+    if (target == state->targets.end()) {
+        return;
+    }
+    std::uintptr_t* argument = target->argument_index == 0
+        ? &context->general.regs.x0
+        : &context->general.regs.x1;
+    *argument = reinterpret_cast<std::uintptr_t>(RewriteArgument(
+        state, reinterpret_cast<void*>(*argument), target->mode,
+        target->label));
 }
 
-void* AudioHook(void* instance, void* path, const void* method) {
-    UriState* state = g_state;
-    const auto original = state == nullptr ? nullptr :
-        reinterpret_cast<StringLoader>(state->audio_original);
-    return original == nullptr ? nullptr : original(
-        instance, RewriteArgument(path, ResourceArgumentMode::kFileUri, "LoadAudioClip"), method);
-}
-
-void* ImmediateHook(void* instance, void* path, const void* method) {
-    UriState* state = g_state;
-    const auto original = state == nullptr ? nullptr :
-        reinterpret_cast<StringLoader>(state->immediate_original);
-    return original == nullptr ? nullptr : original(
-        instance, RewriteArgument(path, ResourceArgumentMode::kAbsolutePath, "LoadSpriteImmediate"), method);
-}
-
-void* TextureHook(void* path, const void* method) {
-    UriState* state = g_state;
-    const auto original = state == nullptr ? nullptr :
-        reinterpret_cast<StaticStringLoader>(state->texture_original);
-    return original == nullptr ? nullptr : original(
-        RewriteArgument(path, ResourceArgumentMode::kFileUri, "GetTexture"), method);
-}
-
-bool InstallOne(HookEngine* hooks, const Il2CppRuntime& runtime, void* method,
-                void* replacement, void** original) {
-    const auto code = runtime.MethodCode(method);
-    return code.has_value() && hooks->Replace(*code, replacement, original) && *original != nullptr;
+std::optional<UriTarget> ResolveTarget(
+    const Il2CppApi& api, const Il2CppRuntime& runtime, void* klass,
+    std::string_view method_name,
+    bool is_static, const CodeFingerprint& fingerprint,
+    ResourceArgumentMode mode, std::uint8_t argument_index,
+    const char* label) {
+    const auto method = runtime.FindUniqueMethod(
+        klass, method_name, {"System.String"}, is_static);
+    if (!method.has_value()) {
+        return std::nullopt;
+    }
+    const auto code = runtime.MethodCode(*method);
+    if (!code.has_value() || !MatchesCode(
+            api, fingerprint, *code)) {
+        return std::nullopt;
+    }
+    return UriTarget{*code, mode, argument_index, label};
 }
 
 }  // namespace
@@ -118,15 +143,17 @@ bool InstallOne(HookEngine* hooks, const Il2CppRuntime& runtime, void* method,
 OfficialResourceUriStats InstallOfficialResourceUriHooks(
     const Il2CppApi& api, std::string mod_root, HookEngine* hooks) {
     OfficialResourceUriStats stats;
-    if (hooks == nullptr || mod_root.empty()) {
+    if (hooks == nullptr || mod_root.empty() || api.method_get_flags == nullptr) {
+        LogMessage("official_uri unavailable reason=api");
         return stats;
     }
     std::lock_guard<std::mutex> lock(g_install_mutex);
-    if (g_state != nullptr) {
-        stats.sprite_ready = g_state->sprite_original != nullptr;
-        stats.audio_ready = g_state->audio_original != nullptr;
-        stats.texture_ready = g_state->texture_original != nullptr;
-        stats.rewrites = g_state->rewrites.load(std::memory_order_relaxed);
+    if (UriState* installed = g_state.load(std::memory_order_acquire);
+        installed != nullptr) {
+        stats.sprite_ready = true;
+        stats.audio_ready = true;
+        stats.texture_ready = true;
+        stats.rewrites = installed->rewrites.load(std::memory_order_relaxed);
         return stats;
     }
 
@@ -144,41 +171,58 @@ OfficialResourceUriStats InstallOfficialResourceUriHooks(
         *core, {"", "Il2Cpp"}, "SpriteLoader") : std::nullopt;
     const auto audio = core.has_value() ? state->runtime->FindClass(
         *core, {"", "Il2Cpp"}, "AudioClipLoader") : std::nullopt;
-    const auto load_sprite = sprite.has_value() ? state->runtime->FindMethodByFirstParameter(
-        *sprite, "LoadSprite", 1, "System.String") : std::nullopt;
-    const auto load_immediate = sprite.has_value() ? state->runtime->FindMethodByFirstParameter(
-        *sprite, "LoadSpriteImmediate", 1, "System.String") : std::nullopt;
-    const auto load_audio = audio.has_value() ? state->runtime->FindMethodByFirstParameter(
-        *audio, "LoadAudioClip", 1, "System.String") : std::nullopt;
     const auto texture_image = state->runtime->FindImage(
         {"UnityEngine.UnityWebRequestTextureModule.dll"});
-    const auto texture_class = texture_image.has_value() ? state->runtime->FindClass(
-        *texture_image, {"UnityEngine.Networking"}, "UnityWebRequestTexture") : std::nullopt;
-    const auto get_texture = texture_class.has_value() ? state->runtime->FindMethodByFirstParameter(
-        *texture_class, "GetTexture", 1, "System.String") : std::nullopt;
-
-    if (!load_sprite.has_value() || !load_immediate.has_value() ||
-        !load_audio.has_value() || !get_texture.has_value()) {
+    const auto texture = texture_image.has_value() ? state->runtime->FindClass(
+        *texture_image, {"UnityEngine.Networking"}, "UnityWebRequestTexture") :
+        std::nullopt;
+    if (!sprite.has_value() || !audio.has_value() || !texture.has_value()) {
         LogMessage("official_uri unavailable reason=metadata");
         return stats;
     }
-    if (!InstallOne(hooks, *state->runtime, *load_sprite,
-                    reinterpret_cast<void*>(SpriteHook), &state->sprite_original) ||
-        !InstallOne(hooks, *state->runtime, *load_immediate,
-                    reinterpret_cast<void*>(ImmediateHook), &state->immediate_original) ||
-        !InstallOne(hooks, *state->runtime, *load_audio,
-                    reinterpret_cast<void*>(AudioHook), &state->audio_original) ||
-        !InstallOne(hooks, *state->runtime, *get_texture,
-                    reinterpret_cast<void*>(TextureHook), &state->texture_original)) {
-        LogMessage("official_uri unavailable reason=hook_install");
+
+    const OfficialResourceUriProfile& profile = SupportedGameProfile().resource_uri;
+    const auto load_sprite = ResolveTarget(
+        api, *state->runtime, *sprite, "LoadSprite", false, profile.load_sprite,
+        ResourceArgumentMode::kFileUri, 1, "LoadSprite");
+    const auto load_immediate = ResolveTarget(
+        api, *state->runtime, *sprite, "LoadSpriteImmediate", false,
+        profile.load_sprite_immediate, ResourceArgumentMode::kAbsolutePath, 1,
+        "LoadSpriteImmediate");
+    const auto load_audio = ResolveTarget(
+        api, *state->runtime, *audio, "LoadAudioClip", false,
+        profile.load_audio_clip, ResourceArgumentMode::kFileUri, 1,
+        "LoadAudioClip");
+    const auto get_texture = ResolveTarget(
+        api, *state->runtime, *texture, "GetTexture", true, profile.get_texture,
+        ResourceArgumentMode::kFileUri, 0, "GetTexture");
+    if (!load_sprite.has_value() || !load_immediate.has_value() ||
+        !load_audio.has_value() || !get_texture.has_value()) {
+        LogMessage("official_uri unavailable reason=target_validation");
         return stats;
     }
-    g_state = state.release();
+    state->targets = {
+        *load_sprite, *load_immediate, *load_audio, *get_texture,
+    };
+
+    for (const UriTarget& target : state->targets) {
+        if (!hooks->Instrument(target.code, OnUriEntry)) {
+            LogMessage("official_uri unavailable reason=hook_install");
+            return stats;
+        }
+    }
+    UriState* published = state.release();
+    g_state.store(published, std::memory_order_release);
     stats.sprite_ready = true;
     stats.audio_ready = true;
     stats.texture_ready = true;
-    LogMessage("official_uri ready modes=file_uri_and_immediate_absolute");
+    LogMessage("official_uri ready mode=entry_instrument "
+               "modes=file_uri_and_immediate_absolute direct_mod_calls=none");
     return stats;
+}
+
+void SetOfficialResourceUriHooksActive(bool active) noexcept {
+    g_active.store(active, std::memory_order_release);
 }
 
 }  // namespace modloader

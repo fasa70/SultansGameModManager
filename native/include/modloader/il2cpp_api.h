@@ -24,6 +24,7 @@ using Il2CppClassGetNestedTypes = void* (*)(void* klass, void** iterator);
 using Il2CppMethodGetName = const char* (*)(const void* method);
 using Il2CppMethodGetParamCount = std::uint32_t (*)(const void* method);
 using Il2CppMethodGetParam = const void* (*)(const void* method, std::uint32_t index);
+using Il2CppMethodGetFlags = std::uint32_t (*)(const void* method, std::uint32_t* implementation_flags);
 using Il2CppTypeGetName = char* (*)(const void* type);
 using Il2CppTypeGetObject = void* (*)(const void* type);
 using Il2CppFree = void (*)(void* memory);
@@ -70,6 +71,7 @@ struct Il2CppApi {
     Il2CppMethodGetName method_get_name = nullptr;
     Il2CppMethodGetParamCount method_get_param_count = nullptr;
     Il2CppMethodGetParam method_get_param = nullptr;
+    Il2CppMethodGetFlags method_get_flags = nullptr;
     Il2CppTypeGetName type_get_name = nullptr;
     Il2CppTypeGetObject type_get_object = nullptr;
     Il2CppFree free_memory = nullptr;

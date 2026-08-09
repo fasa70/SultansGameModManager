@@ -8,8 +8,6 @@
 
 namespace modloader {
 
-constexpr std::string_view kOfficialUiItemSetupNodeType = "ModNode";
-constexpr std::string_view kOfficialUiItemSetupPanelType = "ModPanelController";
 constexpr std::string_view kOfficialUiPanelModsField = "mods";
 
 constexpr std::uintptr_t kOfficialModLoaderActiveModRva = 0x1e88ef0;
@@ -19,15 +17,12 @@ enum class OfficialUiObserverValidation : std::uint8_t {
     kPanelOnEnableMethodCode,
     kPanelShowModsMethodCode,
     kPanelRefreshModsMethodCode,
-    kItemSetupMethodCode,
     kPanelOnEnableTarget,
     kPanelShowModsTarget,
     kPanelRefreshModsTarget,
-    kItemSetupTarget,
     kPanelOnEnableFingerprint,
     kPanelShowModsFingerprint,
     kPanelRefreshModsFingerprint,
-    kItemSetupFingerprint,
 };
 
 OfficialUiObserverValidation ValidateOfficialUiObserverTargets(
@@ -36,11 +31,9 @@ OfficialUiObserverValidation ValidateOfficialUiObserverTargets(
     std::uintptr_t panel_on_enable_code,
     std::uintptr_t panel_show_mods_code,
     std::uintptr_t panel_refresh_mods_code,
-    std::uintptr_t item_setup_code,
     bool panel_on_enable_fingerprint_matches,
     bool panel_show_mods_fingerprint_matches,
-    bool panel_refresh_mods_fingerprint_matches,
-    bool item_setup_fingerprint_matches) noexcept;
+    bool panel_refresh_mods_fingerprint_matches) noexcept;
 
 const char* OfficialUiObserverValidationReason(
     OfficialUiObserverValidation validation) noexcept;
@@ -49,7 +42,6 @@ struct OfficialUiObserverMembers {
     bool panel_on_enable;
     bool panel_show_mods;
     bool panel_refresh_mods;
-    bool item_setup;
     bool panel_mods;
 };
 

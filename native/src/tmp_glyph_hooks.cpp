@@ -9,8 +9,8 @@
 #include <dobby.h>
 #pragma clang diagnostic pop
 
+#include <atomic>
 #include <cstdint>
-#include <cstring>
 #include <mutex>
 #include <string>
 #include <utility>
@@ -22,6 +22,7 @@ constexpr char kOldName[] = "m_SpriteGlyphTable";
 constexpr char kNewName[] = "m_GlyphTable";
 constexpr std::size_t kMaxStringLength = 256;
 
+std::atomic<bool> g_active{false};
 const Il2CppApi* g_api = nullptr;
 GcHandle g_replacement;
 void* g_replacement_string = nullptr;
@@ -51,6 +52,9 @@ bool IsManagedString(void* object, std::string* value) {
 }
 
 void OnGlyphGetField(void*, void* raw_context) {
+    if (!g_active.load(std::memory_order_acquire)) {
+        return;
+    }
     auto* context = static_cast<DobbyRegisterContext*>(raw_context);
     if (context == nullptr || g_api == nullptr || g_replacement_string == nullptr) {
         return;
@@ -107,6 +111,10 @@ TmpGlyphHookStats InstallTmpGlyphHook(const Il2CppApi& api, HookEngine* hooks) {
     stats.fingerprint_matched = true;
     LogMessage("tmp_glyph_compat ready mode=callsite_instrument memory_only=true");
     return stats;
+}
+
+void SetTmpGlyphHookActive(bool active) noexcept {
+    g_active.store(active, std::memory_order_release);
 }
 
 }  // namespace modloader

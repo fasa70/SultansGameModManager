@@ -378,9 +378,8 @@ void TestGameProfile() {
           "profile must retain the TMP glyph compatibility targets");
     Check(profile.ui_observer.panel_on_enable.rva == 0x1f1fa94 &&
               profile.ui_observer.panel_show_mods.rva == 0x1f1fb54 &&
-              profile.ui_observer.panel_refresh_mods.rva == 0x1f1fd90 &&
-              profile.ui_observer.item_setup.rva == 0x1f1dff0,
-          "profile must retain verified UI observer targets");
+              profile.ui_observer.panel_refresh_mods.rva == 0x1f1fd90,
+          "profile must retain verified panel observer targets");
 }
 
 void TestOfficialObserverValidation() {
@@ -441,87 +440,66 @@ void TestOfficialUiObserverValidation() {
     const std::uintptr_t on_enable = base + targets.panel_on_enable.rva;
     const std::uintptr_t show_mods = base + targets.panel_show_mods.rva;
     const std::uintptr_t refresh_mods = base + targets.panel_refresh_mods.rva;
-    const std::uintptr_t item_setup = base + targets.item_setup.rva;
     using Validation = modloader::OfficialUiObserverValidation;
 
     Check(modloader::ValidateOfficialUiObserverTargets(
-              profile, base, on_enable, show_mods, refresh_mods, item_setup,
-              true, true, true, true) == Validation::kValid,
-          "verified UI observer targets must pass");
+              profile, base, on_enable, show_mods, refresh_mods,
+              true, true, true) == Validation::kValid,
+          "verified panel-only UI observer targets must pass");
     Check(modloader::ValidateOfficialUiObserverTargets(
-              profile, base, 0, show_mods, refresh_mods, item_setup,
-              true, true, true, true) == Validation::kPanelOnEnableMethodCode,
+              profile, base, 0, show_mods, refresh_mods,
+              true, true, true) == Validation::kPanelOnEnableMethodCode,
           "missing panel OnEnable code must fail precisely");
     Check(modloader::ValidateOfficialUiObserverTargets(
-              profile, base, on_enable, 0, refresh_mods, item_setup,
-              true, true, true, true) == Validation::kPanelShowModsMethodCode,
+              profile, base, on_enable, 0, refresh_mods,
+              true, true, true) == Validation::kPanelShowModsMethodCode,
           "missing ShowMods code must fail precisely");
     Check(modloader::ValidateOfficialUiObserverTargets(
-              profile, base, on_enable, show_mods, 0, item_setup,
-              true, true, true, true) == Validation::kPanelRefreshModsMethodCode,
+              profile, base, on_enable, show_mods, 0,
+              true, true, true) == Validation::kPanelRefreshModsMethodCode,
           "missing RefreshMods code must fail precisely");
     Check(modloader::ValidateOfficialUiObserverTargets(
-              profile, base, on_enable, show_mods, refresh_mods, 0,
-              true, true, true, true) == Validation::kItemSetupMethodCode,
-          "missing item Setup code must fail precisely");
-    Check(modloader::ValidateOfficialUiObserverTargets(
-              profile, base, on_enable + 4, show_mods, refresh_mods, item_setup,
-              true, true, true, true) == Validation::kPanelOnEnableTarget,
+              profile, base, on_enable + 4, show_mods, refresh_mods,
+              true, true, true) == Validation::kPanelOnEnableTarget,
           "panel OnEnable target drift must fail precisely");
     Check(modloader::ValidateOfficialUiObserverTargets(
-              profile, base, on_enable, show_mods + 4, refresh_mods, item_setup,
-              true, true, true, true) == Validation::kPanelShowModsTarget,
+              profile, base, on_enable, show_mods + 4, refresh_mods,
+              true, true, true) == Validation::kPanelShowModsTarget,
           "ShowMods target drift must fail precisely");
     Check(modloader::ValidateOfficialUiObserverTargets(
-              profile, base, on_enable, show_mods, refresh_mods + 4, item_setup,
-              true, true, true, true) == Validation::kPanelRefreshModsTarget,
+              profile, base, on_enable, show_mods, refresh_mods + 4,
+              true, true, true) == Validation::kPanelRefreshModsTarget,
           "RefreshMods target drift must fail precisely");
     Check(modloader::ValidateOfficialUiObserverTargets(
-              profile, base, on_enable, show_mods, refresh_mods, item_setup + 4,
-              true, true, true, true) == Validation::kItemSetupTarget,
-          "Setup target drift must fail despite matching RefreshMods bytes");
-    Check(modloader::ValidateOfficialUiObserverTargets(
-              profile, base, on_enable, show_mods, refresh_mods, item_setup,
-              false, true, true, true) == Validation::kPanelOnEnableFingerprint,
+              profile, base, on_enable, show_mods, refresh_mods,
+              false, true, true) == Validation::kPanelOnEnableFingerprint,
           "panel OnEnable fingerprint drift must fail precisely");
     Check(modloader::ValidateOfficialUiObserverTargets(
-              profile, base, on_enable, show_mods, refresh_mods, item_setup,
-              true, false, true, true) == Validation::kPanelShowModsFingerprint,
+              profile, base, on_enable, show_mods, refresh_mods,
+              true, false, true) == Validation::kPanelShowModsFingerprint,
           "ShowMods fingerprint drift must fail precisely");
     Check(modloader::ValidateOfficialUiObserverTargets(
-              profile, base, on_enable, show_mods, refresh_mods, item_setup,
-              true, true, false, true) == Validation::kPanelRefreshModsFingerprint,
+              profile, base, on_enable, show_mods, refresh_mods,
+              true, true, false) == Validation::kPanelRefreshModsFingerprint,
           "RefreshMods fingerprint drift must fail precisely");
-    Check(modloader::ValidateOfficialUiObserverTargets(
-              profile, base, on_enable, show_mods, refresh_mods, item_setup,
-              true, true, true, false) == Validation::kItemSetupFingerprint,
-          "Setup fingerprint drift must fail precisely");
     Check(std::string(modloader::OfficialUiObserverValidationReason(
-              Validation::kItemSetupTarget)) == "item_setup_target",
+              Validation::kPanelRefreshModsTarget)) == "panel_refresh_mods_target",
           "UI observer validation reason must be stable and address-free");
     Check(modloader::ValidateOfficialUiObserverTargets(
               profile, static_cast<std::uintptr_t>(-2), on_enable, show_mods,
-              refresh_mods, item_setup, true, true, true, true) ==
+              refresh_mods, true, true, true) ==
               Validation::kPanelOnEnableTarget,
           "overflowed UI target arithmetic must fail closed");
-    Check(modloader::kOfficialUiItemSetupNodeType == "ModNode" &&
-              modloader::kOfficialUiItemSetupPanelType == "ModPanelController",
-          "UI observer Setup types must match verified runtime metadata exactly");
     Check(modloader::kOfficialUiPanelModsField == "mods",
           "UI observer panel field must match verified runtime metadata exactly");
 
     using Members = modloader::OfficialUiObserverMembers;
-    const Members ready{true, true, true, true, true};
+    const Members ready{true, true, true, true};
     Check(modloader::OfficialUiObserverMembersReady(ready),
-          "complete UI observer members must be ready");
+          "complete panel-only UI observer members must be ready");
     Check(modloader::OfficialUiObserverMissingMembers(ready).empty(),
-          "complete UI observer members must have no missing label");
-    const Members setup_missing{true, true, true, false, true};
-    Check(!modloader::OfficialUiObserverMembersReady(setup_missing),
-          "missing Setup member must reject observer preparation");
-    Check(modloader::OfficialUiObserverMissingMembers(setup_missing) == "item_setup",
-          "missing Setup label must be stable");
-    const Members multiple_missing{false, true, false, true, false};
+          "complete panel-only UI observer members must have no missing label");
+    const Members multiple_missing{false, true, false, false};
     Check(modloader::OfficialUiObserverMissingMembers(multiple_missing) ==
               "panel_on_enable|panel_refresh_mods|panel_mods",
           "multiple missing member labels must use stable code order");

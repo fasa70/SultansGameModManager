@@ -111,6 +111,8 @@ class AndroidIl2CppResolver final : public Il2CppResolver {
             api_.library_handle, "il2cpp_method_get_param_count");
         api_.method_get_param = Resolve<Il2CppMethodGetParam>(
             api_.library_handle, "il2cpp_method_get_param");
+        api_.method_get_flags = Resolve<Il2CppMethodGetFlags>(
+            api_.library_handle, "il2cpp_method_get_flags");
         api_.type_get_name = Resolve<Il2CppTypeGetName>(
             api_.library_handle, "il2cpp_type_get_name");
         api_.type_get_object = Resolve<Il2CppTypeGetObject>(

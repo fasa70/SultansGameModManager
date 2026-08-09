@@ -263,6 +263,60 @@ std::optional<void*> Il2CppRuntime::FindMethodByParameterTypes(
     }
     return matching == nullptr ? std::nullopt : std::optional<void*>(matching);
 }
+
+std::optional<void*> Il2CppRuntime::FindUniqueMethod(
+    void* klass, std::string_view name,
+    const std::vector<std::string_view>& parameter_types,
+    bool is_static) const {
+    constexpr std::uint32_t kMethodAttributeStatic = 0x0010;
+    if (klass == nullptr || api_.class_get_methods == nullptr ||
+        api_.method_get_name == nullptr || api_.method_get_param_count == nullptr ||
+        api_.method_get_param == nullptr || api_.method_get_flags == nullptr ||
+        api_.type_get_name == nullptr || api_.free_memory == nullptr) {
+        return std::nullopt;
+    }
+
+    void* matching = nullptr;
+    void* iterator = nullptr;
+    while (void* method = api_.class_get_methods(klass, &iterator)) {
+        if (!IsMatchingName(api_.method_get_name(method), name) ||
+            api_.method_get_param_count(method) != parameter_types.size() ||
+            !MethodCode(method).has_value()) {
+            continue;
+        }
+        std::uint32_t implementation_flags = 0;
+        const bool method_is_static =
+            (api_.method_get_flags(method, &implementation_flags) &
+             kMethodAttributeStatic) != 0;
+        if (method_is_static != is_static) {
+            continue;
+        }
+
+        bool matches = true;
+        for (std::size_t index = 0; index < parameter_types.size(); ++index) {
+            const void* parameter = api_.method_get_param(
+                method, static_cast<std::uint32_t>(index));
+            char* parameter_name = parameter == nullptr
+                ? nullptr : api_.type_get_name(parameter);
+            matches = matches && parameter_name != nullptr &&
+                std::string_view(parameter_name) == parameter_types[index];
+            if (parameter_name != nullptr) {
+                api_.free_memory(parameter_name);
+            }
+            if (!matches) {
+                break;
+            }
+        }
+        if (!matches) {
+            continue;
+        }
+        if (matching != nullptr) {
+            return std::nullopt;
+        }
+        matching = method;
+    }
+    return matching == nullptr ? std::nullopt : std::optional<void*>(matching);
+}
 Il2CppRuntime::MetadataCandidates Il2CppRuntime::DescribeMetadata(
     void* method_klass, std::string_view method_name,
     void* field_klass, std::string_view field_name,

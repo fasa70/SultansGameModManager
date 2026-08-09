@@ -30,11 +30,17 @@ struct TmpGlyphFingerprint {
     std::array<std::uint8_t, 8> call_bytes;
 };
 
+struct OfficialResourceUriProfile {
+    CodeFingerprint load_sprite;
+    CodeFingerprint load_sprite_immediate;
+    CodeFingerprint load_audio_clip;
+    CodeFingerprint get_texture;
+};
+
 struct OfficialUiObserverProfile {
     CodeFingerprint panel_on_enable;
     CodeFingerprint panel_show_mods;
     CodeFingerprint panel_refresh_mods;
-    CodeFingerprint item_setup;
 };
 
 struct GameProfile {
@@ -44,6 +50,7 @@ struct GameProfile {
     // ModLoader.Run. It does not gate the base profile by itself.
     CodeFingerprint mod_loader_run;
     TmpGlyphFingerprint tmp_glyph;
+    OfficialResourceUriProfile resource_uri;
     OfficialUiObserverProfile ui_observer;
 };
 

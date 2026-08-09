@@ -90,6 +90,10 @@ class Il2CppRuntime {
     std::optional<void*> FindMethodByParameterTypes(
         void* klass, std::string_view name,
         const std::vector<std::string_view>& parameter_types) const;
+    std::optional<void*> FindUniqueMethod(
+        void* klass, std::string_view name,
+        const std::vector<std::string_view>& parameter_types,
+        bool is_static) const;
     MetadataCandidates DescribeMetadata(
         void* method_klass, std::string_view method_name,
         void* field_klass, std::string_view field_name,

@@ -79,8 +79,7 @@ const char* OfficialObserverValidationReason(
 bool OfficialUiObserverMembersReady(
     const OfficialUiObserverMembers& members) noexcept {
     return members.panel_on_enable && members.panel_show_mods &&
-        members.panel_refresh_mods && members.item_setup &&
-        members.panel_mods;
+        members.panel_refresh_mods && members.panel_mods;
 }
 
 std::string OfficialUiObserverMissingMembers(
@@ -95,7 +94,6 @@ std::string OfficialUiObserverMissingMembers(
     if (!members.panel_on_enable) append("panel_on_enable");
     if (!members.panel_show_mods) append("panel_show_mods");
     if (!members.panel_refresh_mods) append("panel_refresh_mods");
-    if (!members.item_setup) append("item_setup");
     if (!members.panel_mods) append("panel_mods");
     return missing;
 }
@@ -106,11 +104,9 @@ OfficialUiObserverValidation ValidateOfficialUiObserverTargets(
     std::uintptr_t panel_on_enable_code,
     std::uintptr_t panel_show_mods_code,
     std::uintptr_t panel_refresh_mods_code,
-    std::uintptr_t item_setup_code,
     bool panel_on_enable_fingerprint_matches,
     bool panel_show_mods_fingerprint_matches,
-    bool panel_refresh_mods_fingerprint_matches,
-    bool item_setup_fingerprint_matches) noexcept {
+    bool panel_refresh_mods_fingerprint_matches) noexcept {
     if (panel_on_enable_code == 0) {
         return OfficialUiObserverValidation::kPanelOnEnableMethodCode;
     }
@@ -119,9 +115,6 @@ OfficialUiObserverValidation ValidateOfficialUiObserverTargets(
     }
     if (panel_refresh_mods_code == 0) {
         return OfficialUiObserverValidation::kPanelRefreshModsMethodCode;
-    }
-    if (item_setup_code == 0) {
-        return OfficialUiObserverValidation::kItemSetupMethodCode;
     }
     const OfficialUiObserverProfile& targets = profile.ui_observer;
     if (!MatchesTarget(image_base, targets.panel_on_enable.rva, panel_on_enable_code)) {
@@ -133,21 +126,15 @@ OfficialUiObserverValidation ValidateOfficialUiObserverTargets(
     if (!MatchesTarget(image_base, targets.panel_refresh_mods.rva, panel_refresh_mods_code)) {
         return OfficialUiObserverValidation::kPanelRefreshModsTarget;
     }
-    if (!MatchesTarget(image_base, targets.item_setup.rva, item_setup_code)) {
-        return OfficialUiObserverValidation::kItemSetupTarget;
-    }
     if (!panel_on_enable_fingerprint_matches) {
         return OfficialUiObserverValidation::kPanelOnEnableFingerprint;
     }
     if (!panel_show_mods_fingerprint_matches) {
         return OfficialUiObserverValidation::kPanelShowModsFingerprint;
     }
-    if (!panel_refresh_mods_fingerprint_matches) {
-        return OfficialUiObserverValidation::kPanelRefreshModsFingerprint;
-    }
-    return item_setup_fingerprint_matches
+    return panel_refresh_mods_fingerprint_matches
         ? OfficialUiObserverValidation::kValid
-        : OfficialUiObserverValidation::kItemSetupFingerprint;
+        : OfficialUiObserverValidation::kPanelRefreshModsFingerprint;
 }
 
 const char* OfficialUiObserverValidationReason(
@@ -161,24 +148,18 @@ const char* OfficialUiObserverValidationReason(
             return "panel_show_mods_method_code";
         case OfficialUiObserverValidation::kPanelRefreshModsMethodCode:
             return "panel_refresh_mods_method_code";
-        case OfficialUiObserverValidation::kItemSetupMethodCode:
-            return "item_setup_method_code";
         case OfficialUiObserverValidation::kPanelOnEnableTarget:
             return "panel_on_enable_target";
         case OfficialUiObserverValidation::kPanelShowModsTarget:
             return "panel_show_mods_target";
         case OfficialUiObserverValidation::kPanelRefreshModsTarget:
             return "panel_refresh_mods_target";
-        case OfficialUiObserverValidation::kItemSetupTarget:
-            return "item_setup_target";
         case OfficialUiObserverValidation::kPanelOnEnableFingerprint:
             return "panel_on_enable_fingerprint";
         case OfficialUiObserverValidation::kPanelShowModsFingerprint:
             return "panel_show_mods_fingerprint";
         case OfficialUiObserverValidation::kPanelRefreshModsFingerprint:
             return "panel_refresh_mods_fingerprint";
-        case OfficialUiObserverValidation::kItemSetupFingerprint:
-            return "item_setup_fingerprint";
     }
     return "unknown";
 }

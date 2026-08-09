@@ -39,7 +39,6 @@ using ModLoaderActiveModFunction =
     void (*)(void*, void*, void*, void*, const void*);
 using ModLoaderRunFunction = void (*)(void*, void*, const void*);
 using ModPanelVoidFunction = void (*)(void*, const void*);
-using ModItemSetupFunction = void (*)(void*, void*, void*, const void*);
 using LoadSingleFileFunction = void (*)(void*, void*, void*, void*, const void*);
 using PostProcessFunction = void (*)(void*, const void*);
 using LoadUserArchiveFunction = bool (*)(void*, std::int32_t, const void*);
@@ -87,11 +86,19 @@ std::mutex g_official_ui_observer_publish_mutex;
 std::atomic<ModPanelVoidFunction> g_official_panel_on_enable{nullptr};
 std::atomic<ModPanelVoidFunction> g_official_panel_show_mods{nullptr};
 std::atomic<ModPanelVoidFunction> g_official_panel_refresh_mods{nullptr};
-std::atomic<ModItemSetupFunction> g_official_item_setup{nullptr};
 std::atomic<std::int32_t> g_official_panel_mods_offset{-1};
 std::atomic<bool> g_official_ui_observer_active{false};
 std::atomic<bool> g_official_ui_metadata_diagnostic_attempted{false};
-std::atomic<bool> g_official_compatibility_installed{false};
+enum class OfficialCompatibilityState : std::uint8_t {
+    kUnprepared,
+    kInstalling,
+    kReady,
+    kRejected,
+};
+
+std::mutex g_official_compatibility_mutex;
+OfficialCompatibilityState g_official_compatibility_state =
+    OfficialCompatibilityState::kUnprepared;
 const Il2CppApi* g_api = nullptr;
 RuntimeController* g_runtime = nullptr;
 LoadConfigFunction g_load_config = nullptr;
@@ -126,35 +133,21 @@ void LogOfficialDatapoolSnapshot(const char* point, void* datapool = nullptr) no
 bool MatchesFingerprint(const CodeFingerprint& fingerprint);
 
 void LogOfficialUiMetadataCandidates(
-    const Il2CppRuntime& runtime, void* item_class, void* panel_class,
+    const Il2CppRuntime& runtime, void* panel_class,
     const OfficialUiObserverMembers& members) {
-    if ((members.item_setup && members.panel_mods) ||
+    if (members.panel_mods ||
         g_official_ui_metadata_diagnostic_attempted.exchange(true,
             std::memory_order_acq_rel)) {
         return;
     }
     constexpr std::size_t kCandidateLimit = 8;
     const auto candidates = runtime.DescribeMetadata(
-        item_class, "Setup", panel_class, kOfficialUiPanelModsField, kCandidateLimit);
-    const std::string reason = !members.item_setup && !members.panel_mods
-        ? "item_setup|panel_mods"
-        : (!members.item_setup ? "item_setup" : "panel_mods");
-    std::string message = "official_ui_observer=metadata_candidates reason=" + reason +
-        " api=" + (candidates.api_available ? "available" : "unavailable") +
-        " setup_count=" + std::to_string(candidates.methods.size()) +
+        nullptr, "", panel_class, kOfficialUiPanelModsField, kCandidateLimit);
+    std::string message = "official_ui_observer=metadata_candidates reason=panel_mods" +
+        std::string(" api=") + (candidates.api_available ? "available" : "unavailable") +
         " field_count=" + std::to_string(candidates.fields.size()) +
-        " truncated=" + (candidates.truncated ? "1" : "0") + " setup_shapes=";
-    if (candidates.methods.empty()) {
-        message += "none";
-    } else {
-        for (std::size_t index = 0; index < candidates.methods.size(); ++index) {
-            if (index != 0) message += '|';
-            const auto& candidate = candidates.methods[index];
-            message += std::to_string(candidate.parameter_count) + ":" + candidate.shape +
-                ":" + (candidate.method_code_valid ? "valid" : "invalid");
-        }
-    }
-    message += " field_shapes=";
+        " truncated=" + (candidates.truncated ? "1" : "0") +
+        " field_shapes=";
     if (candidates.fields.empty()) {
         message += "none";
     } else {
@@ -888,31 +881,6 @@ void OnOfficialPanelRefreshMods(void* panel, const void* method) {
     }
 }
 
-void OnOfficialItemSetup(void* item, void* node, void* panel, const void* method) {
-    if (g_official_ui_observer_active.load(std::memory_order_acquire)) {
-        const std::string message = std::string("official_ui_observer=call target=item_setup phase=enter item=") +
-            (item == nullptr ? "null" : "set") + " node=" +
-            (node == nullptr ? "null" : "set") + " parent=" +
-            (panel == nullptr ? "null" : "set");
-        LogMessage(message.c_str());
-        LogOfficialUiSnapshot("item_setup_enter", panel);
-    }
-    ModItemSetupFunction original = g_official_item_setup.load(std::memory_order_acquire);
-    if (original == nullptr) {
-        std::lock_guard<std::mutex> lock(g_official_ui_observer_publish_mutex);
-        original = g_official_item_setup.load(std::memory_order_acquire);
-    }
-    if (original == nullptr) {
-        LogMessage("official_ui_observer=call target=item_setup phase=leave reason=trampoline");
-        return;
-    }
-    original(item, node, panel, method);
-    if (g_official_ui_observer_active.load(std::memory_order_acquire)) {
-        LogOfficialUiSnapshot("item_setup_leave", panel);
-        LogMessage("official_ui_observer=call target=item_setup phase=leave");
-    }
-}
-
 bool PrepareOfficialUiObserver(const Il2CppRuntime& runtime) {
     {
         std::lock_guard<std::mutex> lock(g_official_ui_observer_mutex);
@@ -930,25 +898,20 @@ bool PrepareOfficialUiObserver(const Il2CppRuntime& runtime) {
     const auto game = runtime.FindImage({"Il2CppGame.dll", "Game.dll"});
     if (!game.has_value()) { fail("game_image"); return false; }
     const auto panel_class = runtime.FindClass(*game, {"", "Il2Cpp"}, "ModPanelController");
-    const auto item_class = runtime.FindClass(*game, {"", "Il2Cpp"}, "ModItemController");
-    if (!panel_class.has_value() || !item_class.has_value()) { fail("class"); return false; }
+    if (!panel_class.has_value()) { fail("class"); return false; }
     const auto on_enable = runtime.FindMethod(*panel_class, "OnEnable", 0);
     const auto show_mods = runtime.FindMethod(*panel_class, "ShowMods", 0);
     const auto refresh_mods = runtime.FindMethod(*panel_class, "RefreshMods", 0);
-    const auto item_setup = runtime.FindMethodByParameterTypes(
-        *item_class, "Setup",
-        {kOfficialUiItemSetupNodeType, kOfficialUiItemSetupPanelType});
     const auto mods_offset = runtime.ReferenceInstanceFieldOffset(
         *panel_class, kOfficialUiPanelModsField);
     const OfficialUiObserverMembers members{
         on_enable.has_value(),
         show_mods.has_value(),
         refresh_mods.has_value(),
-        item_setup.has_value(),
         mods_offset.has_value(),
     };
     if (!OfficialUiObserverMembersReady(members)) {
-        LogOfficialUiMetadataCandidates(runtime, *item_class, *panel_class, members);
+        LogOfficialUiMetadataCandidates(runtime, *panel_class, members);
         const std::string message =
             std::string("member missing=") + OfficialUiObserverMissingMembers(members);
         fail(message.c_str());
@@ -957,7 +920,6 @@ bool PrepareOfficialUiObserver(const Il2CppRuntime& runtime) {
     const auto on_enable_code = runtime.MethodCode(*on_enable);
     const auto show_mods_code = runtime.MethodCode(*show_mods);
     const auto refresh_mods_code = runtime.MethodCode(*refresh_mods);
-    const auto item_setup_code = runtime.MethodCode(*item_setup);
     const GameProfile& profile = SupportedGameProfile();
     const auto base = reinterpret_cast<std::uintptr_t>(g_api->image_base);
     const OfficialUiObserverValidation validation = ValidateOfficialUiObserverTargets(
@@ -965,18 +927,15 @@ bool PrepareOfficialUiObserver(const Il2CppRuntime& runtime) {
         on_enable_code ? reinterpret_cast<std::uintptr_t>(*on_enable_code) : 0,
         show_mods_code ? reinterpret_cast<std::uintptr_t>(*show_mods_code) : 0,
         refresh_mods_code ? reinterpret_cast<std::uintptr_t>(*refresh_mods_code) : 0,
-        item_setup_code ? reinterpret_cast<std::uintptr_t>(*item_setup_code) : 0,
         MatchesFingerprint(profile.ui_observer.panel_on_enable),
         MatchesFingerprint(profile.ui_observer.panel_show_mods),
-        MatchesFingerprint(profile.ui_observer.panel_refresh_mods),
-        MatchesFingerprint(profile.ui_observer.item_setup));
+        MatchesFingerprint(profile.ui_observer.panel_refresh_mods));
     if (validation != OfficialUiObserverValidation::kValid) {
         fail(OfficialUiObserverValidationReason(validation)); return false;
     }
     void* on_enable_original = nullptr;
     void* show_mods_original = nullptr;
     void* refresh_mods_original = nullptr;
-    void* item_setup_original = nullptr;
     {
         std::lock_guard<std::mutex> lock(g_official_ui_observer_publish_mutex);
         if (!g_official_ui_observer_hooks.Replace(*on_enable_code,
@@ -994,11 +953,6 @@ bool PrepareOfficialUiObserver(const Il2CppRuntime& runtime) {
             refresh_mods_original == nullptr) { fail("hook_install"); return false; }
         g_official_panel_refresh_mods.store(reinterpret_cast<ModPanelVoidFunction>(refresh_mods_original),
             std::memory_order_release);
-        if (!g_official_ui_observer_hooks.Replace(*item_setup_code,
-                reinterpret_cast<void*>(OnOfficialItemSetup), &item_setup_original) ||
-            item_setup_original == nullptr) { fail("hook_install"); return false; }
-        g_official_item_setup.store(reinterpret_cast<ModItemSetupFunction>(item_setup_original),
-            std::memory_order_release);
     }
     g_official_panel_mods_offset.store(*mods_offset, std::memory_order_release);
     g_official_ui_observer_active.store(true, std::memory_order_release);
@@ -1006,7 +960,7 @@ bool PrepareOfficialUiObserver(const Il2CppRuntime& runtime) {
         std::lock_guard<std::mutex> lock(g_official_ui_observer_mutex);
         g_official_ui_observer_state = OfficialUiObserverState::kReady;
     }
-    LogMessage("official_ui_observer=ready");
+    LogMessage("official_ui_observer=ready item_setup=disabled direct_mod_calls=none");
     return true;
 }
 
@@ -1182,13 +1136,30 @@ bool InstallOfficialActivationObserver(const Il2CppRuntime& runtime,
 }
 
 bool InstallOfficialCompatibilityHooks() {
-    bool expected = false;
-    if (!g_official_compatibility_installed.compare_exchange_strong(
-            expected, true, std::memory_order_acq_rel)) {
-        return true;
+    {
+        std::lock_guard<std::mutex> lock(g_official_compatibility_mutex);
+        if (g_official_compatibility_state ==
+            OfficialCompatibilityState::kReady) {
+            return true;
+        }
+        if (g_official_compatibility_state !=
+            OfficialCompatibilityState::kUnprepared) {
+            return false;
+        }
+        g_official_compatibility_state =
+            OfficialCompatibilityState::kInstalling;
     }
+    const auto finish = [](bool ready) {
+        SetOfficialResourceUriHooksActive(ready);
+        SetTmpGlyphHookActive(ready);
+        std::lock_guard<std::mutex> lock(g_official_compatibility_mutex);
+        g_official_compatibility_state = ready
+            ? OfficialCompatibilityState::kReady
+            : OfficialCompatibilityState::kRejected;
+        return ready;
+    };
     if (g_api == nullptr) {
-        return false;
+        return finish(false);
     }
     const std::string mod_root = GetModRoot();
     const OfficialResourceUriStats uri = InstallOfficialResourceUriHooks(
@@ -1197,17 +1168,19 @@ bool InstallOfficialCompatibilityHooks() {
         *g_api, &g_official_compatibility_hooks);
     const UiRevealStats ui = InstallOfficialUiRevealHook(
         *g_api, &g_official_ui_hooks);
-    char message[256]{};
+    char message[320]{};
     std::snprintf(message, sizeof(message),
                   "official_compatibility uri_sprite=%s uri_audio=%s uri_texture=%s "
-                  "tmp_glyph=%s ui_reveal=%s activation=manual_ui_only",
+                  "tmp_glyph=%s ui_reveal=%s activation=manual_ui_only "
+                  "item_setup_observer=disabled direct_mod_calls=none",
                   uri.sprite_ready ? "ready" : "unavailable",
                   uri.audio_ready ? "ready" : "unavailable",
                   uri.texture_ready ? "ready" : "unavailable",
                   glyph.ready ? "ready" : "unavailable",
                   ui.ready ? "ready" : "unavailable");
     LogMessage(message);
-    return uri.sprite_ready && uri.audio_ready && uri.texture_ready && glyph.ready && ui.ready;
+    return finish(uri.sprite_ready && uri.audio_ready && uri.texture_ready &&
+                  glyph.ready && ui.ready);
 }
 
 bool PrepareOfficialActivationObserver(const Il2CppRuntime& runtime,

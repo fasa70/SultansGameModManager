@@ -21,4 +21,6 @@ OfficialResourceUriStats InstallOfficialResourceUriHooks(
     std::string mod_root,
     HookEngine* hooks);
 
+void SetOfficialResourceUriHooksActive(bool active) noexcept;
+
 }  // namespace modloader

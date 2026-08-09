@@ -17,4 +17,6 @@ TmpGlyphHookStats InstallTmpGlyphHook(
     const Il2CppApi& api,
     HookEngine* hooks);
 
+void SetTmpGlyphHookActive(bool active) noexcept;
+
 }  // namespace modloader
