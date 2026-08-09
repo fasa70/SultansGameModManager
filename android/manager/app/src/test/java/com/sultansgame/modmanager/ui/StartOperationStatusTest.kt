@@ -14,18 +14,18 @@ import org.junit.Test
 
 class StartOperationStatusTest {
     @Test
-    fun importingShowsItsLabelAndSafetyInstruction() {
+    fun importingShowsItsSafetyInstruction() {
         assertEquals(
             StartOperationStatus(
-                title = "正在导入游戏安装文件",
-                body = "正在导入 game.apks… 请不要关闭应用。",
+                title = "正在导入游戏安装包",
+                body = "请不要关闭应用。",
             ),
             PatchUiState.Importing("正在导入 game.apks…").toStartOperationStatus(),
         )
     }
 
     @Test
-    fun preparingShowsTheSelectedSource() {
+    fun preparingShowsSafetyInstruction() {
         val input = PatchInputUiModel(
             source = PatchSource.SelectedApk,
             sourceLabel = "游戏安装包",
@@ -42,8 +42,8 @@ class StartOperationStatusTest {
 
         assertEquals(
             StartOperationStatus(
-                title = "正在准备修补文件",
-                body = "正在安全处理 游戏安装包，请不要关闭应用。",
+                title = "正在修补游戏安装包",
+                body = "请不要关闭应用。",
             ),
             PatchUiState.Preparing(input).toStartOperationStatus(),
         )
@@ -60,7 +60,7 @@ class StartOperationStatusTest {
         )
         assertEquals(
             StartOperationStatus(
-                title = "正在等待系统安装确认",
+                title = "正在等待系统安装",
                 body = "请在系统页面完成操作；完成后返回此处继续核验。",
             ),
             PatchUiState.AwaitingSystemInstall("transaction").toStartOperationStatus(),

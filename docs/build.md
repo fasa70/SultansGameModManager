@@ -31,13 +31,19 @@ Output: `android/manager/app/build/outputs/apk/debug/app-debug.apk`
 
 ### 3. Build Native Library
 
+The bundled release loader uses the official backend with the complete UI, URI/texture, and TMP compatibility combination. Pass every release-critical option explicitly so an old CMake cache cannot silently produce a diagnostic variant:
+
 ```bash
 # Configure
 cmake -B native/build-android -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
   -DANDROID_ABI=arm64-v8a \
-  -DANDROID_PLATFORM=android-21 \
-  -DCMAKE_BUILD_TYPE=Release
+  -DANDROID_PLATFORM=android-35 \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DMODLOADER_BACKEND_MODE=1 \
+  -DMODLOADER_OFFICIAL_URI_HOOKS=ON \
+  -DMODLOADER_OFFICIAL_URI_TEXTURE_HOOK=ON \
+  -DMODLOADER_OFFICIAL_TMP_GLYPH_HOOKS=ON
 
 # Build
 cmake --build native/build-android
@@ -45,29 +51,41 @@ cmake --build native/build-android
 
 Output: `native/build-android/libmodloader.so`
 
-### 4. Verify ELF Alignment
+### 4. Verify the Native Artifact
 
-The loader requires 16KB page alignment for compatibility with the game's packing system:
+The loader requires 16KB page alignment for compatibility with the game's packing system. It must also remain an AArch64 ELF without text relocations:
 
 ```bash
-$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/$(host)/bin/llvm-readelf -lW native/build-android/libmodloader.so
+$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/$(host)/bin/llvm-readelf \
+  -hW -lW -dW native/build-android/libmodloader.so
+sha256sum native/build-android/libmodloader.so
 ```
 
-All `PT_LOAD` segments must show `Align 0x4000`.
+Require ELF64/AArch64, `Align 0x4000` on every `PT_LOAD`, and no `TEXTREL` entry.
 
 ### 5. Build Host Tests
 
 ```bash
-cmake -B native/build-host -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake -B native/build-host -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DMODLOADER_BUILD_HOST_TESTS=ON \
+  -DMODLOADER_BACKEND_MODE=1
 cmake --build native/build-host
-./native/build-host/modloader_core_tests
+ctest --test-dir native/build-host --output-on-failure
 ```
+
+Both `modloader_core_tests` and `modloader_il2cpp_runtime_tests` must pass.
 
 ## Building the Loader Split Template
 
-The loader split APK is a pre-built artifact bundled with the Manager. It must be rebuilt whenever the native library, bootstrap Java code, or bootstrap manifest/security contract changes.
+The loader split APK is a pre-built artifact bundled with the Manager. It must be rebuilt whenever the native library, bootstrap Java code, or bootstrap manifest/security contract changes. The frozen template must remain unsigned; the Manager signs it later with the same device identity used for the base and original splits.
 
-After rebuilding, regenerate the unsigned template with `android/bootstrap/build_split_template.py`, replace `android/manager/app/src/main/assets/release/modloader-template-10005.apk`, and update its complete-file SHA-256 in both `GameProfileRegistry.kt` and `AndroidLoaderSplitArtifactFactory.kt`. Update `nativeLoaderSha256` only when the embedded native library itself changes.
+After rebuilding, regenerate the template with `android/bootstrap/build_split_template.py`, replace `android/manager/app/src/main/assets/release/modloader-template-10005.apk`, and update both digest classes atomically:
+
+- **template SHA-256**: hash of the complete unsigned APK;
+- **native SHA-256**: hash of `assets/modloader/arm64-v8a/modloader.bin` inside it.
+
+The bootstrap input `managerCertificateSha256` is the public DER certificate digest recorded in `release/manager-release-manifest.md`. Never commit or print the release JKS or its password.
 
 ```bash
 # 1. Build native library when it changed (see above).
@@ -87,16 +105,29 @@ python ../bootstrap/build_split_template.py \
   --version-code 10005 \
   --version-name 1.0.5
 
-# 4. Calculate the template SHA-256, update both pins, then build Manager.
+# 4. Verify the frozen artifact, then calculate both digests.
+# The native entry must be ZIP_STORED and the APK must be unsigned.
+apksigner verify app/src/main/assets/release/modloader-template-10005.apk || true
+unzip -lv app/src/main/assets/release/modloader-template-10005.apk
 sha256sum app/src/main/assets/release/modloader-template-10005.apk
-./gradlew :app:assembleRelease \
-  -PmanagerCertificateSha256=<64-hex-characters> \
-  -PmodloaderBinary=../../native/build-android/libmodloader.so
+unzip -p app/src/main/assets/release/modloader-template-10005.apk \
+  assets/modloader/arm64-v8a/modloader.bin | sha256sum
+
+# 5. Update every pin listed below, then build Manager.
 ```
 
-After building, update the SHA-256 pin in:
-- `GameProfileRegistry.kt` — `OFFICIAL_10005.nativeLoaderSha256` and `loaderTemplateSha256`
-- `AndroidLoaderSplitArtifactFactory.kt` — `TEMPLATE_SHA256` and `expectedNativeSha256` (caller)
+After generating the template, update every matching digest in the same change:
+
+- `GameProfileRegistry.kt`
+  - `OFFICIAL_10005.nativeLoaderSha256`
+  - `OFFICIAL_10005.loaderTemplateSha256`
+- `AndroidLoaderSplitArtifactFactory.kt`
+  - `TEMPLATE_SHA256`
+- `DeviceSigningKeyStoreTest.kt`
+  - factory expected native SHA
+  - `LoaderSplitRequest.loaderTemplateSha256`
+
+The package (`com.gametree.sultan.pd`), split name (`modloader`), version code (`10005`), version name (`1.0.5`), and provider protocol remain frozen unless the target game profile or protocol changes.
 
 ## Running Tests
 
