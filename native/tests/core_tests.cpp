@@ -376,6 +376,13 @@ void TestGameProfile() {
     Check(profile.tmp_glyph.update_rva == 0x1e88b38 &&
               profile.tmp_glyph.call_rva == 0x1e88cac,
           "profile must retain the TMP glyph compatibility targets");
+    Check(profile.resource_uri.get_texture.rva == 0x3ff95dc &&
+              profile.resource_uri.get_texture_implementation.rva == 0x3ff95e4,
+          "profile must retain both GetTexture overload targets");
+    Check(profile.resource_uri.get_texture.bytes[0] == 0xe1 &&
+              profile.resource_uri.get_texture.bytes[4] == 0x01 &&
+              profile.resource_uri.get_texture_implementation.bytes[0] == 0xfe,
+          "profile must distinguish the forwarding stub from the implementation");
     Check(profile.ui_observer.panel_on_enable.rva == 0x1f1fa94 &&
               profile.ui_observer.panel_show_mods.rva == 0x1f1fb54 &&
               profile.ui_observer.panel_refresh_mods.rva == 0x1f1fd90,

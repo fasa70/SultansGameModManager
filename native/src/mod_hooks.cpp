@@ -1,5 +1,15 @@
 #include "modloader/mod_hooks.h"
 
+#ifndef MODLOADER_OFFICIAL_URI_HOOKS
+#define MODLOADER_OFFICIAL_URI_HOOKS 1
+#endif
+#ifndef MODLOADER_OFFICIAL_URI_TEXTURE_HOOK
+#define MODLOADER_OFFICIAL_URI_TEXTURE_HOOK 1
+#endif
+#ifndef MODLOADER_OFFICIAL_TMP_GLYPH_HOOKS
+#define MODLOADER_OFFICIAL_TMP_GLYPH_HOOKS 1
+#endif
+
 #include "modloader/android_log.h"
 #include "modloader/backend_route.h"
 #include "modloader/bootstrap_notify.h"
@@ -10,11 +20,15 @@
 #include "modloader/mod_root.h"
 #include "modloader/native_mod_loader.h"
 #include "modloader/official_observer_validation.h"
+#if MODLOADER_OFFICIAL_URI_HOOKS
 #include "modloader/official_resource_uri_hooks.h"
+#endif
 #include "modloader/resource_overrides.h"
 #include "modloader/resource_hooks.h"
 #include "modloader/mod_file_index.h"
+#if MODLOADER_OFFICIAL_TMP_GLYPH_HOOKS
 #include "modloader/tmp_glyph_hooks.h"
+#endif
 #include "modloader/ui_reveal_hooks.h"
 
 #include <algorithm>
@@ -47,7 +61,9 @@ using RiteRenderInitFunction = void (*)(void*, void*, const void*);
 
 HookEngine g_hooks;
 HookEngine g_official_observer_hooks;
+#if MODLOADER_OFFICIAL_URI_HOOKS || MODLOADER_OFFICIAL_TMP_GLYPH_HOOKS
 HookEngine g_official_compatibility_hooks;
+#endif
 HookEngine g_official_ui_hooks;
 BackendRouteController g_backend_route;
 std::unique_ptr<LifecycleGate> g_lifecycle;
@@ -1135,6 +1151,17 @@ bool InstallOfficialActivationObserver(const Il2CppRuntime& runtime,
     return true;
 }
 
+void SetOfficialCompatibilityActive(bool active) {
+#if MODLOADER_OFFICIAL_URI_HOOKS
+    SetOfficialResourceUriHooksActive(active);
+#else
+    (void)active;
+#endif
+#if MODLOADER_OFFICIAL_TMP_GLYPH_HOOKS
+    SetTmpGlyphHookActive(active);
+#endif
+}
+
 bool InstallOfficialCompatibilityHooks() {
     {
         std::lock_guard<std::mutex> lock(g_official_compatibility_mutex);
@@ -1150,8 +1177,7 @@ bool InstallOfficialCompatibilityHooks() {
             OfficialCompatibilityState::kInstalling;
     }
     const auto finish = [](bool ready) {
-        SetOfficialResourceUriHooksActive(ready);
-        SetTmpGlyphHookActive(ready);
+        SetOfficialCompatibilityActive(ready);
         std::lock_guard<std::mutex> lock(g_official_compatibility_mutex);
         g_official_compatibility_state = ready
             ? OfficialCompatibilityState::kReady
@@ -1161,11 +1187,21 @@ bool InstallOfficialCompatibilityHooks() {
     if (g_api == nullptr) {
         return finish(false);
     }
+#if MODLOADER_OFFICIAL_URI_HOOKS
+    OfficialResourceUriStats uri;
     const std::string mod_root = GetModRoot();
-    const OfficialResourceUriStats uri = InstallOfficialResourceUriHooks(
+    uri = InstallOfficialResourceUriHooks(
         *g_api, mod_root, &g_official_compatibility_hooks);
-    const TmpGlyphHookStats glyph = InstallTmpGlyphHook(
+#else
+    LogMessage("official_uri=disabled build_gate=false");
+#endif
+#if MODLOADER_OFFICIAL_TMP_GLYPH_HOOKS
+    TmpGlyphHookStats glyph;
+    glyph = InstallTmpGlyphHook(
         *g_api, &g_official_compatibility_hooks);
+#else
+    LogMessage("official_tmp_glyph=disabled build_gate=false");
+#endif
     const UiRevealStats ui = InstallOfficialUiRevealHook(
         *g_api, &g_official_ui_hooks);
     char message[320]{};
@@ -1173,14 +1209,37 @@ bool InstallOfficialCompatibilityHooks() {
                   "official_compatibility uri_sprite=%s uri_audio=%s uri_texture=%s "
                   "tmp_glyph=%s ui_reveal=%s activation=manual_ui_only "
                   "item_setup_observer=disabled direct_mod_calls=none",
+#if MODLOADER_OFFICIAL_URI_HOOKS
                   uri.sprite_ready ? "ready" : "unavailable",
                   uri.audio_ready ? "ready" : "unavailable",
                   uri.texture_ready ? "ready" : "unavailable",
+#else
+                  "disabled", "disabled", "disabled",
+#endif
+#if MODLOADER_OFFICIAL_TMP_GLYPH_HOOKS
                   glyph.ready ? "ready" : "unavailable",
+#else
+                  "disabled",
+#endif
                   ui.ready ? "ready" : "unavailable");
     LogMessage(message);
-    return finish(uri.sprite_ready && uri.audio_ready && uri.texture_ready &&
-                  glyph.ready && ui.ready);
+    const bool uri_ready =
+#if MODLOADER_OFFICIAL_URI_HOOKS
+        uri.sprite_ready && uri.audio_ready
+#if MODLOADER_OFFICIAL_URI_TEXTURE_HOOK
+        && uri.texture_ready
+#endif
+        ;
+#else
+        true;
+#endif
+    const bool glyph_ready =
+#if MODLOADER_OFFICIAL_TMP_GLYPH_HOOKS
+        glyph.ready;
+#else
+        true;
+#endif
+    return finish(uri_ready && glyph_ready && ui.ready);
 }
 
 bool PrepareOfficialActivationObserver(const Il2CppRuntime& runtime,
@@ -1297,12 +1356,21 @@ void* OnLoadConfig(void* instance, int mode, const void* method) {
         if (!ui_observer_ready) {
             LogMessage("official_ui_observer=unavailable reason=prepare");
         }
-        if (!observer_ready || !compatibility_ready) {
+        if (!observer_ready || !compatibility_ready || !ui_observer_ready) {
+            SetOfficialCompatibilityActive(false);
+            g_official_observer_active.store(false, std::memory_order_release);
+            g_official_ui_observer_active.store(false, std::memory_order_release);
             g_backend_route.MarkFailed(BackendRoute::kOfficialCanary);
             if (g_runtime != nullptr) {
                 g_runtime->Fail(FailureCode::kOfficialPreflightFailed);
             }
             LogMessage("official_canary=failed phase=preflight reason=compatibility");
+        } else {
+            g_backend_route.MarkReady(BackendRoute::kOfficialCanary);
+            if (g_runtime != nullptr) {
+                g_runtime->MarkReady();
+            }
+            LogMessage("official_canary=ready direct_mod_calls=none");
         }
         return load_config(instance, mode, method);
     }
@@ -1389,8 +1457,7 @@ bool InstallModHooks(const Il2CppApi& api, RuntimeController& runtime) {
         }
         g_load_config = reinterpret_cast<LoadConfigFunction>(config_original);
     }
-    if (route == BackendRoute::kStagedNative &&
-        !g_backend_route.MarkStarted(route)) {
+    if (!g_backend_route.MarkStarted(route)) {
         g_hooks.Rollback();
         g_lifecycle.reset();
         runtime.Fail(FailureCode::kHookInstallFailed);

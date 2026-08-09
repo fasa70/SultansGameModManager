@@ -10,9 +10,8 @@
 #pragma clang diagnostic pop
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
-#include <mutex>
-#include <string>
 #include <utility>
 
 namespace modloader {
@@ -20,33 +19,27 @@ namespace {
 
 constexpr char kOldName[] = "m_SpriteGlyphTable";
 constexpr char kNewName[] = "m_GlyphTable";
-constexpr std::size_t kMaxStringLength = 256;
 
 std::atomic<bool> g_active{false};
 const Il2CppApi* g_api = nullptr;
 GcHandle g_replacement;
 void* g_replacement_string = nullptr;
-std::mutex g_mutex;
-std::size_t g_rewrites = 0;
+std::atomic<std::size_t> g_rewrites{0};
 
-bool IsManagedString(void* object, std::string* value) {
-    if (object == nullptr || value == nullptr) {
+bool IsOldGlyphName(void* object) {
+    if (object == nullptr) {
         return false;
     }
     const auto* bytes = reinterpret_cast<const std::byte*>(object);
     const std::int32_t length = *reinterpret_cast<const std::int32_t*>(bytes + 0x10);
-    if (length < 0 || static_cast<std::size_t>(length) > kMaxStringLength) {
+    if (length != static_cast<std::int32_t>(sizeof(kOldName) - 1)) {
         return false;
     }
     const auto* text = reinterpret_cast<const char16_t*>(bytes + 0x14);
-    value->clear();
-    value->reserve(static_cast<std::size_t>(length));
-    for (std::int32_t index = 0; index < length; ++index) {
-        const std::uint32_t value16 = text[index];
-        if (value16 > 0x7fU) {
+    for (std::size_t index = 0; index < sizeof(kOldName) - 1; ++index) {
+        if (text[index] != static_cast<char16_t>(kOldName[index])) {
             return false;
         }
-        value->push_back(static_cast<char>(value16));
     }
     return true;
 }
@@ -59,19 +52,12 @@ void OnGlyphGetField(void*, void* raw_context) {
     if (context == nullptr || g_api == nullptr || g_replacement_string == nullptr) {
         return;
     }
-    void* runtime_type = reinterpret_cast<void*>(context->general.regs.x0);
-    void* field_name = reinterpret_cast<void*>(context->general.regs.x1);
-    std::string actual;
-    if (runtime_type == nullptr || !IsManagedString(field_name, &actual)) {
-        return;
-    }
-    if (actual != kOldName) {
+    if (context->general.regs.x0 == 0 ||
+        !IsOldGlyphName(reinterpret_cast<void*>(context->general.regs.x1))) {
         return;
     }
     context->general.regs.x1 = reinterpret_cast<std::uintptr_t>(g_replacement_string);
-    std::lock_guard<std::mutex> lock(g_mutex);
-    ++g_rewrites;
-    LogMessage("tmp_glyph_compat rewrite old=m_SpriteGlyphTable new=m_GlyphTable");
+    g_rewrites.fetch_add(1, std::memory_order_relaxed);
 }
 
 }  // namespace
@@ -103,7 +89,6 @@ TmpGlyphHookStats InstallTmpGlyphHook(const Il2CppApi& api, HookEngine* hooks) {
         LogMessage("tmp_glyph_compat unavailable reason=hook_install");
         return stats;
     }
-    std::lock_guard<std::mutex> lock(g_mutex);
     g_api = &api;
     g_replacement_string = replacement;
     g_replacement = std::move(handle);

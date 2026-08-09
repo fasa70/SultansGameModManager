@@ -206,9 +206,13 @@ void TestUniqueMethodFlags() {
                         {"System.String"}, 0};
     FakeMethod static_method{reinterpret_cast<void*>(ExecutableStub), "GetTexture",
                              {"System.String"}, kMethodAttributeStatic};
+    FakeMethod static_implementation{
+        reinterpret_cast<void*>(ExecutableStub), "GetTexture",
+        {"System.String", "System.Boolean"}, kMethodAttributeStatic};
     FakeMethod wrong_static{reinterpret_cast<void*>(ExecutableStub), "GetTexture",
                             {"System.Int32"}, kMethodAttributeStatic};
-    FakeMetadata metadata{{&instance, &static_method, &wrong_static}, {}};
+    FakeMetadata metadata{
+        {&instance, &static_method, &static_implementation, &wrong_static}, {}};
     g_metadata = &metadata;
     ResetAllocationCounts();
 
@@ -219,6 +223,10 @@ void TestUniqueMethodFlags() {
     Check(runtime.FindUniqueMethod(
               &metadata, "GetTexture", {"System.String"}, true) == &static_method,
           "unique static String method must resolve");
+    Check(runtime.FindUniqueMethod(
+              &metadata, "GetTexture", {"System.String", "System.Boolean"},
+              true) == &static_implementation,
+          "unique static String Boolean implementation must resolve");
     Check(!runtime.FindUniqueMethod(
                &metadata, "GetTexture", {"System.String"}, false).has_value(),
           "static method must reject an instance requirement");

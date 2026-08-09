@@ -35,6 +35,7 @@ struct OfficialResourceUriProfile {
     CodeFingerprint load_sprite_immediate;
     CodeFingerprint load_audio_clip;
     CodeFingerprint get_texture;
+    CodeFingerprint get_texture_implementation;
 };
 
 struct OfficialUiObserverProfile {

@@ -2,6 +2,12 @@ cmake_minimum_required(VERSION 3.22)
 project(sultans_modloader LANGUAGES CXX)
 
 option(MODLOADER_BUILD_HOST_TESTS "Build host-side core tests" OFF)
+option(MODLOADER_OFFICIAL_URI_HOOKS
+    "Build official resource URI compatibility hooks" ON)
+option(MODLOADER_OFFICIAL_URI_TEXTURE_HOOK
+    "Replace UnityWebRequestTexture.GetTexture implementation" ON)
+option(MODLOADER_OFFICIAL_TMP_GLYPH_HOOKS
+    "Build official TMP glyph compatibility hooks" ON)
 
 set(MODLOADER_BACKEND_MODE "0" CACHE STRING
     "Backend mode: 0=staged native, 1=official canary")
@@ -67,7 +73,7 @@ if(ANDROID)
     target_compile_options(dobby_static PRIVATE
         "$<$<COMPILE_LANGUAGE:CXX>:-include${DOBBY_COMMON_HEADER}>")
 
-    add_library(modloader SHARED
+    set(MODLOADER_ANDROID_SOURCES
         src/android_log.cpp
         src/bootstrap_jni.cpp
         src/config_pipeline.cpp
@@ -79,15 +85,25 @@ if(ANDROID)
         src/mod_hooks.cpp
         src/native_mod_loader.cpp
         src/node_post_process.cpp
-        src/official_resource_uri_hooks.cpp
         src/resource_hooks.cpp
         src/resource_uri.cpp
-        src/tmp_glyph_hooks.cpp
         src/ui_reveal_hooks.cpp
     )
+    if(MODLOADER_OFFICIAL_URI_HOOKS)
+        list(APPEND MODLOADER_ANDROID_SOURCES
+            src/official_resource_uri_hooks.cpp)
+    endif()
+    if(MODLOADER_OFFICIAL_TMP_GLYPH_HOOKS)
+        list(APPEND MODLOADER_ANDROID_SOURCES
+            src/tmp_glyph_hooks.cpp)
+    endif()
+    add_library(modloader SHARED ${MODLOADER_ANDROID_SOURCES})
     target_include_directories(modloader PRIVATE include)
     target_compile_definitions(modloader PRIVATE
         MODLOADER_BACKEND_MODE=${MODLOADER_BACKEND_MODE}
+        MODLOADER_OFFICIAL_URI_HOOKS=$<BOOL:${MODLOADER_OFFICIAL_URI_HOOKS}>
+        MODLOADER_OFFICIAL_URI_TEXTURE_HOOK=$<BOOL:${MODLOADER_OFFICIAL_URI_TEXTURE_HOOK}>
+        MODLOADER_OFFICIAL_TMP_GLYPH_HOOKS=$<BOOL:${MODLOADER_OFFICIAL_TMP_GLYPH_HOOKS}>
     )
     target_compile_options(modloader PRIVATE
         -Wall -Wextra -Wpedantic -Werror
