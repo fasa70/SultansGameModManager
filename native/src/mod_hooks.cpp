@@ -885,15 +885,15 @@ bool PrepareOfficialUiObserver(const Il2CppRuntime& runtime) {
     };
     const auto game = runtime.FindImage({"Il2CppGame.dll", "Game.dll"});
     if (!game.has_value()) { fail("game_image"); return false; }
-    const auto panel_class = runtime.FindClass(*game, {"Il2Cpp"}, "ModPanelController");
-    const auto item_class = runtime.FindClass(*game, {"Il2Cpp"}, "ModItemController");
+    const auto panel_class = runtime.FindClass(*game, {"", "Il2Cpp"}, "ModPanelController");
+    const auto item_class = runtime.FindClass(*game, {"", "Il2Cpp"}, "ModItemController");
     if (!panel_class.has_value() || !item_class.has_value()) { fail("class"); return false; }
     const auto on_enable = runtime.FindMethod(*panel_class, "OnEnable", 0);
     const auto show_mods = runtime.FindMethod(*panel_class, "ShowMods", 0);
     const auto refresh_mods = runtime.FindMethod(*panel_class, "RefreshMods", 0);
     const auto item_setup = runtime.FindMethodByParameterTypes(
         *item_class, "Setup", {"Il2Cpp.ModNode", "Il2Cpp.ModPanelController"});
-    const auto mods_offset = runtime.FieldOffset(*panel_class, "mods");
+    const auto mods_offset = runtime.FieldOffset(*panel_class, "<mods>k__BackingField");
     if (!on_enable || !show_mods || !refresh_mods || !item_setup || !mods_offset) {
         fail("member"); return false;
     }
