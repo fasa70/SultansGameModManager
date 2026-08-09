@@ -90,6 +90,7 @@ std::atomic<ModPanelVoidFunction> g_official_panel_refresh_mods{nullptr};
 std::atomic<ModItemSetupFunction> g_official_item_setup{nullptr};
 std::atomic<std::int32_t> g_official_panel_mods_offset{-1};
 std::atomic<bool> g_official_ui_observer_active{false};
+std::atomic<bool> g_official_ui_metadata_diagnostic_attempted{false};
 std::atomic<bool> g_official_compatibility_installed{false};
 const Il2CppApi* g_api = nullptr;
 RuntimeController* g_runtime = nullptr;
@@ -123,6 +124,50 @@ ModApplySummary g_summary;
 
 void LogOfficialDatapoolSnapshot(const char* point, void* datapool = nullptr) noexcept;
 bool MatchesFingerprint(const CodeFingerprint& fingerprint);
+
+void LogOfficialUiMetadataCandidates(
+    const Il2CppRuntime& runtime, void* item_class, void* panel_class,
+    const OfficialUiObserverMembers& members) {
+    if ((members.item_setup && members.panel_mods) ||
+        g_official_ui_metadata_diagnostic_attempted.exchange(true,
+            std::memory_order_acq_rel)) {
+        return;
+    }
+    constexpr std::size_t kCandidateLimit = 8;
+    const auto candidates = runtime.DescribeMetadata(
+        item_class, "Setup", panel_class, "<mods>k__BackingField", kCandidateLimit);
+    const std::string reason = !members.item_setup && !members.panel_mods
+        ? "item_setup|panel_mods"
+        : (!members.item_setup ? "item_setup" : "panel_mods");
+    std::string message = "official_ui_observer=metadata_candidates reason=" + reason +
+        " api=" + (candidates.api_available ? "available" : "unavailable") +
+        " setup_count=" + std::to_string(candidates.methods.size()) +
+        " field_count=" + std::to_string(candidates.fields.size()) +
+        " truncated=" + (candidates.truncated ? "1" : "0") + " setup_shapes=";
+    if (candidates.methods.empty()) {
+        message += "none";
+    } else {
+        for (std::size_t index = 0; index < candidates.methods.size(); ++index) {
+            if (index != 0) message += '|';
+            const auto& candidate = candidates.methods[index];
+            message += std::to_string(candidate.parameter_count) + ":" + candidate.shape +
+                ":" + (candidate.method_code_valid ? "valid" : "invalid");
+        }
+    }
+    message += " field_shapes=";
+    if (candidates.fields.empty()) {
+        message += "none";
+    } else {
+        for (std::size_t index = 0; index < candidates.fields.size(); ++index) {
+            if (index != 0) message += '|';
+            const auto& candidate = candidates.fields[index];
+            message += candidate.key + ":" +
+                (candidate.offset_valid ? "valid" : "invalid") + ":" +
+                (candidate.is_reference ? "reference" : "value_or_unknown");
+        }
+    }
+    LogMessage(message.c_str());
+}
 
 void* StubPointer(void*) {
     return nullptr;
@@ -902,6 +947,7 @@ bool PrepareOfficialUiObserver(const Il2CppRuntime& runtime) {
         mods_offset.has_value(),
     };
     if (!OfficialUiObserverMembersReady(members)) {
+        LogOfficialUiMetadataCandidates(runtime, *item_class, *panel_class, members);
         const std::string message =
             std::string("member missing=") + OfficialUiObserverMissingMembers(members);
         fail(message.c_str());

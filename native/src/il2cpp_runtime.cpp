@@ -242,6 +242,97 @@ std::optional<void*> Il2CppRuntime::FindMethodByParameterTypes(
     }
     return matching == nullptr ? std::nullopt : std::optional<void*>(matching);
 }
+Il2CppRuntime::MetadataCandidates Il2CppRuntime::DescribeMetadata(
+    void* method_klass, std::string_view method_name,
+    void* field_klass, std::string_view field_name,
+    std::size_t limit) const {
+    MetadataCandidates result;
+    if (limit == 0 || api_.free_memory == nullptr) {
+        return result;
+    }
+    const bool methods_available = method_klass != nullptr &&
+        api_.class_get_methods != nullptr && api_.method_get_name != nullptr &&
+        api_.method_get_param_count != nullptr && api_.method_get_param != nullptr &&
+        api_.type_get_name != nullptr && api_.free_memory != nullptr;
+    const bool fields_available = field_klass != nullptr &&
+        api_.class_get_fields != nullptr && api_.field_get_name != nullptr &&
+        api_.field_get_offset != nullptr;
+    if (!methods_available && !fields_available) {
+        return result;
+    }
+    result.api_available = true;
+    if (field_name != "<mods>k__BackingField") {
+        return result;
+    }
+    if (methods_available) {
+        void* iterator = nullptr;
+        while (void* method = api_.class_get_methods(method_klass, &iterator)) {
+            if (!IsMatchingName(api_.method_get_name(method), method_name)) {
+                continue;
+            }
+            if (result.methods.size() >= limit) {
+                result.truncated = true;
+                break;
+            }
+            MetadataMethodCandidate candidate;
+            candidate.parameter_count = api_.method_get_param_count(method);
+            std::vector<std::string> shapes;
+            for (std::uint32_t index = 0; index < candidate.parameter_count; ++index) {
+                const void* parameter = api_.method_get_param(method, index);
+                char* type_name = parameter == nullptr ? nullptr : api_.type_get_name(parameter);
+                std::string shape = "unknown";
+                if (type_name != nullptr) {
+                    const std::string_view actual(type_name);
+                    if (actual == "Il2Cpp.ModNode") shape = "expected_node";
+                    else if (actual == "ModNode") shape = "unqualified_node";
+                    else if (actual == "Il2Cpp.ModPanelController") shape = "expected_panel";
+                    else if (actual == "ModPanelController") shape = "unqualified_panel";
+                    else if (!actual.empty() && actual.front() == 'I') shape = "other_ref";
+                    api_.free_memory(type_name);
+                }
+                shapes.push_back(std::move(shape));
+            }
+            for (std::size_t index = 0; index < shapes.size(); ++index) {
+                if (index != 0) candidate.shape += ",";
+                candidate.shape += shapes[index];
+            }
+            candidate.method_code_valid = MethodCode(method).has_value();
+            result.methods.push_back(std::move(candidate));
+        }
+    }
+    if (fields_available) {
+        void* iterator = nullptr;
+        while (void* field = api_.class_get_fields(field_klass, &iterator)) {
+            const char* actual_name = api_.field_get_name(field);
+            if (actual_name == nullptr) continue;
+            const std::string_view actual(actual_name);
+            std::string key;
+            if (actual == "<mods>k__BackingField") key = "expected_backing";
+            else if (actual == "mods") key = "plain_mods";
+            else if (actual == "NativeFieldInfoPtr_mods") key = "native_field_info_mods";
+            else if (actual.find("mods") != std::string_view::npos ||
+                     actual.find("Mods") != std::string_view::npos) key = "other_mods";
+            else continue;
+            if (result.fields.size() >= limit) {
+                result.truncated = true;
+                break;
+            }
+            MetadataFieldCandidate candidate;
+            candidate.key = std::move(key);
+            candidate.offset_valid = api_.field_get_offset(field) >= 0;
+            if (api_.field_get_type != nullptr && api_.class_from_type != nullptr &&
+                api_.class_is_valuetype != nullptr) {
+                const void* type = api_.field_get_type(field);
+                void* field_class = type == nullptr ? nullptr : api_.class_from_type(type);
+                candidate.is_reference = field_class != nullptr &&
+                    !api_.class_is_valuetype(field_class);
+            }
+            result.fields.push_back(std::move(candidate));
+        }
+    }
+    return result;
+}
+
 std::optional<void*> Il2CppRuntime::FindField(void* klass, std::string_view name) const {
     if (klass == nullptr || api_.class_get_fields == nullptr || api_.field_get_name == nullptr) {
         return std::nullopt;

@@ -48,6 +48,25 @@ class GcHandle {
 
 class Il2CppRuntime {
   public:
+    struct MetadataMethodCandidate {
+        std::uint32_t parameter_count = 0;
+        std::string shape;
+        bool method_code_valid = false;
+    };
+
+    struct MetadataFieldCandidate {
+        std::string key;
+        bool offset_valid = false;
+        bool is_reference = false;
+    };
+
+    struct MetadataCandidates {
+        std::vector<MetadataMethodCandidate> methods;
+        std::vector<MetadataFieldCandidate> fields;
+        bool truncated = false;
+        bool api_available = false;
+    };
+
     struct InstanceField {
         std::string_view name;
         void* handle = nullptr;
@@ -71,6 +90,10 @@ class Il2CppRuntime {
     std::optional<void*> FindMethodByParameterTypes(
         void* klass, std::string_view name,
         const std::vector<std::string_view>& parameter_types) const;
+    MetadataCandidates DescribeMetadata(
+        void* method_klass, std::string_view method_name,
+        void* field_klass, std::string_view field_name,
+        std::size_t limit) const;
     std::optional<void*> FindField(void* klass, std::string_view name) const;
     std::vector<InstanceField> InstanceFields(void* klass) const;
     std::optional<std::int32_t> FieldOffset(void* klass, std::string_view name) const;
