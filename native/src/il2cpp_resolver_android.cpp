@@ -124,6 +124,8 @@ class AndroidIl2CppResolver final : public Il2CppResolver {
             api_.library_handle, "il2cpp_field_get_type");
         api_.field_get_offset = Resolve<Il2CppFieldGetOffset>(
             api_.library_handle, "il2cpp_field_get_offset");
+        api_.field_get_flags = Resolve<Il2CppFieldGetFlags>(
+            api_.library_handle, "il2cpp_field_get_flags");
         api_.field_set_value = Resolve<Il2CppFieldSetValue>(
             api_.library_handle, "il2cpp_field_set_value");
         api_.field_static_get_value = Resolve<Il2CppFieldStaticGetValue>(

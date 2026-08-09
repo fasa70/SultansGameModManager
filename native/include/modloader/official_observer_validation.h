@@ -4,8 +4,13 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 namespace modloader {
+
+constexpr std::string_view kOfficialUiItemSetupNodeType = "ModNode";
+constexpr std::string_view kOfficialUiItemSetupPanelType = "ModPanelController";
+constexpr std::string_view kOfficialUiPanelModsField = "mods";
 
 constexpr std::uintptr_t kOfficialModLoaderActiveModRva = 0x1e88ef0;
 

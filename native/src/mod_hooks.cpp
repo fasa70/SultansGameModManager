@@ -135,7 +135,7 @@ void LogOfficialUiMetadataCandidates(
     }
     constexpr std::size_t kCandidateLimit = 8;
     const auto candidates = runtime.DescribeMetadata(
-        item_class, "Setup", panel_class, "<mods>k__BackingField", kCandidateLimit);
+        item_class, "Setup", panel_class, kOfficialUiPanelModsField, kCandidateLimit);
     const std::string reason = !members.item_setup && !members.panel_mods
         ? "item_setup|panel_mods"
         : (!members.item_setup ? "item_setup" : "panel_mods");
@@ -705,9 +705,8 @@ OfficialCollectionState ReadOfficialCollection(const Il2CppRuntime& runtime,
     if (!datapool_class.has_value()) {
         return {};
     }
-    const auto field = runtime.FindField(*datapool_class, field_name);
-    const auto offset = field.has_value() ? runtime.FieldOffset(*datapool_class, field_name)
-                                          : std::nullopt;
+    const auto offset = runtime.ReferenceInstanceFieldOffset(
+        *datapool_class, field_name);
     if (!offset.has_value()) {
         return {};
     }
@@ -937,8 +936,10 @@ bool PrepareOfficialUiObserver(const Il2CppRuntime& runtime) {
     const auto show_mods = runtime.FindMethod(*panel_class, "ShowMods", 0);
     const auto refresh_mods = runtime.FindMethod(*panel_class, "RefreshMods", 0);
     const auto item_setup = runtime.FindMethodByParameterTypes(
-        *item_class, "Setup", {"Il2Cpp.ModNode", "Il2Cpp.ModPanelController"});
-    const auto mods_offset = runtime.FieldOffset(*panel_class, "<mods>k__BackingField");
+        *item_class, "Setup",
+        {kOfficialUiItemSetupNodeType, kOfficialUiItemSetupPanelType});
+    const auto mods_offset = runtime.ReferenceInstanceFieldOffset(
+        *panel_class, kOfficialUiPanelModsField);
     const OfficialUiObserverMembers members{
         on_enable.has_value(),
         show_mods.has_value(),

@@ -1,6 +1,10 @@
 #include "modloader/il2cpp_runtime.h"
 
+#if defined(_WIN32)
+#include <windows.h>
+#else
 #include <link.h>
+#endif
 
 #include <cstring>
 #include <utility>
@@ -14,11 +18,27 @@ bool IsMatchingName(const char* actual, std::string_view expected) {
     return actual != nullptr && std::string_view(actual) == expected;
 }
 
+#if !defined(_WIN32)
 struct ExecutableSearch {
     std::uintptr_t address = 0;
     bool found = false;
 };
+#endif
 
+#if defined(_WIN32)
+bool IsExecutableMemory(std::uintptr_t address) {
+    MEMORY_BASIC_INFORMATION memory{};
+    if (VirtualQuery(reinterpret_cast<const void*>(address), &memory,
+                     sizeof(memory)) == 0 || memory.State != MEM_COMMIT) {
+        return false;
+    }
+    constexpr DWORD kExecutableProtection =
+        PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
+        PAGE_EXECUTE_WRITECOPY;
+    return (memory.Protect & kExecutableProtection) != 0 &&
+        (memory.Protect & (PAGE_GUARD | PAGE_NOACCESS)) == 0;
+}
+#else
 int FindExecutableSegment(struct dl_phdr_info* info, size_t, void* data) {
     auto* search = static_cast<ExecutableSearch*>(data);
     for (ElfW(Half) index = 0; index < info->dlpi_phnum; ++index) {
@@ -35,6 +55,7 @@ int FindExecutableSegment(struct dl_phdr_info* info, size_t, void* data) {
     }
     return 0;
 }
+#endif
 
 }  // namespace
 
@@ -261,7 +282,7 @@ Il2CppRuntime::MetadataCandidates Il2CppRuntime::DescribeMetadata(
         return result;
     }
     result.api_available = true;
-    if (field_name != "<mods>k__BackingField") {
+    if (field_name != "mods") {
         return result;
     }
     if (methods_available) {
@@ -283,10 +304,10 @@ Il2CppRuntime::MetadataCandidates Il2CppRuntime::DescribeMetadata(
                 std::string shape = "unknown";
                 if (type_name != nullptr) {
                     const std::string_view actual(type_name);
-                    if (actual == "Il2Cpp.ModNode") shape = "expected_node";
-                    else if (actual == "ModNode") shape = "unqualified_node";
-                    else if (actual == "Il2Cpp.ModPanelController") shape = "expected_panel";
-                    else if (actual == "ModPanelController") shape = "unqualified_panel";
+                    if (actual == "ModNode") shape = "expected_node";
+                    else if (actual == "Il2Cpp.ModNode") shape = "qualified_node";
+                    else if (actual == "ModPanelController") shape = "expected_panel";
+                    else if (actual == "Il2Cpp.ModPanelController") shape = "qualified_panel";
                     else if (!actual.empty() && actual.front() == 'I') shape = "other_ref";
                     api_.free_memory(type_name);
                 }
@@ -307,8 +328,8 @@ Il2CppRuntime::MetadataCandidates Il2CppRuntime::DescribeMetadata(
             if (actual_name == nullptr) continue;
             const std::string_view actual(actual_name);
             std::string key;
-            if (actual == "<mods>k__BackingField") key = "expected_backing";
-            else if (actual == "mods") key = "plain_mods";
+            if (actual == "mods") key = "expected_mods";
+            else if (actual == "<mods>k__BackingField") key = "backing_mods";
             else if (actual == "NativeFieldInfoPtr_mods") key = "native_field_info_mods";
             else if (actual.find("mods") != std::string_view::npos ||
                      actual.find("Mods") != std::string_view::npos) key = "other_mods";
@@ -378,6 +399,26 @@ std::vector<Il2CppRuntime::InstanceField> Il2CppRuntime::InstanceFields(void* kl
     }
     return fields;
 }
+
+std::optional<std::int32_t> Il2CppRuntime::ReferenceInstanceFieldOffset(
+    void* klass, std::string_view name) const {
+    constexpr std::uint32_t kFieldAttributeStatic = 0x0010;
+    const auto field = FindField(klass, name);
+    if (!field.has_value() || api_.field_get_offset == nullptr ||
+        api_.field_get_flags == nullptr || api_.field_get_type == nullptr ||
+        api_.class_from_type == nullptr || api_.class_is_valuetype == nullptr ||
+        (api_.field_get_flags(*field) & kFieldAttributeStatic) != 0) {
+        return std::nullopt;
+    }
+    const std::int32_t offset = api_.field_get_offset(*field);
+    const void* type = api_.field_get_type(*field);
+    void* field_class = type == nullptr ? nullptr : api_.class_from_type(type);
+    if (offset < 0 || field_class == nullptr || api_.class_is_valuetype(field_class)) {
+        return std::nullopt;
+    }
+    return offset;
+}
+
 std::optional<std::int32_t> Il2CppRuntime::FieldOffset(void* klass, std::string_view name) const {
     const auto field = FindField(klass, name);
     if (!field.has_value() || api_.field_get_offset == nullptr) {
@@ -580,9 +621,13 @@ bool Il2CppRuntime::IsExecutableCode(void* address) const {
     if (address == nullptr) {
         return false;
     }
+#if defined(_WIN32)
+    return IsExecutableMemory(reinterpret_cast<std::uintptr_t>(address));
+#else
     ExecutableSearch search{reinterpret_cast<std::uintptr_t>(address), false};
     dl_iterate_phdr(FindExecutableSegment, &search);
     return search.found;
+#endif
 }
 
 }  // namespace modloader

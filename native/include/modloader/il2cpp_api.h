@@ -31,6 +31,7 @@ using Il2CppClassGetFields = void* (*)(void* klass, void** iterator);
 using Il2CppFieldGetName = const char* (*)(void* field);
 using Il2CppFieldGetType = const void* (*)(void* field);
 using Il2CppFieldGetOffset = std::int32_t (*)(void* field);
+using Il2CppFieldGetFlags = std::uint32_t (*)(void* field);
 using Il2CppFieldSetValue = void (*)(void* object, void* field, void* value);
 using Il2CppFieldStaticGetValue = void (*)(void* field, void* value);
 using Il2CppRuntimeClassInit = void (*)(void* klass);
@@ -76,6 +77,7 @@ struct Il2CppApi {
     Il2CppFieldGetName field_get_name = nullptr;
     Il2CppFieldGetType field_get_type = nullptr;
     Il2CppFieldGetOffset field_get_offset = nullptr;
+    Il2CppFieldGetFlags field_get_flags = nullptr;
     Il2CppFieldSetValue field_set_value = nullptr;
     Il2CppFieldStaticGetValue field_static_get_value = nullptr;
     Il2CppRuntimeClassInit runtime_class_init = nullptr;

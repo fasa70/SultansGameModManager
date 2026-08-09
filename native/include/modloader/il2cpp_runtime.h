@@ -96,6 +96,8 @@ class Il2CppRuntime {
         std::size_t limit) const;
     std::optional<void*> FindField(void* klass, std::string_view name) const;
     std::vector<InstanceField> InstanceFields(void* klass) const;
+    std::optional<std::int32_t> ReferenceInstanceFieldOffset(
+        void* klass, std::string_view name) const;
     std::optional<std::int32_t> FieldOffset(void* klass, std::string_view name) const;
     bool SetFieldValue(void* object, void* klass, std::string_view name, void* value) const;
     std::optional<void*> NewArray(void* element_class, std::size_t length) const;

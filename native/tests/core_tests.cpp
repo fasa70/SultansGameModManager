@@ -504,6 +504,11 @@ void TestOfficialUiObserverValidation() {
               refresh_mods, item_setup, true, true, true, true) ==
               Validation::kPanelOnEnableTarget,
           "overflowed UI target arithmetic must fail closed");
+    Check(modloader::kOfficialUiItemSetupNodeType == "ModNode" &&
+              modloader::kOfficialUiItemSetupPanelType == "ModPanelController",
+          "UI observer Setup types must match verified runtime metadata exactly");
+    Check(modloader::kOfficialUiPanelModsField == "mods",
+          "UI observer panel field must match verified runtime metadata exactly");
 
     using Members = modloader::OfficialUiObserverMembers;
     const Members ready{true, true, true, true, true};

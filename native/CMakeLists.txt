@@ -112,4 +112,14 @@ if(MODLOADER_BUILD_HOST_TESTS)
     target_link_libraries(modloader_core_tests PRIVATE modloader_core Threads::Threads)
     target_compile_options(modloader_core_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME modloader_core_tests COMMAND modloader_core_tests)
+
+    add_executable(modloader_il2cpp_runtime_tests
+        tests/il2cpp_runtime_tests.cpp
+        src/il2cpp_runtime.cpp
+    )
+    target_include_directories(modloader_il2cpp_runtime_tests PRIVATE include)
+    target_compile_options(modloader_il2cpp_runtime_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME modloader_il2cpp_runtime_tests
+        COMMAND modloader_il2cpp_runtime_tests)
 endif()
