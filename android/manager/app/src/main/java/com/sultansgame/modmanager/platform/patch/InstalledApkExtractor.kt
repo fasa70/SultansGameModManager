@@ -38,9 +38,22 @@ class InstalledApkExtractor(private val context: Context) {
         val transactionId = UUID.randomUUID().toString()
         val root = File(context.filesDir, "patch-staging/$transactionId/input").apply { mkdirs() }
         try {
-            val base = copyApk(
+            val copiedBase = copyApk(
                 requireNotNull(applicationInfo.sourceDir) { "游戏未提供 base APK 路径" },
                 File(root, "base.apk"),
+            )
+            val installedPackageName = packageInfo.packageName
+            val installedVersionCode = packageInfo.versionCodeCompat()
+            require(installedPackageName == GAME_PACKAGE) { "目标 APK 包名不匹配" }
+            val base = copiedBase.copy(
+                // PackageManager has already validated this APK as the installed package's base.
+                // Keep ZIP-derived ABI/signature/warning data, but use package metadata for identity.
+                inspection = copiedBase.inspection.copy(
+                    packageName = installedPackageName,
+                    versionCode = installedVersionCode,
+                    versionName = packageInfo.versionName,
+                    splitName = null,
+                ),
             )
             val sourceSplits = applicationInfo.splitSourceDirs.orEmpty()
             val declaredSplitNames = packageInfo.splitNames.orEmpty().toList()
@@ -51,9 +64,14 @@ class InstalledApkExtractor(private val context: Context) {
                 val declaredName = declaredSplitNames[index]
                 val copied = copyApk(source, File(root, "split-$index.apk"))
                 copied.copy(
-                    // For an APK already installed by Android, PackageInfo is authoritative for split identity.
-                    // Some older loader APKs do not expose their split attribute through archive inspection.
-                    inspection = copied.inspection.copy(splitName = declaredName),
+                    // Older installed loader APKs may not expose package metadata when inspected alone.
+                    // PackageInfo is authoritative for identity; retain ZIP-derived ABI/signature/warnings.
+                    inspection = copied.inspection.copy(
+                        packageName = installedPackageName,
+                        versionCode = installedVersionCode,
+                        versionName = packageInfo.versionName,
+                        splitName = declaredName,
+                    ),
                 )
             }
             return requireCompletePackageSet(transactionId, root, base, splits)
@@ -167,6 +185,10 @@ class InstalledApkExtractor(private val context: Context) {
         )
         else -> context.packageManager.getPackageInfo(packageName, PackageManager.GET_SIGNATURES)
     }
+
+    @Suppress("DEPRECATION")
+    private fun PackageInfo.versionCodeCompat(): Long =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) longVersionCode else versionCode.toLong()
 
     @Suppress("DEPRECATION")
     private fun applicationInfoFor(packageName: String): ApplicationInfo =
