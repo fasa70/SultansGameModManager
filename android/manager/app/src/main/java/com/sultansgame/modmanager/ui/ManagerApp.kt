@@ -172,7 +172,7 @@ private sealed interface DialogKind {
     data object SyncMods : DialogKind
     data object StopGameAndSync : DialogKind
     data object PatchCleanup : DialogKind
-    data object XiaomiInstallRisk : DialogKind
+    data class DeviceInstallRisk(val warning: DeviceInstallWarning) : DialogKind
     data object UpdateAvailable : DialogKind
     data class WorkshopTaskRemoval(val taskId: String) : DialogKind
     data object ExternalZipImport : DialogKind
@@ -183,20 +183,20 @@ private sealed interface DialogKind {
 fun ManagerApp(state: ManagerUiState, actions: ManagerActions) {
     var destinationIndex by rememberSaveable { mutableIntStateOf(Destination.Start.ordinal) }
     var dialog by remember { mutableStateOf<DialogKind?>(null) }
-    var promptedXiaomiInstallTransaction by remember { mutableStateOf<String?>(null) }
+    var promptedDeviceInstallTransaction by remember { mutableStateOf<String?>(null) }
     val destination = Destination.entries[destinationIndex]
 
     val readyToInstall = state.patch as? PatchUiState.ReadyToInstall
-    val xiaomiDevice = remember {
-        isXiaomiFamilyDevice(Build.MANUFACTURER, Build.BRAND)
+    val deviceInstallWarning = remember {
+        deviceInstallWarningFor(Build.MANUFACTURER, Build.BRAND)
     }
 
-    LaunchedEffect(readyToInstall?.transactionId, xiaomiDevice) {
+    LaunchedEffect(readyToInstall?.transactionId, deviceInstallWarning) {
         if (readyToInstall == null) {
-            promptedXiaomiInstallTransaction = null
-        } else if (xiaomiDevice && promptedXiaomiInstallTransaction != readyToInstall.transactionId) {
-            promptedXiaomiInstallTransaction = readyToInstall.transactionId
-            dialog = DialogKind.XiaomiInstallRisk
+            promptedDeviceInstallTransaction = null
+        } else if (deviceInstallWarning != null && promptedDeviceInstallTransaction != readyToInstall.transactionId) {
+            promptedDeviceInstallTransaction = readyToInstall.transactionId
+            dialog = DialogKind.DeviceInstallRisk(deviceInstallWarning)
         }
     }
 
@@ -493,19 +493,19 @@ internal fun PatchConfirmation.withSinglePatchConfirmation(confirmed: Boolean): 
 
 internal fun PatchUiState.toStartOperationStatus(): StartOperationStatus? = when (this) {
     is PatchUiState.Importing -> StartOperationStatus(
-        title = "正在导入游戏安装文件",
-        body = "${label} 请不要关闭应用。",
+        title = "正在导入游戏安装包",
+        body = "请不要关闭应用。",
     )
     is PatchUiState.Preparing -> StartOperationStatus(
-        title = "正在准备修补文件",
-        body = "正在安全处理 ${input.sourceLabel}，请不要关闭应用。",
+        title = "正在修补游戏安装包",
+        body = "请不要关闭应用。",
     )
     is PatchUiState.SubmittingInstall -> StartOperationStatus(
         title = "正在请求系统安装",
         body = "请稍候，系统安装确认页面即将打开。",
     )
     is PatchUiState.AwaitingSystemInstall -> StartOperationStatus(
-        title = "正在等待系统安装确认",
+        title = "正在等待系统安装",
         body = "请在系统页面完成操作；完成后返回此处继续核验。",
     )
     else -> null
@@ -920,7 +920,7 @@ private fun DialogHost(state: ManagerUiState, actions: ManagerActions, dialog: D
             )
         }
         DialogKind.StopGameAndSync -> ConfirmDialog("结束游戏进程后同步mod", "游戏正在运行。继续会先结束游戏进程后尝试同步mod", "结束游戏并同步mod", { actions.confirmStopGameAndSync(); onDismiss() }, { actions.dismissStopGameAndSync(); onDismiss() })
-        DialogKind.XiaomiInstallRisk -> XiaomiInstallRiskDialog(onDismiss)
+        is DialogKind.DeviceInstallRisk -> DeviceInstallRiskDialog(dialog.warning, onDismiss)
         DialogKind.UpdateAvailable -> {
             state.availableUpdate?.let { update ->
                 UpdateAvailableDialog(
@@ -1368,15 +1368,20 @@ private fun LegalNoticeDialog(onAccept: () -> Unit, onDismiss: (() -> Unit)? = n
     }
 }
 
-private const val XIAOMI_INSTALL_RISK_READ_DELAY_MILLIS = 5_000L
-
 @Composable
-private fun XiaomiInstallRiskDialog(onDismiss: () -> Unit) {
+private fun DeviceInstallRiskDialog(warning: DeviceInstallWarning, onDismiss: () -> Unit) {
     var canDismiss by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        delay(XIAOMI_INSTALL_RISK_READ_DELAY_MILLIS)
+        delay(DEVICE_INSTALL_RISK_READ_DELAY_MILLIS)
         canDismiss = true
+    }
+
+    val (title, body) = when (warning) {
+        DeviceInstallWarning.Xiaomi -> "小米设备安装提示" to
+            "由于 MIUI / 澎湃系统对 Android API 的修改，安装过程可能出现无法预知的情况并导致失败。如果遇到安装失败，大概率可以通过系统设置的开发者选项关闭 MIUI 优化/系统优化来修复"
+        DeviceInstallWarning.OppoOnePlus -> "OPPO / 一加设备安装提示" to
+            "由于 ColorOS 系统对 Android API 的修改，安装过程可能出现无法预知的情况并导致失败。如果遇到安装失败，大概率可以通过安装 CtsPermissionApp 来解决（此应用会使部分系统行为产生变化，建议您在安装完游戏后就卸载 CtsPermissionApp）"
     }
 
     Dialog(
@@ -1388,9 +1393,9 @@ private fun XiaomiInstallRiskDialog(onDismiss: () -> Unit) {
     ) {
         Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(22.dp)) {
             Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                Text("小米设备安装提示", fontSize = 21.sp, fontWeight = FontWeight.Bold)
+                Text(title, fontSize = 21.sp, fontWeight = FontWeight.Bold)
                 Text(
-                    "由于 MIUI / 澎湃系统对Android API的修改，安装过程可能出现无法预知的情况并导致失败。如果遇到安装失败，大概率可以通过系统设置的开发者选项关闭 MIUI 优化/系统优化来修复",
+                    body,
                     fontSize = 14.sp,
                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 )
@@ -1405,6 +1410,8 @@ private fun XiaomiInstallRiskDialog(onDismiss: () -> Unit) {
         }
     }
 }
+
+private const val DEVICE_INSTALL_RISK_READ_DELAY_MILLIS = 5_000L
 
 @Composable
 private fun TextDialog(title: String, body: String, onDismiss: () -> Unit) {
