@@ -1,0 +1,9 @@
+{
+  "packageName": "com.gametree.sultan.pd",
+  "splitName": "modloader",
+  "versionCode": 10005,
+  "versionName": "1.0.5",
+  "providerProtocolVersion": 2,
+  "templateSha256": "fbc06a1ddfdae416095e0523d89da225bf29640ed7db71ab90ca2eabf01287c6",
+  "nativeSha256": "404b7caa0aab2c02fe6e1217616291e4e91bed57eb858e9b15ec135d2f4d29a8"
+}

@@ -48,24 +48,27 @@ The user confirmed that all previews rendered correctly and that the TMP compati
 
 ### Frozen Manager template
 
-The Manager release asset was rebuilt from the current feature HEAD with all official compatibility gates explicitly enabled. This rebuild is the artifact shipped by future Manager patch operations; it is distinct from the earlier device-signed diagnostic split used for runtime validation.
+The current master release template combines the protocol v2 Bootstrap with the official UI reveal, URI/Texture, and TMP compatibility native build. It is built from the native artifact with every release gate explicitly enabled, then regenerated from the Bootstrap AAR; the Manager only consumes this verified frozen asset.
 
 ```text
 embedded native SHA-256:
 404b7caa0aab2c02fe6e1217616291e4e91bed57eb858e9b15ec135d2f4d29a8
 
 complete unsigned template SHA-256:
-f811b0b7b4b93287b6babe2c337c28c047f504b4bc7225d03b31b140a9adb9b3
+fbc06a1ddfdae416095e0523d89da225bf29640ed7db71ab90ca2eabf01287c6
+
+Bootstrap ModStorage protocol:
+2
 ```
 
-The frozen template is unsigned, identifies package `com.gametree.sultan.pd`, split `modloader`, version code `10005`, and version name `1.0.5`; its native payload is stored at `assets/modloader/arm64-v8a/modloader.bin` without ZIP compression. Static build and hash validation proves that it contains the current official UI + URI/texture + TMP source combination. The earlier runtime evidence applies to the same source behavior, but this exact rebuilt hash was not separately installed during the artifact-freezing step.
+The frozen template is unsigned, identifies package `com.gametree.sultan.pd`, split `modloader`, version code `10005`, and version name `1.0.5`; its native payload is stored at `assets/modloader/arm64-v8a/modloader.bin` without ZIP compression. The public identity is recorded in `release/loader-template-10005.json`; production and test digest pins must be updated with the binary in the same change.
 
 ### Offline acceptance
 
-- Native host tests: 2/2 passed.
+- Native host tests: 2/2 passed for the validated native artifact.
 - Android target: ELF64 AArch64.
 - Four `PT_LOAD` segments, each aligned to `0x4000`.
 - No `TEXTREL`.
 - Frozen Manager embedded native SHA-256: `404b7caa0aab2c02fe6e1217616291e4e91bed57eb858e9b15ec135d2f4d29a8`.
-- Earlier device-validated diagnostic native SHA-256: `9b9173cdb939fa6eda40abd06081bac755f208c2401a93fed8d3d3a8facc8f71`.
-- The signed diagnostic split retained the expected release certificate and the base APK remained byte-identical to the prior signed installation set.
+- Frozen unsigned template SHA-256: `fbc06a1ddfdae416095e0523d89da225bf29640ed7db71ab90ca2eabf01287c6`.
+- The native payload and template were rebuilt and checked for digest closure, stored compression, and unsigned state before publication.

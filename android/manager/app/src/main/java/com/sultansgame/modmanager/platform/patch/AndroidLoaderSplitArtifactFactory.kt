@@ -27,43 +27,51 @@ internal class AndroidLoaderSplitArtifactFactory(
         require(destination.parentFile?.name == "template") { "loader split 模板暂存路径无效" }
         require(destination.parentFile?.canonicalFile?.parentFile?.parentFile == stagingRoot) { "loader split 模板暂存路径无效" }
         destination.parentFile?.mkdirs()
-        context.assets.open(TEMPLATE_ASSET).use { input ->
-            FileOutputStream(destination).use { output ->
-                input.copyTo(output)
-                output.fd.sync()
+        val partial = File(destination.parentFile, ".${destination.name}.${java.util.UUID.randomUUID()}.partial")
+        try {
+            context.assets.open(TEMPLATE_ASSET).use { input ->
+                FileOutputStream(partial).use { output ->
+                    input.copyTo(output)
+                    output.fd.sync()
+                }
             }
+            val templateDigest = zipInspector.sha256 { FileInputStream(partial) }
+            require(templateDigest == TEMPLATE_SHA256) { "loader split 模板被篡改" }
+            val parsed = archiveInspector.inspect(partial, TEMPLATE_ASSET)
+            require(parsed.packageName == null || parsed.packageName == GAME_PACKAGE) { "loader split 包名不匹配" }
+            require(parsed.versionCode == null || parsed.versionCode == request.target.versionCode) {
+                "loader split 版本与 base 不一致"
+            }
+            require(parsed.splitName == null || parsed.splitName == request.loaderSplitName) { "loader split 名称不匹配" }
+            require(parsed.signerDigestsSha256.isEmpty()) { "loader split 模板必须未签名" }
+            val inspection = parsed.copy(
+                packageName = GAME_PACKAGE,
+                versionCode = request.target.versionCode,
+                versionName = request.target.versionName,
+                splitName = request.loaderSplitName,
+            )
+            val nativeDigest = nativeDigest(partial)
+            require(nativeDigest == expectedNativeSha256) { "loader split native 摘要不匹配" }
+            if (!partial.renameTo(destination)) {
+                throw java.io.IOException("无法提交 loader split 模板")
+            }
+            LoaderSplitResult.Built(
+                artifact = LoaderSplitArtifact(
+                    path = destination.absolutePath,
+                    sha256 = templateDigest,
+                    sizeBytes = destination.length(),
+                    inspection = inspection,
+                ),
+                splitName = request.loaderSplitName,
+                verificationSummary = listOf(
+                    "模板摘要已验证",
+                    "同包名 split=${request.loaderSplitName}",
+                    "native 摘要已验证",
+                ),
+            )
+        } finally {
+            partial.delete()
         }
-        val templateDigest = zipInspector.sha256 { FileInputStream(destination) }
-        require(templateDigest == TEMPLATE_SHA256) { "loader split 模板被篡改" }
-        val parsed = archiveInspector.inspect(destination, TEMPLATE_ASSET)
-        require(parsed.packageName == null || parsed.packageName == GAME_PACKAGE) { "loader split 包名不匹配" }
-        require(parsed.versionCode == null || parsed.versionCode == request.target.versionCode) {
-            "loader split 版本与 base 不一致"
-        }
-        require(parsed.splitName == null || parsed.splitName == request.loaderSplitName) { "loader split 名称不匹配" }
-        require(parsed.signerDigestsSha256.isEmpty()) { "loader split 模板必须未签名" }
-        val inspection = parsed.copy(
-            packageName = GAME_PACKAGE,
-            versionCode = request.target.versionCode,
-            versionName = request.target.versionName,
-            splitName = request.loaderSplitName,
-        )
-        val nativeDigest = nativeDigest(destination)
-        require(nativeDigest == expectedNativeSha256) { "loader split native 摘要不匹配" }
-        LoaderSplitResult.Built(
-            artifact = LoaderSplitArtifact(
-                path = destination.absolutePath,
-                sha256 = templateDigest,
-                sizeBytes = destination.length(),
-                inspection = inspection,
-            ),
-            splitName = request.loaderSplitName,
-            verificationSummary = listOf(
-                "模板摘要已验证",
-                "同包名 split=${request.loaderSplitName}",
-                "native 摘要已验证",
-            ),
-        )
     }.getOrElse { error ->
         LoaderSplitResult.Unavailable(error.message ?: "无法构建 loader split")
     }
@@ -91,6 +99,6 @@ internal class AndroidLoaderSplitArtifactFactory(
         const val SPLIT_NAME = "modloader"
         const val TEMPLATE_ASSET = "release/modloader-template-10005.apk"
         const val NATIVE_ASSET = "assets/modloader/arm64-v8a/modloader.bin"
-        const val TEMPLATE_SHA256 = "80dc4e600ea58b272f36cfa81c830d12fc74e63276bed7f88a935f61e07693e3"
+        const val TEMPLATE_SHA256 = "fbc06a1ddfdae416095e0523d89da225bf29640ed7db71ab90ca2eabf01287c6"
     }
 }

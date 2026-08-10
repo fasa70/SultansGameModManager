@@ -11,6 +11,15 @@ android {
     val releaseKeystore = rootProject.file("../../release/manager-release.jks")
     val releasePassword = rootProject.file("../../release/manager-release-password.txt")
         .takeIf { it.isFile }?.readText()?.trim()
+    val releaseBuildRequested = gradle.startParameter.taskNames.any { task ->
+        task.contains("release", ignoreCase = true)
+    }
+    if (releaseBuildRequested && (!releaseKeystore.isFile || releasePassword.isNullOrBlank())) {
+        throw GradleException(
+            "release build requires release/manager-release.jks and " +
+                "release/manager-release-password.txt",
+        )
+    }
 
     signingConfigs {
         if (releaseKeystore.isFile && !releasePassword.isNullOrBlank()) {

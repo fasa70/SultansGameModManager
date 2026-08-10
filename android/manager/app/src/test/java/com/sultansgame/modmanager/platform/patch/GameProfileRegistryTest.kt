@@ -19,6 +19,22 @@ class GameProfileRegistryTest {
     }
 
     @Test
+    fun freezesProtocolV2OfficialLoaderIdentity() {
+        val result = GameProfileRegistry().profile("official-android-2026-07-27")
+
+        requireNotNull(result)
+        assertEquals(2, result.providerProtocolVersion)
+        assertEquals(
+            "fbc06a1ddfdae416095e0523d89da225bf29640ed7db71ab90ca2eabf01287c6",
+            result.loaderTemplateSha256,
+        )
+        assertEquals(
+            "404b7caa0aab2c02fe6e1217616291e4e91bed57eb858e9b15ec135d2f4d29a8",
+            result.nativeLoaderSha256,
+        )
+    }
+
+    @Test
     fun acceptsAbiProvidedBySplit() {
         val result = GameProfileRegistry().classify(
             PatchSource.SelectedApks,

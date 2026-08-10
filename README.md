@@ -294,15 +294,16 @@ Output: `native/build-android/libmodloader.so`. Release artifacts must be ELF64/
 
 #### Release build
 
-A formally signed release build requires the local, untracked `release/manager-release.jks` and `release/manager-release-password.txt`, plus the current native loader. Run this from `android/manager`:
+The tracked release entry rebuilds the native loader, protocol v2 Bootstrap AAR, frozen split template, digest pins, and signed Manager APK in that order. It requires the local, untracked release keystore/password files and environment variables for the SDK, NDK, and JDK:
 
 ```bash
-./gradlew :app:assembleRelease \
-  -PmanagerCertificateSha256=<64-hex-chars> \
-  -PmodloaderBinary=../../native/build-android/libmodloader.so
+export JAVA_HOME="/path/to/jdk-21"
+export ANDROID_HOME="/path/to/android-sdk"
+export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/<ndk-version>"
+bash scripts/build-release.sh
 ```
 
-See the [build guide](docs/build.md) for complete environment setup, Windows/Git Bash commands, loader-template updates, and tests.
+Do not run only `:app:assembleRelease -PmodloaderBinary=...`: that task consumes the already-frozen template and does not rebuild it. See the [build guide](docs/build.md) for the staged native → Bootstrap → template pipeline, digest closure, and tests.
 
 ### Technology stack
 
@@ -322,4 +323,4 @@ This application is an independent community tool and is not affiliated with or 
 
 - [Dobby](https://github.com/jmpews/Dobby) — ARM64 dynamic binary instrumentation framework
 - [apksig](https://android.googlesource.com/platform/tools/apksig) — Android APK signing library
-- Workshop-Native — [Workshop adaptation source](https://github.com/cjtestuse/Workshop-Native)
+- [Workshop-Native](https://github.com/cjtestuse/Workshop-Native) — Workshop adaptation source

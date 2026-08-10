@@ -90,8 +90,8 @@ internal class GameProfileRegistry(
             requiredAbi = REQUIRED_ABI,
             versionCodes = setOf(10005L),
             loaderSplitName = "modloader",
-            loaderTemplateSha256 = "80dc4e600ea58b272f36cfa81c830d12fc74e63276bed7f88a935f61e07693e3",
-            nativeLoaderSha256 = "23ce7678ad665bb18a78e54ed1c65d23583384b5c67bad739cfae1961f2c0734",
+            loaderTemplateSha256 = "fbc06a1ddfdae416095e0523d89da225bf29640ed7db71ab90ca2eabf01287c6",
+            nativeLoaderSha256 = "404b7caa0aab2c02fe6e1217616291e4e91bed57eb858e9b15ec135d2f4d29a8",
             providerProtocolVersion = 2,
         )
     }

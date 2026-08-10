@@ -12,6 +12,7 @@
 *.dll
 *.exe
 native/build-android/
+native/build-android-release/
 native/build-host/
 
 # IDE
