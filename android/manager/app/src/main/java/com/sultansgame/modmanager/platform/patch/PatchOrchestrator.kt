@@ -4,6 +4,7 @@ import android.content.Intent
 import com.sultansgame.modmanager.model.PatchArtifact
 import com.sultansgame.modmanager.model.PatchConfirmation
 import com.sultansgame.modmanager.model.PatchFailure
+import com.sultansgame.modmanager.model.PatchInstallMode
 import com.sultansgame.modmanager.model.PatchInstallPlan
 import com.sultansgame.modmanager.model.PatchMode
 import com.sultansgame.modmanager.model.PatchSource
@@ -18,8 +19,15 @@ import java.io.File
 internal sealed interface PatchOrchestrationResult {
     data class AwaitingConfirmation(val mode: PatchMode, val reason: String) : PatchOrchestrationResult
     data class NeedsInstallPermission(val transactionId: String? = null) : PatchOrchestrationResult
-    data class NeedsGameUninstall(val transactionId: String) : PatchOrchestrationResult
-    data class ReadyToInstall(val transactionId: String, val summary: String) : PatchOrchestrationResult
+    data class NeedsGameUninstall(
+        val transactionId: String,
+        val reason: String = "当前游戏无法安全覆盖；请先卸载后安装。",
+    ) : PatchOrchestrationResult
+    data class ReadyToInstall(
+        val transactionId: String,
+        val summary: String,
+        val installMode: PatchInstallMode,
+    ) : PatchOrchestrationResult
     data class AwaitingSystemInstall(val transactionId: String, val sessionId: Int) : PatchOrchestrationResult
     data class NeedsUserAction(val transactionId: String, val intent: Intent) : PatchOrchestrationResult
     data class AwaitingVerification(val transactionId: String) : PatchOrchestrationResult
@@ -44,6 +52,7 @@ internal class PatchOrchestrator(
         trustedDeviceCertificateSha256: String? = null,
     ): PatchOrchestrationResult {
         val inputDigests = extracted.allArtifacts().map(ExtractedApk::sha256)
+        val sourceSplitNames = extracted.splits.mapNotNull { it.inspection.splitName }.sorted()
         transactions.write(
             PatchTransaction(
                 id = extracted.transactionId,
@@ -161,6 +170,23 @@ internal class PatchOrchestrator(
         }.getOrElse {
             return fail(extracted.transactionId, PatchFailure.IncompletePackageSet, it.message ?: "最终安装集合无效。")
         }
+        runCatching {
+            PatchSplitSetPolicy.validateReplacement(sourceSplitNames, expectedSplitNames, profile.loaderSplitName)
+        }.onFailure {
+            return fail(extracted.transactionId, PatchFailure.IncompletePackageSet, it.message ?: "loader 替换集合无效。")
+        }
+        val installMode = when (val probe = gameProbe.probe()) {
+            GameProbeResult.NotInstalled -> PatchInstallMode.FreshInstall
+            is GameProbeResult.Failed -> return fail(extracted.transactionId, PatchFailure.SystemInstallFailed, probe.reason)
+            is GameProbeResult.Found -> if (
+                isSameDeviceInstallation(
+                    probe.snapshot,
+                    signedBase.inspection.versionCode,
+                    identity.certificateSha256,
+                    sourceSplitNames,
+                )
+            ) PatchInstallMode.SameDeviceOverwrite else PatchInstallMode.FreshInstall
+        }
         transactions.write(
             PatchTransaction(
                 id = extracted.transactionId,
@@ -172,6 +198,8 @@ internal class PatchOrchestrator(
                 expectedCertificateSha256 = identity.certificateSha256,
                 expectedVersionCode = signedBase.inspection.versionCode,
                 expectedSplitNames = expectedSplitNames,
+                sourceSplitNames = sourceSplitNames,
+                installMode = installMode,
                 signedArtifactNames = plan.artifacts.map(PatchArtifact::fileName),
             ),
         )
@@ -179,6 +207,7 @@ internal class PatchOrchestrator(
             transactionId = extracted.transactionId,
             expectedVersionCode = signedBase.inspection.versionCode,
             expectedCertificateSha256 = identity.certificateSha256,
+            sourceSplitNames = sourceSplitNames,
         )
     }
 
@@ -196,6 +225,7 @@ internal class PatchOrchestrator(
             transactionId = transactionId,
             expectedVersionCode = transaction.expectedVersionCode,
             expectedCertificateSha256 = transaction.expectedCertificateSha256,
+            sourceSplitNames = transaction.sourceSplitNames,
         )
     }
 
@@ -207,12 +237,26 @@ internal class PatchOrchestrator(
         }
         when (val probe = gameProbe.probe()) {
             is GameProbeResult.Found -> {
-                if (!isSameDeviceInstallation(probe.snapshot.versionCode, probe.snapshot.signerDigestsSha256, transaction.expectedVersionCode, transaction.expectedCertificateSha256)) {
+                val matchesBaseline = isSameDeviceInstallation(
+                    probe.snapshot,
+                    transaction.expectedVersionCode,
+                    transaction.expectedCertificateSha256,
+                    transaction.sourceSplitNames,
+                )
+                if (transaction.installMode == PatchInstallMode.SameDeviceOverwrite && !matchesBaseline) {
+                    return PatchOrchestrationResult.NeedsGameUninstall(
+                        transactionId,
+                        "准备后当前游戏版本、签名或 split 集发生变化，已取消直接覆盖。",
+                    )
+                }
+                if (transaction.installMode != PatchInstallMode.SameDeviceOverwrite) {
                     return PatchOrchestrationResult.NeedsGameUninstall(transactionId)
                 }
             }
             is GameProbeResult.Failed -> return fail(transactionId, PatchFailure.SystemInstallFailed, "无法确认当前游戏状态。")
-            GameProbeResult.NotInstalled -> Unit
+            GameProbeResult.NotInstalled -> if (transaction.installMode == PatchInstallMode.SameDeviceOverwrite) {
+                return fail(transactionId, PatchFailure.SystemInstallFailed, "准备覆盖的旧游戏已被移除，无法确认安装基线。")
+            }
         }
         if (!installer.canRequestInstalls()) {
             transactions.write(transaction.copy(stage = PatchStage.AwaitingInstallPermission))
@@ -265,27 +309,57 @@ internal class PatchOrchestrator(
         transactionId: String,
         expectedVersionCode: Long?,
         expectedCertificateSha256: String?,
+        sourceSplitNames: List<String>,
     ): PatchOrchestrationResult {
         val probe = gameProbe.probe()
         return when (probe) {
             GameProbeResult.NotInstalled -> if (!installer.canRequestInstalls()) {
                 transactions.read(transactionId)?.let { transactions.write(it.copy(stage = PatchStage.AwaitingInstallPermission)) }
                 PatchOrchestrationResult.NeedsInstallPermission(transactionId)
-            } else PatchOrchestrationResult.ReadyToInstall(transactionId, "已确认当前游戏未安装；可安装已准备的修补工件。")
+            } else {
+                transactions.read(transactionId)?.let {
+                    transactions.write(it.copy(installMode = PatchInstallMode.FreshInstall))
+                }
+                PatchOrchestrationResult.ReadyToInstall(
+                    transactionId,
+                    "已确认当前游戏未安装；可安装已准备的修补工件。",
+                    PatchInstallMode.FreshInstall,
+                )
+            }
             is GameProbeResult.Failed -> fail(transactionId, PatchFailure.SystemInstallFailed, "无法确认当前游戏状态。")
-            is GameProbeResult.Found -> if (isSameDeviceInstallation(probe.snapshot.versionCode, probe.snapshot.signerDigestsSha256, expectedVersionCode, expectedCertificateSha256)) {
-                PatchOrchestrationResult.ReadyToInstall(transactionId, "已检测到同一设备签名的游戏；可直接覆盖安装更新。")
-            } else PatchOrchestrationResult.NeedsGameUninstall(transactionId)
+            is GameProbeResult.Found -> if (isSameDeviceInstallation(
+                probe.snapshot,
+                expectedVersionCode,
+                expectedCertificateSha256,
+                sourceSplitNames,
+            )) {
+                transactions.read(transactionId)?.let {
+                    transactions.write(it.copy(installMode = PatchInstallMode.SameDeviceOverwrite))
+                }
+                PatchOrchestrationResult.ReadyToInstall(
+                    transactionId,
+                    "已验证同一设备签名、版本和 split 集；将直接覆盖更新旧 modloader。",
+                    PatchInstallMode.SameDeviceOverwrite,
+                )
+            } else {
+                PatchOrchestrationResult.NeedsGameUninstall(
+                    transactionId,
+                    "当前游戏不是同一设备签名且 split 完整匹配的旧迁移版；请先卸载后安装。",
+                )
+            }
         }
     }
 
     private fun isSameDeviceInstallation(
-        installedVersionCode: Long,
-        installedCertificate: Set<String>,
+        snapshot: com.sultansgame.modmanager.platform.game.InstalledGameSnapshot,
         expectedVersionCode: Long?,
         expectedCertificate: String?,
+        expectedSplitNames: List<String>,
     ): Boolean = expectedVersionCode != null && expectedCertificate != null &&
-        installedVersionCode == expectedVersionCode && installedCertificate == setOf(expectedCertificate)
+        snapshot.packageName == PackageManagerGameProbe.TARGET_PACKAGE &&
+        snapshot.versionCode == expectedVersionCode &&
+        snapshot.signerDigestsSha256 == setOf(expectedCertificate) &&
+        snapshot.splitNames == expectedSplitNames.toSet()
 
     private fun validatePreparedArtifacts(transaction: PatchTransaction): PreparedArtifactsValidation {
         val expectedCertificate = transaction.expectedCertificateSha256
@@ -303,6 +377,14 @@ internal class PatchOrchestrator(
         val expectedSplits = transaction.expectedSplitNames
         if (expectedSplits.any(String::isBlank) || expectedSplits.distinct().size != expectedSplits.size || expectedSplits.size != artifactNames.size - 1) {
             return PreparedArtifactsValidation.Invalid(PatchFailure.InternalError, "修补事务 split 集合无效。")
+        }
+        if (transaction.sourceSplitNames.any(String::isBlank) || transaction.sourceSplitNames.distinct().size != transaction.sourceSplitNames.size) {
+            return PreparedArtifactsValidation.Invalid(PatchFailure.InternalError, "修补事务源 split 集合无效。")
+        }
+        runCatching {
+            PatchSplitSetPolicy.validateReplacement(transaction.sourceSplitNames, expectedSplits, "modloader")
+        }.onFailure {
+            return PreparedArtifactsValidation.Invalid(PatchFailure.InternalError, it.message ?: "修补事务 split 替换关系无效。")
         }
         val signedDirectory = File(transactions.root(transaction.id), "signed")
         val artifacts = artifactNames.map { name ->
@@ -324,10 +406,10 @@ internal class PatchOrchestrator(
         val result = signer.sign(input.file, output, identity)
         if (result !is ApkSigningResult.Signed || !result.verifiedV1 || !result.verifiedV2) return null
         val parsed = archiveInspector.inspect(output, output.name)
-        if (parsed.signerDigestsSha256 != setOf(identity.certificateSha256)) return null
-        if ((parsed.packageName != null && parsed.packageName != input.inspection.packageName) ||
-            (parsed.versionCode != null && parsed.versionCode != input.inspection.versionCode) ||
-            (parsed.splitName != null && parsed.splitName != input.inspection.splitName)
+        if (parsed.signerDigestsSha256 != setOf(identity.certificateSha256) ||
+            parsed.packageName != input.inspection.packageName ||
+            parsed.versionCode != input.inspection.versionCode ||
+            parsed.splitName != input.inspection.splitName
         ) return null
         val inspection = parsed.copy(
             packageName = input.inspection.packageName,

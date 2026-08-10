@@ -77,6 +77,7 @@ sealed interface PatchUiState {
     data class ReadyToInstall(
         val transactionId: String,
         val summary: String,
+        val installMode: com.sultansgame.modmanager.model.PatchInstallMode = com.sultansgame.modmanager.model.PatchInstallMode.FreshInstall,
     ) : PatchUiState
     data class SubmittingInstall(val transactionId: String) : PatchUiState
     data class AwaitingInstallPermission(
