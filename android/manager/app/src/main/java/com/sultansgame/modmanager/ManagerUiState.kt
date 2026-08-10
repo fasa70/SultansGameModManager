@@ -38,6 +38,8 @@ data class ManagerUiState(
     val autoUpdateCheckEnabled: Boolean? = null,
     val availableUpdate: AvailableUpdate? = null,
     val pendingExternalZip: ExternalZipImportRequest? = null,
+    val pendingZipPassword: Boolean = false,
+    val zipImportInProgress: Boolean = false,
     val feedback: FeedbackMessage? = null,
 )
 

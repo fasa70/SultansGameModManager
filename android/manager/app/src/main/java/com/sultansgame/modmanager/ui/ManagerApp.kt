@@ -151,6 +151,7 @@ data class ManagerActions(
     val openAvailableUpdate: () -> Unit,
     val clearFeedback: () -> Unit,
     val confirmExternalZipImport: () -> Unit,
+    val submitZipPassword: (CharArray) -> Unit,
     val cancelExternalZipImport: () -> Unit,
 )
 
@@ -174,6 +175,7 @@ private sealed interface DialogKind {
     data object UpdateAvailable : DialogKind
     data class WorkshopTaskRemoval(val taskId: String) : DialogKind
     data object ExternalZipImport : DialogKind
+    data object ZipPasswordImport : DialogKind
 }
 
 @Composable
@@ -209,6 +211,10 @@ fun ManagerApp(state: ManagerUiState, actions: ManagerActions) {
 
     LaunchedEffect(state.pendingExternalZip) {
         if (state.pendingExternalZip != null) dialog = DialogKind.ExternalZipImport
+    }
+
+    LaunchedEffect(state.pendingZipPassword) {
+        if (state.pendingZipPassword) dialog = DialogKind.ZipPasswordImport
     }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)) {
@@ -256,6 +262,7 @@ fun ManagerApp(state: ManagerUiState, actions: ManagerActions) {
         onDismiss = {
             if (dialog == DialogKind.UpdateAvailable) actions.dismissAvailableUpdate()
             if (dialog == DialogKind.ExternalZipImport) actions.cancelExternalZipImport()
+            if (dialog == DialogKind.ZipPasswordImport) actions.cancelExternalZipImport()
             dialog = null
         },
     )
@@ -485,19 +492,19 @@ internal fun PatchConfirmation.withSinglePatchConfirmation(confirmed: Boolean): 
 
 internal fun PatchUiState.toStartOperationStatus(): StartOperationStatus? = when (this) {
     is PatchUiState.Importing -> StartOperationStatus(
-        title = "正在导入游戏安装包",
-        body = "请不要关闭应用。",
+        title = "正在导入游戏安装文件",
+        body = "${label} 请不要关闭应用。",
     )
     is PatchUiState.Preparing -> StartOperationStatus(
-        title = "正在修补游戏安装包",
-        body = "请不要关闭应用。",
+        title = "正在准备修补文件",
+        body = "正在安全处理 ${input.sourceLabel}，请不要关闭应用。",
     )
     is PatchUiState.SubmittingInstall -> StartOperationStatus(
         title = "正在请求系统安装",
         body = "请稍候，系统安装确认页面即将打开。",
     )
     is PatchUiState.AwaitingSystemInstall -> StartOperationStatus(
-        title = "正在等待系统安装",
+        title = "正在等待系统安装确认",
         body = "请在系统页面完成操作；完成后返回此处继续核验。",
     )
     else -> null
@@ -949,15 +956,65 @@ private fun DialogHost(state: ManagerUiState, actions: ManagerActions, dialog: D
             if (task != null) ConfirmDialog("删除下载任务？", "这会停止任务并删除应用内下载暂存", "删除任务", { actions.removeWorkshopDownload(task.id); onDismiss() }, onDismiss)
         }
         DialogKind.ExternalZipImport -> state.pendingExternalZip?.let { request ->
-            ConfirmDialog(
-                "导入外部 ZIP？",
-                "将检查 ${request.displayName} 并把通过校验的 Mod 安全缓存到应用内；不会自动修改游戏。",
-                "检查并导入",
-                { actions.confirmExternalZipImport(); onDismiss() },
-                { actions.cancelExternalZipImport(); onDismiss() },
+            if (state.pendingZipPassword) {
+                ZipPasswordDialog(
+                    request.displayName,
+                    state.zipImportInProgress,
+                    actions.submitZipPassword,
+                    actions.cancelExternalZipImport,
+                    onDismiss,
+                )
+            } else {
+                ConfirmDialog(
+                    "导入外部 ZIP？",
+                    "将检查 ${request.displayName} 并把通过校验的 Mod 安全缓存到应用内；不会自动修改游戏。",
+                    "检查并导入",
+                    { actions.confirmExternalZipImport(); onDismiss() },
+                    { actions.cancelExternalZipImport(); onDismiss() },
+                )
+            }
+        }
+        DialogKind.ZipPasswordImport -> state.pendingExternalZip?.let { request ->
+            ZipPasswordDialog(
+                request.displayName,
+                state.zipImportInProgress,
+                actions.submitZipPassword,
+                actions.cancelExternalZipImport,
+                onDismiss,
             )
         }
         null -> Unit
+    }
+}
+
+@Composable
+private fun ZipPasswordDialog(
+    displayName: String,
+    busy: Boolean,
+    onSubmit: (CharArray) -> Unit,
+    onCancel: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var password by remember { mutableStateOf("") }
+    Dialog(onDismissRequest = { if (!busy) { password = ""; onDismiss() } }) {
+        Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(22.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("输入 ZIP 密码", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Text("$displayName 已加密。密码仅用于本次解压，不会保存。", fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                LabeledTextField(password, { password = it }, "ZIP 密码", password = true)
+                if (busy) LoadingPanel("正在解压并校验 ZIP")
+                PrimaryButton("检查并导入", password.isNotEmpty() && !busy) {
+                    val supplied = password.toCharArray()
+                    password = ""
+                    onSubmit(supplied)
+                }
+                SecondaryButton("取消并删除文件", !busy) {
+                    password = ""
+                    onCancel()
+                    onDismiss()
+                }
+            }
+        }
     }
 }
 

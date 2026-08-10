@@ -10,41 +10,64 @@ import com.sultansgame.modmanager.storage.ImportValidationException
 import com.sultansgame.modmanager.storage.MAXIMUM_MOD_ENTRY_COUNT
 import com.sultansgame.modmanager.storage.MAXIMUM_MOD_TOTAL_SIZE_BYTES
 import com.sultansgame.modmanager.storage.ModPathPolicy
+import net.lingala.zip4j.ZipFile
 import java.io.File
-import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.io.FilterInputStream
-import java.io.InputStream
 import java.util.Locale
 import java.util.UUID
-import java.util.zip.ZipInputStream
+
+sealed class ZipImportException(message: String) : IllegalArgumentException(message) {
+    class PasswordRequired : ZipImportException("ZIP 需要密码")
+    class InvalidPasswordOrEncryptedData : ZipImportException("ZIP 密码错误或加密内容已损坏")
+    class InvalidArchive : ZipImportException("ZIP 格式无效或内容已损坏")
+}
+
+data class ZipArchiveInspection(val passwordRequired: Boolean)
 
 class ZipModImporter(
     private val context: Context,
     private val cache: AndroidPrivateModCache,
 ) {
-    fun importZip(uri: Uri): List<CachedMod> = context.contentResolver.openInputStream(uri)
-        ?.use { source -> importZipStream(source, allowMultipleRoots = true) }
-        ?: throw ImportValidationException("无法读取所选 ZIP")
-
-    fun importZip(file: File): List<CachedMod> {
-        if (!file.isFile) throw ImportValidationException("外部 ZIP 文件不可读")
-        return FileInputStream(file).use { source -> importZipStream(source, allowMultipleRoots = true) }
-    }
-
-    fun importDownloadedZip(file: File): CachedMod {
-        if (!file.isFile) throw ImportValidationException("下载的 ZIP 不可读")
-        return FileInputStream(file).use { source ->
-            importZipStream(source, allowMultipleRoots = false).single()
+    fun inspect(file: File): ZipArchiveInspection {
+        validateArchiveFile(file)
+        return try {
+            ZipFile(file).use { zip -> ZipArchiveInspection(zip.isEncrypted) }
+        } catch (_: Exception) {
+            throw ZipImportException.InvalidArchive()
         }
     }
 
-    private fun importZipStream(source: InputStream, allowMultipleRoots: Boolean): List<CachedMod> {
+    fun importZip(uri: Uri): List<CachedMod> {
+        val temporary = File(context.cacheDir, ".zip-import-${UUID.randomUUID()}.zip")
+        try {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(temporary).use { output ->
+                    copyBounded(input, output)
+                    output.fd.sync()
+                }
+            } ?: throw ImportValidationException("无法读取所选 ZIP")
+            return importZip(temporary)
+        } finally {
+            temporary.delete()
+        }
+    }
+
+    fun importZip(file: File, password: CharArray? = null): List<CachedMod> {
+        validateArchiveFile(file)
+        return importZipFile(file, allowMultipleRoots = true, password = password)
+    }
+
+    fun importDownloadedZip(file: File, password: CharArray? = null): CachedMod {
+        validateArchiveFile(file)
+        return importZipFile(file, allowMultipleRoots = false, password = password).single()
+    }
+
+    private fun importZipFile(file: File, allowMultipleRoots: Boolean, password: CharArray?): List<CachedMod> {
         val stagingRoot = File(context.filesDir, "mod-cache")
         if (!stagingRoot.mkdirs() && !stagingRoot.isDirectory) throw ImportValidationException("无法创建私有导入目录")
         val staging = File(stagingRoot, ".${UUID.randomUUID()}.partial")
         try {
-            extractZip(source, staging)
+            extractZip(file, staging, password)
             val roots = resolveModRoots(staging)
             if (!allowMultipleRoots && roots.size != 1) {
                 throw ImportValidationException("下载的 ZIP 必须只包含一个 Mod 根目录")
@@ -56,16 +79,32 @@ class ZipModImporter(
         }
     }
 
-    private fun extractZip(source: InputStream, root: File) {
+    private fun extractZip(file: File, root: File, password: CharArray?) {
         if (!root.mkdirs() && !root.isDirectory) throw ImportValidationException("无法创建私有导入目录")
         val paths = mutableSetOf<String>()
         val caseFoldedPaths = mutableSetOf<String>()
         var entries = 0
         var totalSize = 0L
-        ZipInputStream(BoundedInputStream(source)).use { zip ->
-            while (true) {
-                val entry = zip.nextEntry ?: break
-                val normalized = normalizeEntry(entry.name)
+        val zip = try {
+            ZipFile(file).apply {
+                if (isEncrypted) {
+                    if (password == null) throw ZipImportException.PasswordRequired()
+                    setPassword(password)
+                }
+            }
+        } catch (error: ZipImportException) {
+            throw error
+        } catch (_: Exception) {
+            throw ZipImportException.InvalidArchive()
+        }
+        zip.use { archive ->
+            val headers = try {
+                archive.fileHeaders
+            } catch (_: Exception) {
+                throw ZipImportException.InvalidArchive()
+            }
+            headers.forEach { entry ->
+                val normalized = normalizeEntry(entry.fileName)
                 if (++entries > MAXIMUM_MOD_ENTRY_COUNT) throw ImportValidationException("文件或目录数量超出限制")
                 if (!paths.add(normalized) || !caseFoldedPaths.add(normalized.lowercase(Locale.ROOT))) {
                     throw ImportValidationException("ZIP 包含重复或大小写冲突路径")
@@ -78,23 +117,47 @@ class ZipModImporter(
                     if (!destination.mkdirs() && !destination.isDirectory) throw ImportValidationException("无法创建 ZIP 目录")
                 } else {
                     destination.parentFile?.mkdirs()
-                    FileOutputStream(destination).use { output ->
-                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                        var fileSize = 0L
-                        while (true) {
-                            val count = zip.read(buffer)
-                            if (count < 0) break
-                            fileSize += count
-                            if (!ModPathPolicy.isSupportedSize(fileSize, normalized)) throw ImportValidationException("ZIP 文件大小超出限制")
-                            totalSize = Math.addExact(totalSize, count.toLong())
-                            if (totalSize > MAXIMUM_MOD_TOTAL_SIZE_BYTES) throw ImportValidationException("ZIP 总大小超出限制")
-                            output.write(buffer, 0, count)
+                    try {
+                        archive.getInputStream(entry).use { input ->
+                            FileOutputStream(destination).use { output ->
+                                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                                var fileSize = 0L
+                                while (true) {
+                                    val count = input.read(buffer)
+                                    if (count < 0) break
+                                    fileSize += count
+                                    if (!ModPathPolicy.isSupportedSize(fileSize, normalized)) throw ImportValidationException("ZIP 文件大小超出限制")
+                                    totalSize = Math.addExact(totalSize, count.toLong())
+                                    if (totalSize > MAXIMUM_MOD_TOTAL_SIZE_BYTES) throw ImportValidationException("ZIP 总大小超出限制")
+                                    output.write(buffer, 0, count)
+                                }
+                                output.fd.sync()
+                            }
                         }
-                        output.fd.sync()
+                    } catch (error: ImportValidationException) {
+                        throw error
+                    } catch (_: Exception) {
+                        throw if (archive.isEncrypted) ZipImportException.InvalidPasswordOrEncryptedData() else ZipImportException.InvalidArchive()
                     }
                 }
-                zip.closeEntry()
             }
+        }
+    }
+
+    private fun validateArchiveFile(file: File) {
+        if (!file.isFile) throw ImportValidationException("ZIP 文件不可读")
+        if (file.length() > MAXIMUM_ARCHIVE_SIZE_BYTES) throw ImportValidationException("ZIP 原始文件大小超出限制")
+    }
+
+    private fun copyBounded(input: java.io.InputStream, output: FileOutputStream) {
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        var total = 0L
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) return
+            total = Math.addExact(total, count.toLong())
+            if (total > MAXIMUM_ARCHIVE_SIZE_BYTES) throw ImportValidationException("ZIP 原始文件大小超出限制")
+            output.write(buffer, 0, count)
         }
     }
 
@@ -117,29 +180,6 @@ class ZipModImporter(
 
     private fun hasManifest(directory: File): Boolean = directory.listFiles()
         ?.count { it.isFile && it.name.equals("info.json", ignoreCase = true) } == 1
-
-    private class BoundedInputStream(input: InputStream) : FilterInputStream(input) {
-        private var total = 0L
-
-        override fun read(): Int {
-            val value = super.read()
-            if (value >= 0) checkSize(1)
-            return value
-        }
-
-        override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
-            val count = super.read(buffer, offset, length)
-            if (count > 0) checkSize(count)
-            return count
-        }
-
-        private fun checkSize(count: Int) {
-            total = Math.addExact(total, count.toLong())
-            if (total > MAXIMUM_ARCHIVE_SIZE_BYTES) {
-                throw ImportValidationException("ZIP 原始文件大小超出限制")
-            }
-        }
-    }
 
     private companion object {
         const val MAXIMUM_ARCHIVE_SIZE_BYTES = 512L * 1024 * 1024

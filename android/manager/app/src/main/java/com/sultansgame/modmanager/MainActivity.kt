@@ -129,6 +129,7 @@ class MainActivity : ComponentActivity() {
                         openAvailableUpdate = viewModel::openAvailableUpdate,
                         clearFeedback = viewModel::clearFeedback,
                         confirmExternalZipImport = viewModel::confirmExternalZipImport,
+                        submitZipPassword = viewModel::submitZipPassword,
                         cancelExternalZipImport = viewModel::cancelExternalZipImport,
                     ),
                 )
