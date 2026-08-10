@@ -7,9 +7,9 @@
 | JDK | 21 | Required for Kotlin compilation |
 | Android SDK | 35 | API level for loader/template and compilation |
 | Android NDK | 27.0+ | ARM64 cross-compilation toolchain |
-| CMake | 3.22+ | Native build system |
-| Ninja | (any) | Build executor |
-| Gradle | (via wrapper) | `./gradlew` in `android/manager/` |
+| CMake | 3.22+ | Native build system; SDK CMake is auto-detected |
+| Ninja | (any) | Auto-detected from PATH or SDK CMake |
+| Gradle | (via wrapper) | Run with `bash ./gradlew` in Git Bash |
 
 ## Quick Start
 
@@ -22,7 +22,15 @@ export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/<ndk-version>"
 bash scripts/build-release.sh
 ```
 
-The pipeline always configures a clean release native build with the official backend and all UI/URI/Texture/TMP gates enabled, builds the protocol v2 Bootstrap AAR, generates a validated candidate template, atomically publishes the frozen template, updates its public identity pins, and finally assembles the signed Manager APK. Passing `-PmodloaderBinary` to `:app:assembleRelease` alone does not rebuild the loader template.
+On Windows Git Bash, use POSIX paths or quoted paths with spaces, for example:
+
+```bash
+JAVA_HOME='path/to/jdk-21' \
+ANDROID_HOME='path/to/Sdk' \
+bash scripts/build-release-local.sh
+```
+
+The local wrapper only discovers machine-specific JDK/SDK/NDK defaults. The tracked pipeline auto-detects CMake, Ninja, AAPT2, D8, `apksigner`, and `llvm-readelf`; all Python file operations use UTF-8. It stages the candidate and digest pins, verifies the complete closure, applies them transactionally, assembles the signed Manager APK, verifies the APK, and rolls the release files back if a later step fails. Do not run it in a worktree with uncommitted release target files.
 
 The native and template identities are recorded in `release/loader-template-10005.json`. Do not hand-edit only one digest pin: the frozen APK, metadata, production profile, factory, and Android test fixture must change together.
 
@@ -40,15 +48,15 @@ MODLOADER_OFFICIAL_TMP_GLYPH_HOOKS=ON
 CMAKE_BUILD_TYPE=Release
 ```
 
-The resulting `libmodloader.so` must be ELF64/AArch64, have `Align 0x4000` on every `PT_LOAD`, and contain no `TEXTREL`. Native source or CMake changes require rebuilding the Bootstrap AAR and frozen template before a Manager release.
+The resulting `libmodloader.so` must be ELF64/AArch64, have `Align 0x4000` on every `PT_LOAD`, and contain no `TEXTREL`. The release script enforces these checks with `llvm-readelf` and retains the report when a build fails. Native source or CMake changes require rebuilding the Bootstrap AAR and frozen template before a Manager release.
 
 ## Building the loader split manually
 
-Use this only when debugging a stage of the tracked pipeline:
+Use this only when debugging a stage of the tracked pipeline. On Windows Git Bash, use `.exe`/`.bat` tool names where applicable and quote every path containing spaces:
 
 ```bash
 cd android/manager
-./gradlew :bootstrap:assembleRelease \
+bash ./gradlew :bootstrap:assembleRelease \
   -PmanagerCertificateSha256=<64-lowercase-hex-characters> \
   -PmodloaderBinary=../../native/build-android-release/libmodloader.so
 
@@ -56,8 +64,8 @@ python ../bootstrap/build_split_template.py \
   --bootstrap-aar ../bootstrap/build/outputs/aar/bootstrap-release.aar \
   --bootstrap-manifest ../bootstrap/src/main/AndroidManifest.xml \
   --android-jar "$ANDROID_HOME/platforms/android-35/android.jar" \
-  --aapt2 "$ANDROID_HOME/build-tools/<version>/aapt2" \
-  --d8 "$ANDROID_HOME/build-tools/<version>/d8" \
+  --aapt2 "$ANDROID_HOME/build-tools/<version>/aapt2.exe" \
+  --d8 "$ANDROID_HOME/build-tools/<version>/d8.bat" \
   --output app/build/release-stage/modloader-template-10005.apk \
   --version-code 10005 --version-name 1.0.5
 
@@ -71,11 +79,11 @@ The generator validates the Bootstrap manifest contract, required APK entries, u
 ## Verification commands
 
 ```bash
+PYTHONPATH=scripts python -X utf8 scripts/verify-loader-template.py --root .
+PYTHONPATH=scripts python -X utf8 scripts/verify-loader-template.py \
+  --root . --manager-apk android/manager/app/build/outputs/apk/release/app-release.apk
 unzip -t android/manager/app/src/main/assets/release/modloader-template-10005.apk
-unzip -lv android/manager/app/src/main/assets/release/modloader-template-10005.apk
 sha256sum android/manager/app/src/main/assets/release/modloader-template-10005.apk
-unzip -p android/manager/app/src/main/assets/release/modloader-template-10005.apk \
-  assets/modloader/arm64-v8a/modloader.bin | sha256sum
 ```
 
 The template must remain unsigned and its native entry must be stored rather than deflated. Manager patching independently rechecks the full template and embedded native digest before signing.
@@ -84,7 +92,7 @@ The template must remain unsigned and its native entry must be stored rather tha
 
 ```bash
 cd android/manager
-./gradlew :core:model:test :core:storage:test :core:apk:test :core:workshop:test \
+bash ./gradlew :core:model:test :core:storage:test :core:apk:test :core:workshop:test \
   :core:steam-protocol:test :core:workshop-download:test :app:testDebugUnitTest
 ```
 
