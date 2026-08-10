@@ -25,6 +25,20 @@ class InfoJsonValidatorTest {
     }
 
     @Test
+    fun `accepts arbitrary tags`() {
+        val manifest = validator.parse(
+            """
+            {
+              "name": "示例 Mod",
+              "tags": ["任意标签", "", "任意标签"],
+            }
+            """.trimIndent().toByteArray(),
+        )
+
+        assertEquals(listOf("任意标签", "", "任意标签"), manifest.tags)
+    }
+
+    @Test
     fun `rejects duplicate root fields`() {
         assertThrows(InvalidManifestException::class.java) {
             validator.parse("{\"name\":\"a\",\"name\":\"b\"}".toByteArray())
