@@ -541,7 +541,7 @@ private fun startPresentation(state: ManagerUiState): StartPresentation = when (
     }
     is PatchUiState.Preparing -> StartPresentation("正在修补游戏", "请不要关闭应用。", "正在修补…", false, diagnostics = "修补中的安装文件：${patch.input.sourceLabel}", primaryAction = { {} })
     is PatchUiState.AwaitingOriginalUninstall -> StartPresentation("请先卸载原游戏", "修补已完成。请在系统页面卸载当前游戏，返回后再继续安装。", "打开系统卸载页面", diagnostics = patch.summary, primaryAction = { actions -> { actions.requestOriginalUninstall(patch.transactionId) } })
-    is PatchUiState.ReadyToInstall -> StartPresentation("可以安装 Mod 支持版游戏", "修补已完成。请在系统页面确认安装", "调用系统安装器", diagnostics = patch.summary, primaryAction = { actions -> { actions.installPreparedArtifacts(patch.transactionId) } })
+    is PatchUiState.ReadyToInstall -> StartPresentation("可以安装 Mod 支持版游戏", patch.summary, "调用系统安装器", diagnostics = patch.summary, primaryAction = { actions -> { actions.installPreparedArtifacts(patch.transactionId) } })
     is PatchUiState.SubmittingInstall -> StartPresentation("正在打开系统安装", "请稍候，马上会转到系统安装确认。", "正在处理…", false, diagnostics = patch.transactionId, primaryAction = { {} })
     is PatchUiState.AwaitingInstallPermission -> StartPresentation("需要允许安装应用权限", "请在系统设置允许此应用安装游戏", "前往系统设置", diagnostics = "准备事务：${patch.transactionId ?: "尚未创建"}", primaryAction = { it.openUnknownSourcesSettings })
     is PatchUiState.AwaitingSystemInstall -> StartPresentation("请在系统页面完成安装", "安装完成后回到这里，应用会核验游戏是否已准备好。", "等待安装", false, diagnostics = patch.transactionId, primaryAction = { {} })

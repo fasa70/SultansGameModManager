@@ -18,6 +18,7 @@ data class InstalledGameSnapshot(
     val versionCode: Long,
     val versionName: String?,
     val signerDigestsSha256: Set<String>,
+    val splitNames: Set<String>,
     val artifacts: InstalledGameArtifacts,
     val compatibility: CompatibilityReport,
 )
@@ -31,13 +32,13 @@ sealed interface GameProbeResult {
 class PackageManagerGameProbe(private val context: Context) {
     fun probe(): GameProbeResult = runCatching {
         val packageInfo = packageInfoFor(TARGET_PACKAGE)
-        val digests = packageInfo.signerDigests()
         GameProbeResult.Found(
             InstalledGameSnapshot(
                 packageName = packageInfo.packageName,
                 versionCode = packageInfo.versionCodeCompat(),
                 versionName = packageInfo.versionName,
-                signerDigestsSha256 = digests,
+                signerDigestsSha256 = packageInfo.signerDigests(),
+                splitNames = packageInfo.splitNames.orEmpty().toSet(),
                 artifacts = InstalledGameArtifacts(
                     baseApkPath = requireNotNull(packageInfo.applicationInfo?.sourceDir) { "游戏未提供 base APK 路径" },
                     splitApkPaths = packageInfo.applicationInfo?.splitSourceDirs.orEmpty().sorted(),
@@ -61,14 +62,8 @@ class PackageManagerGameProbe(private val context: Context) {
         snapshot.packageName == TARGET_PACKAGE &&
             snapshot.versionCode == expectedVersionCode &&
             snapshot.signerDigestsSha256 == setOf(expectedCertificateSha256) &&
-            installedSplitNames().containsAll(expectedSplitNames)
+            snapshot.splitNames == expectedSplitNames
     } == true
-
-    @Suppress("DEPRECATION")
-    private fun installedSplitNames(): Set<String> = packageInfoFor(TARGET_PACKAGE)
-        .splitNames
-        .orEmpty()
-        .toSet()
 
     @Suppress("DEPRECATION")
     private fun packageInfoFor(packageName: String): PackageInfo = when {
@@ -102,7 +97,7 @@ class PackageManagerGameProbe(private val context: Context) {
         }.toSet()
     }
 
-    private companion object {
+    companion object {
         const val TARGET_PACKAGE = "com.gametree.sultan.pd"
     }
 }

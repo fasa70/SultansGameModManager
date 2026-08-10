@@ -42,9 +42,12 @@ data class GameProfile(
     val providerProtocolVersion: Int? = null,
     val signingRequirement: ApkSigningRequirement = ApkSigningRequirement(),
 ) {
-    fun matchesVerified(inspection: ApkInspection): Boolean =
+    fun matchesVerified(
+        inspection: ApkInspection,
+        availableAbis: Set<String> = inspection.supportedAbis,
+    ): Boolean =
         inspection.packageName in packageNames &&
-            requiredAbi in inspection.supportedAbis &&
+            requiredAbi in availableAbis &&
             inspection.signerDigestsSha256.any(signingDigestsSha256::contains) &&
             versionCodes.isNotEmpty() && inspection.versionCode in versionCodes
 }
