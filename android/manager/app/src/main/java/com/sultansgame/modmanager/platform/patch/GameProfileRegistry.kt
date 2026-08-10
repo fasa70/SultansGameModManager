@@ -17,21 +17,22 @@ internal class GameProfileRegistry(
 
     fun classify(
         source: PatchSource,
-        base: ApkInspection,
+        extracted: ExtractedApkSet,
         trustedDeviceCertificateSha256: String? = null,
     ): PatchInputClassification {
+        val base = extracted.base.inspection
         if (base.packageName != TARGET_PACKAGE) {
             return unsupported(source, "包名不是目标游戏。")
         }
-        if (REQUIRED_ABI !in base.supportedAbis) {
-            return unsupported(source, "APK 不包含 $REQUIRED_ABI。")
+        if (REQUIRED_ABI !in extracted.supportedAbis) {
+            return unsupported(source, "安装集合不包含 $REQUIRED_ABI。")
         }
         val profile = profiles.firstOrNull { candidate ->
             candidate.isComplete() && (
-                candidate.matchesVerified(base) ||
+                candidate.matchesVerified(base, extracted.supportedAbis) ||
                     (trustedDeviceCertificateSha256 != null &&
                         base.packageName in candidate.packageNames &&
-                        candidate.requiredAbi in base.supportedAbis &&
+                        candidate.requiredAbi in extracted.supportedAbis &&
                         base.versionCode in candidate.versionCodes &&
                         trustedDeviceCertificateSha256 in base.signerDigestsSha256)
                 )
@@ -47,6 +48,22 @@ internal class GameProfileRegistry(
             unsupported(source, "未命中可安全修补的已冻结游戏 profile。")
         }
     }
+
+    @Deprecated("Use the complete APK set overload")
+    fun classify(
+        source: PatchSource,
+        base: ApkInspection,
+        trustedDeviceCertificateSha256: String? = null,
+    ): PatchInputClassification = classify(
+        source,
+        ExtractedApkSet(
+            transactionId = "legacy",
+            root = java.io.File("."),
+            base = ExtractedApk(java.io.File("."), base, ""),
+            splits = emptyList(),
+        ),
+        trustedDeviceCertificateSha256,
+    )
 
     private fun unsupported(source: PatchSource, reason: String) = PatchInputClassification(
         source = source,

@@ -2,7 +2,6 @@ package com.sultansgame.modmanager.platform.patch
 
 import android.content.Context
 import com.sultansgame.modmanager.apk.ReadOnlyApkInspector
-import com.sultansgame.modmanager.model.ApkInspection
 import com.sultansgame.modmanager.split.LoaderSplitArtifact
 import com.sultansgame.modmanager.split.LoaderSplitRequest
 import com.sultansgame.modmanager.split.LoaderSplitResult
@@ -20,6 +19,7 @@ internal class AndroidLoaderSplitArtifactFactory(
 
     override fun build(request: LoaderSplitRequest): LoaderSplitResult = runCatching {
         require(request.targetApplicationId == GAME_PACKAGE) { "loader split 目标包名不匹配" }
+        require(request.loaderSplitName == SPLIT_NAME) { "loader split 名称与冻结模板不匹配" }
         require(request.target.versionCode != null) { "目标 APK 缺少版本号" }
         require(request.loaderTemplateSha256 == TEMPLATE_SHA256) { "loader split 模板摘要不匹配" }
         val destination = File(request.templateOutputPath).canonicalFile
@@ -40,13 +40,13 @@ internal class AndroidLoaderSplitArtifactFactory(
         require(parsed.versionCode == null || parsed.versionCode == request.target.versionCode) {
             "loader split 版本与 base 不一致"
         }
-        require(parsed.splitName == null || parsed.splitName == SPLIT_NAME) { "loader split 名称不匹配" }
+        require(parsed.splitName == null || parsed.splitName == request.loaderSplitName) { "loader split 名称不匹配" }
         require(parsed.signerDigestsSha256.isEmpty()) { "loader split 模板必须未签名" }
         val inspection = parsed.copy(
             packageName = GAME_PACKAGE,
             versionCode = request.target.versionCode,
             versionName = request.target.versionName,
-            splitName = SPLIT_NAME,
+            splitName = request.loaderSplitName,
         )
         val nativeDigest = nativeDigest(destination)
         require(nativeDigest == expectedNativeSha256) { "loader split native 摘要不匹配" }
@@ -57,10 +57,10 @@ internal class AndroidLoaderSplitArtifactFactory(
                 sizeBytes = destination.length(),
                 inspection = inspection,
             ),
-            splitName = SPLIT_NAME,
+            splitName = request.loaderSplitName,
             verificationSummary = listOf(
                 "模板摘要已验证",
-                "同包名 split=$SPLIT_NAME",
+                "同包名 split=${request.loaderSplitName}",
                 "native 摘要已验证",
             ),
         )

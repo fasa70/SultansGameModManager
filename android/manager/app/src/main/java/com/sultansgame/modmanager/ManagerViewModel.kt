@@ -126,6 +126,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         val source: PatchSource,
         val extracted: com.sultansgame.modmanager.platform.patch.ExtractedApkSet,
         val uiModel: PatchInputUiModel,
+        val trustedDeviceCertificateSha256: String?,
     )
 
     private var workshopBrowseJob: Job? = null
@@ -921,7 +922,12 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             mutableState.value = mutableState.value.copy(patch = PatchUiState.Preparing(review.input))
             val result = withContext(Dispatchers.IO) {
-                orchestrator.submit(selected.source, selected.extracted, review.confirmation)
+                orchestrator.submit(
+                    selected.source,
+                    selected.extracted,
+                    review.confirmation,
+                    selected.trustedDeviceCertificateSha256,
+                )
             }
             applyOrchestrationResult(result, review.input, review.confirmation)
         }
@@ -1093,10 +1099,11 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             mutableState.value = mutableState.value.copy(patch = PatchUiState.Importing(progressLabel))
             runCatching { withContext(Dispatchers.IO) { importer() } }
                 .onSuccess { extracted ->
+                    val trustedDeviceCertificateSha256 = deviceSigningKeyStore.certificateSha256()
                     val classification = profileRegistry.classify(
                         source,
-                        extracted.base.inspection,
-                        trustedDeviceCertificateSha256 = deviceSigningKeyStore.certificateSha256(),
+                        extracted,
+                        trustedDeviceCertificateSha256 = trustedDeviceCertificateSha256,
                     )
                     val inspection = extracted.base.inspection
                     val input = PatchInputUiModel(
@@ -1107,7 +1114,12 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                         signerSummary = inspection.signerDigestsSha256.firstOrNull()?.take(12)?.plus("…") ?: "未读取到签名",
                         classification = classification,
                     )
-                    selectedPatchInput = SelectedPatchInput(source, extracted, input)
+                    selectedPatchInput = SelectedPatchInput(
+                        source = source,
+                        extracted = extracted,
+                        uiModel = input,
+                        trustedDeviceCertificateSha256 = trustedDeviceCertificateSha256,
+                    )
                     mutableState.value = mutableState.value.copy(patch = PatchUiState.Review(input))
                     refreshPatchWorkspaceState()
                 }
@@ -1139,6 +1151,10 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                 transactionId = result.transactionId,
                 input = input,
                 confirmation = confirmation,
+            )
+            is PatchOrchestrationResult.ReadyToInstall -> PatchUiState.ReadyToInstall(
+                result.transactionId,
+                result.summary,
             )
             is PatchOrchestrationResult.NeedsGameUninstall -> {
                 val currentGameState = withContext(Dispatchers.IO) { gameProbe.probe() }

@@ -24,7 +24,10 @@ data class ExtractedApkSet(
     val root: File,
     val base: ExtractedApk,
     val splits: List<ExtractedApk>,
-)
+) {
+    val supportedAbis: Set<String>
+        get() = (listOf(base) + splits).flatMapTo(linkedSetOf()) { it.inspection.supportedAbis }
+}
 
 class InstalledApkExtractor(private val context: Context) {
     private val archiveInspector = AndroidApkArchiveInspector(context)
@@ -39,16 +42,21 @@ class InstalledApkExtractor(private val context: Context) {
                 requireNotNull(applicationInfo.sourceDir) { "游戏未提供 base APK 路径" },
                 File(root, "base.apk"),
             )
-            val sourceSplits = applicationInfo.splitSourceDirs.orEmpty().sorted()
-            val splitNames = packageInfo.splitNames.orEmpty().sorted()
-            require(sourceSplits.size == splitNames.size) { "游戏 split 元数据不完整" }
+            val sourceSplits = applicationInfo.splitSourceDirs.orEmpty()
+            val declaredSplitNames = packageInfo.splitNames.orEmpty().toList()
+            require(sourceSplits.size == declaredSplitNames.size) { "游戏 split 元数据不完整" }
+            require(declaredSplitNames.all { !it.isNullOrBlank() }) { "游戏 split 元数据包含空名称" }
+            require(declaredSplitNames.distinct().size == declaredSplitNames.size) { "游戏 split 元数据包含重复名称" }
             val splits = sourceSplits.mapIndexed { index, source ->
-                copyApk(source, File(root, "split-$index.apk")).copy(
-                    inspection = base.inspection.copy(
-                        sourceLabel = source,
-                        splitName = splitNames[index],
-                    ),
-                )
+                val copied = copyApk(source, File(root, "split-$index.apk"))
+                val declaredName = declaredSplitNames[index]
+                require(copied.inspection.splitName == declaredName) {
+                    "游戏 split 元数据与 APK manifest 不一致：$declaredName"
+                }
+                copied
+            }
+            require(splits.map { it.inspection.splitName }.toSet() == declaredSplitNames.toSet()) {
+                "游戏 split 元数据与 APK 内容不一致"
             }
             return requireCompletePackageSet(transactionId, root, base, splits)
         } catch (error: Throwable) {
@@ -113,7 +121,9 @@ class InstalledApkExtractor(private val context: Context) {
     ): ExtractedApkSet {
         require(base.inspection.packageName == GAME_PACKAGE) { "目标 APK 包名不匹配" }
         require(base.inspection.splitName == null) { "base APK 不能具有 splitName" }
-        require(REQUIRED_ABI in base.inspection.supportedAbis) { "base APK 不包含 $REQUIRED_ABI" }
+        require(REQUIRED_ABI in (listOf(base) + splits).flatMap { it.inspection.supportedAbis }.toSet()) {
+            "安装集合不包含 $REQUIRED_ABI"
+        }
         require(base.inspection.signerDigestsSha256.isNotEmpty()) { "base APK 缺少有效签名" }
         val versionCode = base.inspection.versionCode ?: throw IllegalArgumentException("base APK 缺少版本号")
         val splitNames = mutableSetOf<String>()
