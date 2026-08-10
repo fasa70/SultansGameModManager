@@ -44,7 +44,8 @@ Thumbs.db
 *.tmp
 *.log
 **/bin/
-CLAUDE.md
 
 # Claude Code local state and worktrees
 /.claude/
+CLAUDE.md
+.worktreeinclude

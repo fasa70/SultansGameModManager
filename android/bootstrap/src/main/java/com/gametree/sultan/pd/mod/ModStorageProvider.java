@@ -55,8 +55,8 @@ public final class ModStorageProvider extends ContentProvider {
     public Bundle call(String method, String arg, Bundle extras) {
         ParcelFileDescriptor input = extras == null ? null : extras.getParcelable(KEY_INPUT);
         try {
-            if (!hasCompatibleProtocol(extras)) return result(RESULT_INCOMPATIBLE, "协议版本不兼容");
-            if (!isPinnedManager()) return result(RESULT_UNAUTHORIZED, "调用方证书不受信任");
+            if (!hasCompatibleProtocol(extras)) return result(RESULT_INCOMPATIBLE, "协议版本不兼容，请重新修补游戏");
+            if (!isPinnedManager()) return result(RESULT_UNAUTHORIZED, "调用方证书不受信任，请重新修补游戏");
             if ("listMods".equals(method)) return listMods();
             if ("syncMod".equals(method)) return syncMod(extras, input);
             if ("removeManagedMod".equals(method)) return removeManagedMod(extras);

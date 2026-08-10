@@ -830,7 +830,7 @@ private fun MyModsScreen(state: ManagerUiState, actions: ManagerActions, wide: B
             )
         }
         item { ImportButton("从本地添加 Mod", onClick = actions.importMod) }
-        item { NoticeStrip("游戏内管理", "“同步给游戏”只决定文件是否位于游戏 Mod 目录；请在游戏内官方 Mod 面板刷新、热加载、开关和排序。") }
+        item { NoticeStrip("请在游戏内管理Mod", "管理器只负责游戏 Mod 目录；请在游戏内官方 Mod 面板(主界面左边从上往下第五个按钮)刷新、启用Mod。") }
         item { SectionLabel("Manager 管理的 Mod", "${state.gameModSyncItems.size} 个") }
         if (state.gameModSyncItems.isEmpty()) {
             item { EmptyPanel("还没有 Mod", "你可以从创意工坊下载，或从本地选择 ZIP 文件导入。") }
@@ -918,10 +918,10 @@ private fun DialogHost(state: ManagerUiState, actions: ManagerActions, dialog: D
         DialogKind.Notice -> LegalNoticeDialog(actions.acceptNotice, onDismiss)
         DialogKind.Privacy -> TextDialog("隐私与数据流", "你选择导入的 Mod、下载暂存和修补工件保存在应用私有目录。浏览创意工坊时只会连接 Steam 公开服务和经过校验的下载地址。密码和 Steam Guard 验证码只用于认证；选择记住登录状态时，刷新令牌会由 Android Keystore 加密保存。", onDismiss)
         DialogKind.License -> TextDialog("开源许可", "本项目以 GNU GPLv3 开源", onDismiss)
-        DialogKind.ClearCache -> ConfirmDialog("清理 Manager 私有 Mod 缓存？", "这会删除 Manager 已添加的 Mod，并安排从游戏 Mod 目录中移除对应内容。游戏中的其他 Mod 不会受影响。", "确认清理", { actions.clearModCache(); onDismiss() }, onDismiss)
+        DialogKind.ClearCache -> ConfirmDialog("清理本地 Mod？", "这会删除管理器所有已添加的 Mod，并安排从游戏 Mod 目录中移除对应内容。", "确认清理", { actions.clearModCache(); onDismiss() }, onDismiss)
         is DialogKind.DeleteCachedMod -> {
             val item = state.gameModSyncItems.firstOrNull { it.cacheKey == dialog.cacheKey }
-            if (item != null) ConfirmDialog("删除 ${item.displayName}？", "这会删除 Manager 私有缓存，并从游戏 Mod 目录移除对应内容。若游戏服务暂不可用，返回 Manager 后会自动继续。", "删除 Mod", { actions.deleteCachedMod(item.cacheKey); onDismiss() }, onDismiss)
+            if (item != null) ConfirmDialog("删除 ${item.displayName}？", "这会从管理器和游戏 Mod 目录移除对应Mod。", "删除 Mod", { actions.deleteCachedMod(item.cacheKey); onDismiss() }, onDismiss)
         }
         is DialogKind.DeviceInstallRisk -> DeviceInstallRiskDialog(dialog.warning, onDismiss)
         DialogKind.UpdateAvailable -> {
@@ -1000,7 +1000,7 @@ private fun ZipPasswordDialog(
         Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(22.dp)) {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("输入 ZIP 密码", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                Text("$displayName 已加密。密码仅用于本次解压，不会保存。", fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                Text("$displayName 已加密", fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                 LabeledTextField(password, { password = it }, "ZIP 密码", password = true)
                 if (busy) LoadingPanel("正在解压并校验 ZIP")
                 PrimaryButton("检查并导入", password.isNotEmpty() && !busy) {
@@ -1008,7 +1008,7 @@ private fun ZipPasswordDialog(
                     password = ""
                     onSubmit(supplied)
                 }
-                SecondaryButton("取消并删除文件", !busy) {
+                SecondaryButton("取消", !busy) {
                     password = ""
                     onCancel()
                     onDismiss()
