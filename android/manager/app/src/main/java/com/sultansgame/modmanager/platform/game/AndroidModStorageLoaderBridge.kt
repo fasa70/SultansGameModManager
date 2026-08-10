@@ -1,33 +1,24 @@
 package com.sultansgame.modmanager.platform.game
 
-import android.content.ContentResolver
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
-import com.sultansgame.modmanager.bridge.ApplyRequest
-import com.sultansgame.modmanager.bridge.ApplyResult
 import com.sultansgame.modmanager.bridge.LoaderBridge
-import com.sultansgame.modmanager.model.DeploymentEntry
-import com.sultansgame.modmanager.model.GameModEntry
-import com.sultansgame.modmanager.model.GameModStorageStatus
 import com.sultansgame.modmanager.model.GAME_MOD_STORAGE_AUTHORITY
-import com.sultansgame.modmanager.model.LoaderFailure
-import com.sultansgame.modmanager.model.LoaderRuntimeState
-import com.sultansgame.modmanager.model.LoaderStatus
+import com.sultansgame.modmanager.model.GameModDirectoryEntry
+import com.sultansgame.modmanager.model.GameModSyncAvailability
+import com.sultansgame.modmanager.model.GameModSyncFailureCode
+import com.sultansgame.modmanager.model.GameModSyncItem
+import com.sultansgame.modmanager.model.GameModSyncStatus
 import com.sultansgame.modmanager.model.MOD_STORAGE_PROTOCOL_VERSION
-import com.sultansgame.modmanager.model.ModStorageAvailability
 import com.sultansgame.modmanager.model.ModStorageCall
-import com.sultansgame.modmanager.model.ModStorageFailureCode
-import com.sultansgame.modmanager.model.ModStorageSyncResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 import java.io.BufferedOutputStream
@@ -42,52 +33,41 @@ class AndroidModStorageLoaderBridge(
 ) : LoaderBridge {
     private companion object {
         const val GAME_PACKAGE = "com.gametree.sultan.pd"
+        const val KEY_MANAGER_CACHE_KEYS = "managerCacheKeys"
     }
 
     private val uri = Uri.parse("content://$GAME_MOD_STORAGE_AUTHORITY")
 
-    override fun runtimeStatus(): Flow<LoaderStatus> = flowOf(
-        LoaderStatus(
-            state = LoaderRuntimeState.NotStarted,
-            failure = LoaderFailure.None,
-            rawStateCode = LoaderRuntimeState.NotStarted.nativeCode,
-            rawFailureCode = LoaderFailure.None.nativeCode,
-        ),
-    )
-
-    override suspend fun storageStatus(): GameModStorageStatus = withContext(Dispatchers.IO) {
-        call(ModStorageCall.STATUS, requestBundle())
+    override suspend fun listMods(): GameModSyncStatus = withContext(Dispatchers.IO) {
+        call(ModStorageCall.LIST_MODS, requestBundle())
     }
 
-    override suspend fun requestApply(request: ApplyRequest): ApplyResult = withContext(Dispatchers.IO) {
+    override suspend fun syncMod(item: GameModSyncItem): GameModSyncStatus = withContext(Dispatchers.IO) {
         supervisorScope {
-            val readPipe = ParcelFileDescriptor.createPipe()
+            val pipe = ParcelFileDescriptor.createPipe()
             val writer = async(Dispatchers.IO) {
-                readPipe[1].use { descriptor ->
+                pipe[1].use { descriptor ->
                     DataOutputStream(BufferedOutputStream(ParcelFileDescriptor.AutoCloseOutputStream(descriptor))).use { output ->
-                        writeSnapshot(output, request.snapshot.enabledEntries)
+                        writeMod(output, item)
                     }
                 }
             }
             try {
                 val bundle = requestBundle().apply {
-                    putString(ModStorageCall.KEY_REVISION, request.snapshot.revision)
-                    putString(ModStorageCall.KEY_SNAPSHOT_DIGEST, request.snapshot.snapshotDigestSha256)
-                    putBoolean(ModStorageCall.KEY_ALLOW_EXTERNAL_REPLACEMENT, request.snapshot.allowExternalReplacement)
-                    putBoolean("authorize", true)
-                    putParcelable("input", readPipe[0])
+                    putString(ModStorageCall.KEY_CACHE_KEY, item.cacheKey)
+                    putParcelable(ModStorageCall.KEY_INPUT, pipe[0])
                 }
-                val status = call(ModStorageCall.SYNC_SNAPSHOT, bundle)
+                val status = call(ModStorageCall.SYNC_MOD, bundle)
                 if (!status.isReady) {
-                    closeQuietly(readPipe[0])
-                    closeQuietly(readPipe[1])
+                    closeQuietly(pipe[0])
+                    closeQuietly(pipe[1])
                     withContext(NonCancellable) {
                         if (writer.isActive) writer.cancelAndJoin()
                     }
-                    return@supervisorScope ApplyResult.Rejected(status)
+                    return@supervisorScope status
                 }
 
-                closeQuietly(readPipe[0])
+                closeQuietly(pipe[0])
                 val writerFailure = try {
                     writer.await()
                     null
@@ -96,96 +76,87 @@ class AndroidModStorageLoaderBridge(
                 } catch (error: Exception) {
                     error
                 }
-                if (writerFailure != null) {
-                    ApplyResult.Rejected(
-                        unavailable(
-                            ModStorageAvailability.Unknown,
-                            ModStorageFailureCode.TransferInterrupted,
-                            writerFailure.message ?: "Mod 数据传输中断",
-                        ),
-                    )
-                } else {
-                    ApplyResult.Applied(ModStorageSyncResult(status, request.snapshot.revision))
-                }
+                if (writerFailure == null) status else unavailable(
+                    GameModSyncAvailability.Unknown,
+                    GameModSyncFailureCode.TransferInterrupted,
+                    writerFailure.message ?: "Mod 数据传输中断。",
+                )
             } finally {
                 withContext(NonCancellable) {
-                    closeQuietly(readPipe[0])
-                    closeQuietly(readPipe[1])
+                    closeQuietly(pipe[0])
+                    closeQuietly(pipe[1])
                     if (writer.isActive) writer.cancelAndJoin()
                 }
             }
         }
     }
 
-    override suspend fun stopGameForSync(): GameModStorageStatus = withContext(Dispatchers.IO) {
-        call(ModStorageCall.STOP_GAME_FOR_SYNC, requestBundle())
-    }
-
-    override suspend fun revokeStorageAuthorization(): GameModStorageStatus = withContext(Dispatchers.IO) {
-        call(ModStorageCall.REVOKE_AUTHORIZATION, requestBundle())
+    override suspend fun removeManagedMod(cacheKey: String): GameModSyncStatus = withContext(Dispatchers.IO) {
+        call(
+            ModStorageCall.REMOVE_MANAGED_MOD,
+            requestBundle().apply { putString(ModStorageCall.KEY_CACHE_KEY, cacheKey) },
+        )
     }
 
     private fun requestBundle() = Bundle().apply {
         putInt(ModStorageCall.KEY_PROTOCOL_VERSION, MOD_STORAGE_PROTOCOL_VERSION)
     }
 
-    private fun call(method: String, extras: Bundle): GameModStorageStatus = try {
+    private fun call(method: String, extras: Bundle): GameModSyncStatus = try {
         parseResult(context.contentResolver.call(uri, method, null, extras))
     } catch (error: CancellationException) {
         throw error
     } catch (_: SecurityException) {
         unavailable(
-            ModStorageAvailability.Unauthorized,
-            ModStorageFailureCode.ProviderAccessDenied,
-            "Android 系统拒绝访问游戏 Mod 服务；请重新修补并安装匹配的游戏版本",
+            GameModSyncAvailability.Unauthorized,
+            GameModSyncFailureCode.ProviderAccessDenied,
+            "Android 系统拒绝访问游戏 Mod 同步服务；请重新修补并安装匹配的游戏版本。",
         )
     } catch (_: IllegalArgumentException) {
-        providerUnavailableStatus()
+        activationRequiredStatus()
     } catch (error: Exception) {
-        unavailable(ModStorageAvailability.Unknown, ModStorageFailureCode.InternalError, error.message ?: "无法与游戏 Mod 服务通信")
+        unavailable(
+            GameModSyncAvailability.Unknown,
+            GameModSyncFailureCode.InternalError,
+            error.message ?: "无法与游戏 Mod 同步服务通信。",
+        )
     }
 
-    private fun parseResult(bundle: Bundle?): GameModStorageStatus {
-        if (bundle == null) return unavailable(ModStorageAvailability.ProviderMissing, ModStorageFailureCode.ProviderMissing, "游戏未返回 Mod 状态")
+    private fun parseResult(bundle: Bundle?): GameModSyncStatus {
+        if (bundle == null) return activationRequiredStatus()
         val code = bundle.getString(ModStorageCall.KEY_RESULT_CODE).orEmpty()
         val reason = bundle.getString(ModStorageCall.KEY_RESULT_REASON)
         val availability = when (code) {
-            "ok", "externalChangesDetected", "validationFailed", "commitFailed" -> ModStorageAvailability.Available
-            "unauthorized" -> ModStorageAvailability.Unauthorized
-            "incompatible" -> ModStorageAvailability.Incompatible
-            "gameRunning" -> ModStorageAvailability.GameRunning
-            else -> ModStorageAvailability.Unknown
+            "ok" -> GameModSyncAvailability.Available
+            "unauthorized" -> GameModSyncAvailability.Unauthorized
+            "incompatible" -> GameModSyncAvailability.Incompatible
+            else -> GameModSyncAvailability.Unknown
         }
         val failure = when (code) {
-            "ok" -> ModStorageFailureCode.None
-            "unauthorized" -> ModStorageFailureCode.Unauthorized
-            "incompatible" -> ModStorageFailureCode.ProtocolMismatch
-            "invalid" -> ModStorageFailureCode.InvalidSnapshot
-            "gameRunning" -> ModStorageFailureCode.GameRunning
-            "externalChangesDetected" -> ModStorageFailureCode.ExternalChangesDetected
-            "validationFailed" -> ModStorageFailureCode.ValidationFailed
-            "commitFailed" -> ModStorageFailureCode.CommitFailed
-            "failed" -> ModStorageFailureCode.InternalError
-            else -> ModStorageFailureCode.Unknown
+            "ok" -> GameModSyncFailureCode.None
+            "unauthorized" -> GameModSyncFailureCode.Unauthorized
+            "incompatible" -> GameModSyncFailureCode.ProtocolMismatch
+            "invalid" -> GameModSyncFailureCode.InvalidMod
+            "validationFailed" -> GameModSyncFailureCode.ValidationFailed
+            "commitFailed" -> GameModSyncFailureCode.CommitFailed
+            "failed" -> GameModSyncFailureCode.InternalError
+            else -> GameModSyncFailureCode.Unknown
         }
-        val names = bundle.getStringArrayList("modNames").orEmpty()
-        return GameModStorageStatus(
-            availability = availability,
-            protocolVersion = bundle.getInt(ModStorageCall.KEY_PROTOCOL_VERSION, MOD_STORAGE_PROTOCOL_VERSION),
-            revision = bundle.getString(ModStorageCall.KEY_REVISION),
-            mods = names.map { name -> GameModEntry(name, null, null, 0, name.matches(Regex("\\d{6}--[0-9a-f]{64}"))) },
-            failureCode = failure,
-            reason = reason,
-        )
+        val names = bundle.getStringArrayList(ModStorageCall.KEY_MOD_NAMES).orEmpty()
+        val managerKeys = bundle.getStringArrayList(KEY_MANAGER_CACHE_KEYS).orEmpty()
+        val mods = names.mapIndexed { index, name ->
+            GameModDirectoryEntry(name, managerKeys.getOrNull(index)?.takeIf(String::isNotBlank))
+        }
+        return GameModSyncStatus(availability, mods, failure, reason)
     }
 
-    private fun providerUnavailableStatus(): GameModStorageStatus {
+    private fun activationRequiredStatus(): GameModSyncStatus {
         val provider = context.packageManager.resolveContentProvider(GAME_MOD_STORAGE_AUTHORITY, 0)
         if (provider?.packageName != GAME_PACKAGE) {
             return unavailable(
-                ModStorageAvailability.ProviderMissing,
-                ModStorageFailureCode.ProviderMissing,
-                "游戏内 ModStorageProvider 未安装；请重新修补并安装匹配的游戏版本",
+                GameModSyncAvailability.ProviderMissing,
+                GameModSyncFailureCode.ProviderMissing,
+                "游戏内 Mod 同步服务未安装；请重新修补并安装匹配的游戏版本。",
             )
         }
         val enabled = context.packageManager.getComponentEnabledSetting(
@@ -193,20 +164,23 @@ class AndroidModStorageLoaderBridge(
         ) != PackageManager.COMPONENT_ENABLED_STATE_DISABLED
         if (!enabled) {
             return unavailable(
-                ModStorageAvailability.ProviderMissing,
-                ModStorageFailureCode.ProviderMissing,
-                "游戏内 ModStorageProvider 已被禁用；请重新修补并安装匹配的游戏版本",
+                GameModSyncAvailability.ProviderMissing,
+                GameModSyncFailureCode.ProviderMissing,
+                "游戏内 Mod 同步服务已被禁用；请重新修补并安装匹配的游戏版本。",
             )
         }
         return unavailable(
-            ModStorageAvailability.ProviderUnavailable,
-            ModStorageFailureCode.ProviderUnavailable,
-            "游戏 Mod 服务当前不可访问。请先启动游戏一次，再返回 Manager 确认关闭游戏后同步。",
+            GameModSyncAvailability.ActivationRequired,
+            GameModSyncFailureCode.ActivationRequired,
+            "请先启动游戏并保持在后台，然后返回 Manager；系统会自动继续同步。",
         )
     }
 
-    private fun unavailable(availability: ModStorageAvailability, failure: ModStorageFailureCode, reason: String) =
-        GameModStorageStatus(availability = availability, failureCode = failure, reason = reason)
+    private fun unavailable(
+        availability: GameModSyncAvailability,
+        failure: GameModSyncFailureCode,
+        reason: String,
+    ) = GameModSyncStatus(availability = availability, failureCode = failure, reason = reason)
 
     private fun closeQuietly(descriptor: ParcelFileDescriptor) {
         try {
@@ -215,21 +189,20 @@ class AndroidModStorageLoaderBridge(
         }
     }
 
-    private fun writeSnapshot(output: DataOutputStream, entries: List<DeploymentEntry>) {
-        output.writeInt(entries.size)
-        entries.forEach { entry ->
-            val root = File(cacheRoot, entry.cacheKey)
-            require(root.isDirectory) { "Mod 缓存已不存在：${entry.displayName}" }
-            val files = root.walkTopDown().filter(File::isFile).sortedBy { it.relativeTo(root).invariantSeparatorsPath }.toList()
-            output.writeUTF(entry.directoryName)
-            output.writeInt(files.size)
-            files.forEach { file ->
-                val relativePath = file.relativeTo(root).invariantSeparatorsPath
-                output.writeUTF(relativePath)
-                output.writeLong(file.length())
-                output.writeUTF(sha256(file))
-                FileInputStream(file).use { input -> input.copyTo(output) }
-            }
+    private fun writeMod(output: DataOutputStream, item: GameModSyncItem) {
+        val root = File(cacheRoot, item.cacheKey)
+        require(root.isDirectory) { "Mod 缓存已不存在：${item.displayName}" }
+        val files = root.walkTopDown()
+            .filter(File::isFile)
+            .sortedBy { it.relativeTo(root).invariantSeparatorsPath }
+            .toList()
+        output.writeInt(files.size)
+        files.forEach { file ->
+            val relativePath = file.relativeTo(root).invariantSeparatorsPath
+            output.writeUTF(relativePath)
+            output.writeLong(file.length())
+            output.writeUTF(sha256(file))
+            FileInputStream(file).use { input -> input.copyTo(output) }
         }
         output.flush()
     }

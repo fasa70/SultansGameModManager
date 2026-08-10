@@ -1,46 +1,40 @@
 package com.sultansgame.modmanager.model
 
-const val MOD_STORAGE_PROTOCOL_VERSION = 1
+const val MOD_STORAGE_PROTOCOL_VERSION = 2
 const val GAME_MOD_STORAGE_AUTHORITY = "com.gametree.sultan.pd.modstorage"
 const val GAME_MOD_STORAGE_MANAGER_PACKAGE = "com.sultansgame.modmanager"
-const val MOD_DEPLOYMENT_ORDER_STEP = 10
+const val MANAGER_MOD_DIRECTORY_PREFIX = "sgmm-"
 
 object ModStorageCall {
-    const val STATUS = "status"
-    const val LIST = "list"
-    const val SYNC_SNAPSHOT = "syncSnapshot"
-    const val STOP_GAME_FOR_SYNC = "stopGameForSync"
-    const val REVOKE_AUTHORIZATION = "revokeAuthorization"
+    const val LIST_MODS = "listMods"
+    const val SYNC_MOD = "syncMod"
+    const val REMOVE_MANAGED_MOD = "removeManagedMod"
 
     const val KEY_PROTOCOL_VERSION = "protocolVersion"
-    const val KEY_REVISION = "revision"
-    const val KEY_SNAPSHOT_DIGEST = "snapshotDigest"
-    const val KEY_ALLOW_EXTERNAL_REPLACEMENT = "allowExternalReplacement"
+    const val KEY_CACHE_KEY = "cacheKey"
+    const val KEY_INPUT = "input"
     const val KEY_RESULT_CODE = "resultCode"
     const val KEY_RESULT_REASON = "resultReason"
-    const val KEY_STATUS = "status"
+    const val KEY_MOD_NAMES = "modNames"
 }
 
-enum class ModStorageAvailability {
+enum class GameModSyncAvailability {
     Available,
+    ActivationRequired,
     ProviderMissing,
-    ProviderUnavailable,
     Unauthorized,
     Incompatible,
-    GameRunning,
     Unknown,
 }
 
-enum class ModStorageFailureCode {
+enum class GameModSyncFailureCode {
     None,
+    ActivationRequired,
     ProviderMissing,
-    ProviderUnavailable,
     ProviderAccessDenied,
     Unauthorized,
     ProtocolMismatch,
-    GameRunning,
-    ExternalChangesDetected,
-    InvalidSnapshot,
+    InvalidMod,
     ValidationFailed,
     TransferInterrupted,
     CommitFailed,
@@ -48,65 +42,56 @@ enum class ModStorageFailureCode {
     Unknown,
 }
 
-data class DeploymentEntry(
+data class GameModSyncItem(
     val cacheKey: String,
     val contentDigestSha256: String,
     val displayName: String,
-    val enabled: Boolean,
-    val order: Int,
+    val syncedToGame: Boolean,
 ) {
     init {
         require(cacheKey.matches(Regex("[0-9a-f]{64}"))) { "cacheKey must be a SHA-256 digest" }
         require(contentDigestSha256 == cacheKey) { "cache key and content digest must match" }
-        require(order >= 0) { "order must not be negative" }
     }
 
     val directoryName: String
-        get() = "%06d--%s".format(order, cacheKey)
+        get() = "$MANAGER_MOD_DIRECTORY_PREFIX$cacheKey"
 }
 
-data class DeploymentSnapshot(
-    val revision: String,
-    val entries: List<DeploymentEntry>,
-    val snapshotDigestSha256: String,
-    val allowExternalReplacement: Boolean = false,
+enum class GameModSyncOperationType {
+    Sync,
+    Remove,
+}
+
+data class PendingGameModSyncOperation(
+    val cacheKey: String,
+    val type: GameModSyncOperationType,
 ) {
     init {
-        require(revision.matches(Regex("[0-9a-f-]{36}"))) { "revision must be a UUID" }
-        require(snapshotDigestSha256.matches(Regex("[0-9a-f]{64}"))) { "snapshot digest must be SHA-256" }
-        require(entries.filter(DeploymentEntry::enabled).map(DeploymentEntry::order).distinct().size ==
-            entries.count(DeploymentEntry::enabled)) { "enabled entries must have unique orders" }
+        require(cacheKey.matches(Regex("[0-9a-f]{64}"))) { "cacheKey must be a SHA-256 digest" }
     }
-
-    val enabledEntries: List<DeploymentEntry>
-        get() = entries.filter(DeploymentEntry::enabled).sortedBy(DeploymentEntry::order)
 }
 
-data class GameModEntry(
+data class GameModDirectoryEntry(
     val directoryName: String,
-    val displayName: String?,
-    val contentDigestSha256: String?,
-    val sizeBytes: Long,
-    val managedBySnapshot: Boolean,
+    val managerCacheKey: String? = null,
 ) {
     init {
-        require(sizeBytes >= 0) { "size must not be negative" }
+        require(directoryName.isNotBlank()) { "directoryName must not be blank" }
+        require(managerCacheKey == null || managerCacheKey.matches(Regex("[0-9a-f]{64}"))) {
+            "managerCacheKey must be a SHA-256 digest"
+        }
     }
+
+    val managedByManager: Boolean
+        get() = managerCacheKey != null
 }
 
-data class GameModStorageStatus(
-    val availability: ModStorageAvailability,
-    val protocolVersion: Int? = null,
-    val revision: String? = null,
-    val mods: List<GameModEntry> = emptyList(),
-    val failureCode: ModStorageFailureCode = ModStorageFailureCode.None,
+data class GameModSyncStatus(
+    val availability: GameModSyncAvailability,
+    val mods: List<GameModDirectoryEntry> = emptyList(),
+    val failureCode: GameModSyncFailureCode = GameModSyncFailureCode.None,
     val reason: String? = null,
 ) {
     val isReady: Boolean
-        get() = availability == ModStorageAvailability.Available && failureCode == ModStorageFailureCode.None
+        get() = availability == GameModSyncAvailability.Available && failureCode == GameModSyncFailureCode.None
 }
-
-data class ModStorageSyncResult(
-    val status: GameModStorageStatus,
-    val appliedRevision: String? = null,
-)

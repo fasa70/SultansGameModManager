@@ -23,7 +23,7 @@ Windows 版《苏丹的游戏》提供官方 Mod 支持，而 Android 版没有�
 - 从已安装游戏，或本地 APK / APKS 文件导入受支持的游戏安装包并准备修补。
 - 导入 ZIP Mod；一个 ZIP 可包含一个或多个 Mod。
 - 浏览 Steam 创意工坊公开内容、查看详情并管理下载队列；需要时可登录 Steam 并完成 Steam Guard 验证。
-- 启用、排序、删除本地 Mod，并同步到已修补的游戏。
+- 将校验通过的 Mod 同步到已修补游戏的 Mod 目录；加载、热开关和排序由游戏内官方 Mod 面板负责。
 - 当前只会继续处理通过应用内兼容性检测的游戏版本；不匹配的安装包会被拒绝，而不会尝试修补。
 - 本项目不提供或分发游戏 APK、游戏资源或 Mod 内容，也不绕过 DRM、付费、账号、地区或平台限制。
 
@@ -52,9 +52,9 @@ Windows 版《苏丹的游戏》提供官方 Mod 支持，而 Android 版没有�
 
 #### 3. 管理并同步 Mod
 
-在“管理 Mod”页面中，可以启用或停用 Mod、调整顺序、删除单个 Mod，或清理本地 Mod 缓存。同步会将当前启用状态和顺序写入已修补的游戏，并在下次启动游戏时生效。
+新导入的 Mod 默认会同步到游戏的 `Mod` 目录。Manager 中的“同步给游戏”只控制文件是否存在于该目录；游戏内官方 Mod 面板负责刷新列表、热加载、启用或停用以及排序。
 
-请优先在游戏退出后同步。若检测到游戏正在运行，或游戏内存在不由本应用管理的 Mod，应用会在继续前要求确认相应操作。
+删除 Manager 中的 Mod 会同时安排删除游戏目录中的对应 Manager 管理项；清理缓存也遵循此规则。直接放入游戏 `Mod` 目录的 Mod 会在 Manager 中显示为“游戏中的其他 Mod”，但不会被 Manager 修改或删除。
 
 ### Mod ZIP 基本要求
 
@@ -176,7 +176,7 @@ The Windows version of *Sultan's Game* has official Mod support, while the Andro
 - Import a supported game installation from the installed game, or from local APK / APKS files, then prepare it for patching.
 - Import ZIP Mods; one ZIP may contain one or more Mods.
 - Browse public Steam Workshop content, view details, and manage download tasks. Steam sign-in and Steam Guard are available when required.
-- Enable, order, remove, and synchronize local Mods with a patched game.
+- Synchronize validated Mods to the patched game's Mod directory; the in-game official Mod panel controls loading, hot toggles, and order.
 - The app proceeds only with game versions that pass its in-app compatibility check. Mismatched packages are rejected rather than patched.
 - This project does not provide or distribute game APKs, game assets, or Mod content, and does not bypass DRM, payment, account, regional, or platform restrictions.
 
@@ -205,9 +205,9 @@ Some Workshop downloads require Steam sign-in. Steam Guard is handled in the app
 
 #### 3. Manage and synchronize Mods
 
-On the **Manage Mods** page, enable or disable Mods, change their order, remove individual Mods, or clear the local Mod cache. Synchronization writes the current enabled state and order to the patched game, taking effect the next time the game starts.
+Newly imported Mods are synchronized to the game's `Mod` directory by default. The Manager's **Sync to game** setting controls only whether files are present in that directory; the in-game official Mod panel refreshes the list and controls hot loading, enabling, disabling, and ordering.
 
-Prefer synchronizing after the game has exited. If the game is running, or if the app detects in-game Mods that it does not manage, it asks for confirmation before continuing.
+Removing a Mod from the Manager also schedules removal of the corresponding Manager-owned game directory. Clearing the cache follows the same rule. Mods placed directly in the game's `Mod` directory appear as **Other Mods in game** in the Manager, but are not modified or deleted.
 
 ### Mod ZIP requirements
 

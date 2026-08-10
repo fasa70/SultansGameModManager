@@ -102,12 +102,12 @@ class DeviceSigningKeyStoreTest {
 
         val factory = AndroidLoaderSplitArtifactFactory(
             context,
-            "404b7caa0aab2c02fe6e1217616291e4e91bed57eb858e9b15ec135d2f4d29a8",
+            "23ce7678ad665bb18a78e54ed1c65d23583384b5c67bad739cfae1961f2c0734",
         )
         val loader = factory.build(
             LoaderSplitRequest(
                 targetApplicationId = "com.gametree.sultan.pd",
-                loaderTemplateSha256 = "f811b0b7b4b93287b6babe2c337c28c047f504b4bc7225d03b31b140a9adb9b3",
+                loaderTemplateSha256 = "80dc4e600ea58b272f36cfa81c830d12fc74e63276bed7f88a935f61e07693e3",
                 target = extracted.base.inspection,
                 templateOutputPath = File(context.filesDir, "patch-staging/${java.util.UUID.randomUUID()}/template/modloader.apk").absolutePath,
             ),

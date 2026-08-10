@@ -1,24 +1,25 @@
 package com.sultansgame.modmanager.model
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.util.UUID
 
 class ModStorageModelsTest {
     @Test
-    fun `enabled entries encode the requested native load order`() {
-        val first = "a".repeat(64)
-        val second = "b".repeat(64)
-        val snapshot = DeploymentSnapshot(
-            revision = UUID.randomUUID().toString(),
-            entries = listOf(
-                DeploymentEntry(second, second, "Later", enabled = true, order = 20),
-                DeploymentEntry(first, first, "First", enabled = true, order = 10),
-                DeploymentEntry("c".repeat(64), "c".repeat(64), "Disabled", enabled = false, order = 0),
-            ),
-            snapshotDigestSha256 = "d".repeat(64),
-        )
+    fun `manager directory name is stable and does not encode load order`() {
+        val cacheKey = "a".repeat(64)
+        val item = GameModSyncItem(cacheKey, cacheKey, "Test Mod", syncedToGame = true)
 
-        assertEquals(listOf("000010--$first", "000020--$second"), snapshot.enabledEntries.map { it.directoryName })
+        assertEquals("sgmm-$cacheKey", item.directoryName)
+        assertTrue(item.syncedToGame)
+    }
+
+    @Test
+    fun `directory entries distinguish manager and external mods`() {
+        val cacheKey = "b".repeat(64)
+
+        assertTrue(GameModDirectoryEntry("sgmm-$cacheKey", cacheKey).managedByManager)
+        assertFalse(GameModDirectoryEntry("manual-mod").managedByManager)
     }
 }

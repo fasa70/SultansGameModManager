@@ -53,7 +53,7 @@ class MainActivity : ComponentActivity() {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 viewModel.uiEvents.collect { event ->
                     when (event) {
-                        is ManagerUiEvent.LaunchGameForModService -> startActivity(event.intent)
+                        is ManagerUiEvent.LaunchGameForModSync -> startActivity(event.intent)
                         is ManagerUiEvent.OpenGameUninstall -> uninstallOriginalGame.launch(
                             Intent(Intent.ACTION_UNINSTALL_PACKAGE, Uri.parse("package:com.gametree.sultan.pd"))
                                 .putExtra(Intent.EXTRA_RETURN_RESULT, true),
@@ -114,13 +114,9 @@ class MainActivity : ComponentActivity() {
                         confirmWorkshopImport = viewModel::confirmWorkshopImport,
                         discardWorkshopArtifact = viewModel::discardWorkshopArtifact,
                         removeWorkshopDownload = viewModel::removeWorkshopDownload,
-                        refreshGameMods = viewModel::refreshGameModStorage,
-                        launchGame = viewModel::launchGameForModService,
-                        setModEnabled = viewModel::setModEnabled,
-                        moveMod = viewModel::moveMod,
-                        syncMods = viewModel::syncMods,
-                        confirmStopGameAndSync = viewModel::confirmStopGameAndSync,
-                        dismissStopGameAndSync = viewModel::dismissStopGameAndSyncConfirmation,
+                        refreshGameMods = viewModel::refreshGameModSync,
+                        launchGameForModSync = viewModel::launchGameForModSync,
+                        setModSyncedToGame = viewModel::setModSyncedToGame,
                         deleteCachedMod = viewModel::deleteCachedMod,
                         clearModCache = viewModel::clearModCache,
                         acceptNotice = viewModel::acceptLegalNotice,
@@ -158,7 +154,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        viewModel.refreshGameModStorage()
+        viewModel.refreshGameModSync()
     }
 
     private fun displayNameFor(uri: Uri): String = contentResolver.query(
