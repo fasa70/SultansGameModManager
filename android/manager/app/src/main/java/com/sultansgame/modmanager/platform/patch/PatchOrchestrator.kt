@@ -119,11 +119,23 @@ internal class PatchOrchestrator(
             ),
         )
         val signedDirectory = File(extracted.root.parentFile, "signed").apply { mkdirs() }
-        val signedBase = sign(extracted.base, File(signedDirectory, "base.apk"), identity)
-            ?: return fail(extracted.transactionId, PatchFailure.SigningUnavailable, "base APK 重签失败。")
+        val signedBase = when (val result = sign(extracted.base, File(signedDirectory, "base.apk"), identity)) {
+            is SignedArtifactResult.Success -> result.artifact
+            is SignedArtifactResult.Failure -> return fail(
+                extracted.transactionId,
+                PatchFailure.SigningUnavailable,
+                "base APK 重签失败：${result.reason}",
+            )
+        }
         val signedSplits = retainedSplits.mapIndexed { index, artifact ->
-            sign(artifact, File(signedDirectory, "split-$index.apk"), identity)
-                ?: return fail(extracted.transactionId, PatchFailure.SigningUnavailable, "split APK 重签失败。")
+            when (val result = sign(artifact, File(signedDirectory, "split-$index.apk"), identity)) {
+                is SignedArtifactResult.Success -> result.artifact
+                is SignedArtifactResult.Failure -> return fail(
+                    extracted.transactionId,
+                    PatchFailure.SigningUnavailable,
+                    "split APK 重签失败：${result.reason}",
+                )
+            }
         }
         val nativeDigest = profile.nativeLoaderSha256
             ?: return fail(extracted.transactionId, PatchFailure.SplitUnavailable, "尚未冻结匹配游戏 profile 的 loader native 摘要。")
@@ -140,7 +152,7 @@ internal class PatchOrchestrator(
                 if (splitResult.splitName != profile.loaderSplitName) {
                     return fail(extracted.transactionId, PatchFailure.SplitUnavailable, "生成的 loader split 名称不匹配 profile。")
                 }
-                sign(
+                val result = sign(
                     ExtractedApk(
                         File(splitResult.artifact.path),
                         splitResult.artifact.inspection,
@@ -148,7 +160,15 @@ internal class PatchOrchestrator(
                     ),
                     File(signedDirectory, "modloader.apk"),
                     identity,
-                ) ?: return fail(extracted.transactionId, PatchFailure.SigningUnavailable, "loader split 重签失败。")
+                )
+                when (result) {
+                    is SignedArtifactResult.Success -> result.artifact
+                    is SignedArtifactResult.Failure -> return fail(
+                        extracted.transactionId,
+                        PatchFailure.SigningUnavailable,
+                        "loader split 重签失败：${result.reason}",
+                    )
+                }
             }
             is LoaderSplitResult.Unavailable -> return fail(extracted.transactionId, PatchFailure.SplitUnavailable, splitResult.reason)
         }
@@ -399,22 +419,42 @@ internal class PatchOrchestrator(
         data class Invalid(val failure: PatchFailure, val reason: String) : PreparedArtifactsValidation
     }
 
-    private fun sign(input: ExtractedApk, output: File, identity: DeviceSigningIdentity): ExtractedApk? {
+    private sealed interface SignedArtifactResult {
+        data class Success(val artifact: ExtractedApk) : SignedArtifactResult
+        data class Failure(val reason: String) : SignedArtifactResult
+    }
+
+    private fun sign(input: ExtractedApk, output: File, identity: DeviceSigningIdentity): SignedArtifactResult {
+        fun failure(reason: String): SignedArtifactResult {
+            output.delete()
+            return SignedArtifactResult.Failure(reason)
+        }
+
         val result = signer.sign(input.file, output, identity)
-        if (result !is ApkSigningResult.Signed || !result.verifiedV1 || !result.verifiedV2) return null
-        val parsed = archiveInspector.inspect(output, output.name)
-        if (parsed.signerDigestsSha256 != setOf(identity.certificateSha256) ||
-            parsed.packageName != input.inspection.packageName ||
-            parsed.versionCode != input.inspection.versionCode ||
-            parsed.splitName != input.inspection.splitName
-        ) return null
+        if (result is ApkSigningResult.Failed) return failure(result.reason)
+        if (result !is ApkSigningResult.Signed || !result.verifiedV1 || !result.verifiedV2) {
+            return failure("签名结果未同时通过 v1/v2 校验")
+        }
+        val parsed = runCatching { archiveInspector.inspect(output, output.name) }.getOrElse { error ->
+            return failure("签名后 APK 复检失败：${error.message ?: "无法读取 APK"}")
+        }
+        signedArtifactInspectionFailureReason(
+            input = input.inspection,
+            parsed = parsed,
+            expectedCertificateSha256 = identity.certificateSha256,
+        )?.let { return failure(it) }
         val inspection = parsed.copy(
             packageName = input.inspection.packageName,
             versionCode = input.inspection.versionCode,
             versionName = input.inspection.versionName,
             splitName = input.inspection.splitName,
         )
-        return ExtractedApk(output, inspection, com.sultansgame.modmanager.apk.ReadOnlyApkInspector().sha256 { output.inputStream() })
+        val digest = runCatching {
+            com.sultansgame.modmanager.apk.ReadOnlyApkInspector().sha256 { output.inputStream() }
+        }.getOrElse { error ->
+            return failure("签名后 APK 摘要读取失败：${error.message ?: "无法读取 APK"}")
+        }
+        return SignedArtifactResult.Success(ExtractedApk(output, inspection, digest))
     }
 
     private fun ExtractedApk.toPatchArtifact() = PatchArtifact(file.name, sha256, file.length(), inspection)

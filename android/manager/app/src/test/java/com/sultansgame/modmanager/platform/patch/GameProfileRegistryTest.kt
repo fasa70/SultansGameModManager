@@ -25,7 +25,7 @@ class GameProfileRegistryTest {
         requireNotNull(result)
         assertEquals(2, result.providerProtocolVersion)
         assertEquals(
-            "404b7caa0aab2c02fe6e1217616291e4e91bed57eb858e9b15ec135d2f4d29a8",
+            "1a2fc9c1a2304574f667895e1fe9ea6b82f2746877ab637c1e6e2c803ccaa491",
             result.nativeLoaderSha256,
         )
     }
