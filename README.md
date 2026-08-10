@@ -10,6 +10,8 @@
 
 为《苏丹的游戏》Android 版（IL2CPP）提供与 Windows 版**官方 Mod 格式和加载机制兼容**的开源 Android 应用。
 
+> 本项目绝大部分代码来自 AI 辅助编程（vibe coding）
+
 ### 概述
 
 Windows 版《苏丹的游戏》提供官方 Mod 支持，而 Android 版没有可直接使用的入口。本项目通过同签名 loader split，为 Android 版实现兼容的 Mod 加载流程。
