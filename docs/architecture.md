@@ -80,13 +80,9 @@ When the game process starts and `libmodloader.so` is loaded:
 1. **Wait for IL2CPP** — poll `libil2cpp.so` exports until `il2cpp_domain_get` and other required symbols are available
 2. **Verify game profile** — check exact package/version/ABI metadata plus in-memory byte patterns and method signatures against the frozen official profile
 3. **Install official compatibility gates** — when the release flags are enabled, install the official UI reveal/observer, resource URI/Texture, and TMP glyph-field hooks; any failed gate rejects the compatibility state
-4. **Install lifecycle hooks** — intercept the crash-prone automatic refresh/load entry points only to prevent unsafe duplicate paths; this is separate from the official observer and does not fabricate activation
-5. **Observe config loading** — hook `LoadConfig` and `LoadRitePostProcess` to detect when the game has finished loading its built-in configuration
-6. **Apply mod pipeline** — staged pipeline:
-   - `kUpgrade`: Upgrade shop config (high-priority, single mod file)
-   - `kRite` / `kEvent`: Rite and event directories (per-ID JSON files with post-processing)
-   - `kRemaining`: All other single-file and directory configs, including single-object merges (variable.json, credits.json, sfx_config.json)
-7. **Resource overrides** — PNG/WAV file replacement via IL2CPP resource hooks; URI-based loaders receive `file://` arguments while `LoadSpriteImmediate` retains an absolute filesystem path
+4. **Use the official Mod backend** — the game scans all directories below `externalFilesDir/Mod`; the official in-game panel owns discovery refresh, hot loading, enable/disable state, and ordering
+5. **Synchronize Manager-owned Mods** — the Manager sends each validated Mod through the co-signed Provider, which writes only an owner-prefixed directory using per-Mod staging and replacement; it never replaces the whole `Mod` root or external Mod directories
+6. **Keep Android 15+ activation explicit** — when the Provider is unavailable until the game has been started, the Manager persists pending work, asks the user to leave the game in the background, and retries when the Manager resumes
 
 The complete release combination and its device evidence are recorded in [official Android compatibility validation](official-android-compatibility-validation.md). The Manager's unsigned frozen template is the artifact used by future patch operations; the Manager does not compile a new native library at patch time.
 
@@ -129,4 +125,4 @@ Mod/<mod-name>/
 - **Overwrite + append**: Mod data overwrites matching IDs and appends new IDs
 - **Single-object merge**: `variable.json`, `credits.json`, `sfx_config.json` use field-level merge
 - **sfx_config**: Only allows overwriting existing keys; the sole exception is `armageddon_music_loop` which can be added
-- **Last-wins**: When multiple mods define the same key, the lexically-later mod wins
+- **Official panel order**: When multiple Mods define the same key, the game’s official Mod panel determines the effective load order; Manager directory names do not encode or control it

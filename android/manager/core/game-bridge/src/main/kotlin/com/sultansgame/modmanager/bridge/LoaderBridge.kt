@@ -1,55 +1,27 @@
 package com.sultansgame.modmanager.bridge
 
-import com.sultansgame.modmanager.model.DeploymentSnapshot
-import com.sultansgame.modmanager.model.GameModStorageStatus
-import com.sultansgame.modmanager.model.LoaderFailure
-import com.sultansgame.modmanager.model.LoaderRuntimeState
-import com.sultansgame.modmanager.model.LoaderStatus
-import com.sultansgame.modmanager.model.ModStorageAvailability
-import com.sultansgame.modmanager.model.ModStorageFailureCode
-import com.sultansgame.modmanager.model.ModStorageSyncResult
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flowOf
-
-data class ApplyRequest(
-    val snapshot: DeploymentSnapshot,
-)
-
-sealed interface ApplyResult {
-    data class Applied(val result: ModStorageSyncResult) : ApplyResult
-    data class Rejected(val status: GameModStorageStatus) : ApplyResult
-}
+import com.sultansgame.modmanager.model.GameModDirectoryEntry
+import com.sultansgame.modmanager.model.GameModSyncAvailability
+import com.sultansgame.modmanager.model.GameModSyncFailureCode
+import com.sultansgame.modmanager.model.GameModSyncItem
+import com.sultansgame.modmanager.model.GameModSyncStatus
 
 interface LoaderBridge {
-    fun runtimeStatus(): Flow<LoaderStatus>
-    suspend fun storageStatus(): GameModStorageStatus
-    suspend fun requestApply(request: ApplyRequest): ApplyResult
-    suspend fun stopGameForSync(): GameModStorageStatus
-    suspend fun revokeStorageAuthorization(): GameModStorageStatus
+    suspend fun listMods(): GameModSyncStatus
+    suspend fun syncMod(item: GameModSyncItem): GameModSyncStatus
+    suspend fun removeManagedMod(cacheKey: String): GameModSyncStatus
 }
 
 class UnavailableLoaderBridge : LoaderBridge {
-    private val unavailableStatus = LoaderStatus(
-        state = LoaderRuntimeState.NotStarted,
-        failure = LoaderFailure.None,
-        rawStateCode = LoaderRuntimeState.NotStarted.nativeCode,
-        rawFailureCode = LoaderFailure.None.nativeCode,
+    private val unavailable = GameModSyncStatus(
+        availability = GameModSyncAvailability.ProviderMissing,
+        failureCode = GameModSyncFailureCode.ProviderMissing,
+        reason = "游戏内 Mod 同步服务尚未安装；未修改游戏目录。",
     )
 
-    private val storageUnavailable = GameModStorageStatus(
-        availability = ModStorageAvailability.ProviderMissing,
-        failureCode = ModStorageFailureCode.ProviderMissing,
-        reason = "游戏内 ModStorageProvider 尚未安装；未写入游戏目录。",
-    )
+    override suspend fun listMods(): GameModSyncStatus = unavailable
 
-    override fun runtimeStatus(): Flow<LoaderStatus> = flowOf(unavailableStatus)
+    override suspend fun syncMod(item: GameModSyncItem): GameModSyncStatus = unavailable
 
-    override suspend fun storageStatus(): GameModStorageStatus = storageUnavailable
-
-    override suspend fun requestApply(request: ApplyRequest): ApplyResult =
-        ApplyResult.Rejected(storageUnavailable)
-
-    override suspend fun stopGameForSync(): GameModStorageStatus = storageUnavailable
-
-    override suspend fun revokeStorageAuthorization(): GameModStorageStatus = storageUnavailable
+    override suspend fun removeManagedMod(cacheKey: String): GameModSyncStatus = unavailable
 }

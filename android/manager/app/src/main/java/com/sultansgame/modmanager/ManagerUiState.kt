@@ -1,26 +1,25 @@
 package com.sultansgame.modmanager
 
 import com.sultansgame.modmanager.model.CachedMod
-import com.sultansgame.modmanager.platform.saf.ExternalZipImportRequest
-import com.sultansgame.modmanager.model.DeploymentEntry
 import com.sultansgame.modmanager.model.DeviceSigningKeyState
 import com.sultansgame.modmanager.model.DownloadTask
-import com.sultansgame.modmanager.model.GameModStorageStatus
-import com.sultansgame.modmanager.model.LoaderStatus
+import com.sultansgame.modmanager.model.GameModSyncItem
+import com.sultansgame.modmanager.model.GameModSyncStatus
 import com.sultansgame.modmanager.model.PatchConfirmation
 import com.sultansgame.modmanager.model.PatchInputClassification
 import com.sultansgame.modmanager.model.PatchSource
+import com.sultansgame.modmanager.model.PendingGameModSyncOperation
 import com.sultansgame.modmanager.model.SteamAuthState
 import com.sultansgame.modmanager.model.WorkshopItem
 import com.sultansgame.modmanager.platform.game.GameProbeResult
+import com.sultansgame.modmanager.platform.saf.ExternalZipImportRequest
 
 data class ManagerUiState(
     val gameProbeResult: GameProbeResult? = null,
-    val loaderStatus: LoaderStatus? = null,
-    val gameModStorage: GameModStorageStatus? = null,
-    val deploymentPlan: List<DeploymentEntry> = emptyList(),
-    val deploymentInProgress: Boolean = false,
-    val gameStopSyncConfirmation: Boolean? = null,
+    val gameModSync: GameModSyncStatus? = null,
+    val gameModSyncItems: List<GameModSyncItem> = emptyList(),
+    val pendingGameModSyncOperations: List<PendingGameModSyncOperation> = emptyList(),
+    val gameModSyncInProgress: Boolean = false,
     val cachedModDeletionInProgress: Boolean = false,
     val cachedMods: List<CachedMod> = emptyList(),
     val workshop: WorkshopUiState = WorkshopUiState.Idle,

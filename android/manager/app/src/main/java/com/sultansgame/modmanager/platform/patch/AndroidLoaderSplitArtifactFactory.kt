@@ -91,6 +91,6 @@ internal class AndroidLoaderSplitArtifactFactory(
         const val SPLIT_NAME = "modloader"
         const val TEMPLATE_ASSET = "release/modloader-template-10005.apk"
         const val NATIVE_ASSET = "assets/modloader/arm64-v8a/modloader.bin"
-        const val TEMPLATE_SHA256 = "f811b0b7b4b93287b6babe2c337c28c047f504b4bc7225d03b31b140a9adb9b3"
+        const val TEMPLATE_SHA256 = "80dc4e600ea58b272f36cfa81c830d12fc74e63276bed7f88a935f61e07693e3"
     }
 }

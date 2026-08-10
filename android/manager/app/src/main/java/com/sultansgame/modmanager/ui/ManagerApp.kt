@@ -88,9 +88,8 @@ import com.sultansgame.modmanager.model.DeviceSigningKeyState
 import com.sultansgame.modmanager.model.DownloadFailureCode
 import com.sultansgame.modmanager.model.DownloadStage
 import com.sultansgame.modmanager.model.DownloadTask
-import com.sultansgame.modmanager.model.GameModStorageStatus
-import com.sultansgame.modmanager.model.ModStorageAvailability
-import com.sultansgame.modmanager.model.ModStorageFailureCode
+import com.sultansgame.modmanager.model.GameModSyncAvailability
+import com.sultansgame.modmanager.model.GameModSyncItem
 import com.sultansgame.modmanager.model.PatchConfirmation
 import com.sultansgame.modmanager.model.SteamAuthState
 import com.sultansgame.modmanager.model.WorkshopBrowseQuery
@@ -137,12 +136,8 @@ data class ManagerActions(
     val discardWorkshopArtifact: (String) -> Unit,
     val removeWorkshopDownload: (String) -> Unit,
     val refreshGameMods: () -> Unit,
-    val launchGame: () -> Unit,
-    val setModEnabled: (String, Boolean) -> Unit,
-    val moveMod: (String, Int) -> Unit,
-    val syncMods: (Boolean) -> Unit,
-    val confirmStopGameAndSync: () -> Unit,
-    val dismissStopGameAndSync: () -> Unit,
+    val launchGameForModSync: () -> Unit,
+    val setModSyncedToGame: (String, Boolean) -> Unit,
     val deleteCachedMod: (String) -> Unit,
     val clearModCache: () -> Unit,
     val acceptNotice: () -> Unit,
@@ -167,8 +162,6 @@ private sealed interface DialogKind {
     data object License : DialogKind
     data object ClearCache : DialogKind
     data class DeleteCachedMod(val cacheKey: String) : DialogKind
-    data object SyncMods : DialogKind
-    data object StopGameAndSync : DialogKind
     data object PatchCleanup : DialogKind
     data object XiaomiInstallRisk : DialogKind
     data object UpdateAvailable : DialogKind
@@ -199,9 +192,6 @@ fun ManagerApp(state: ManagerUiState, actions: ManagerActions) {
 
     LaunchedEffect(state.patchCleanupConfirmation != null) {
         if (state.patchCleanupConfirmation != null) dialog = DialogKind.PatchCleanup
-    }
-    LaunchedEffect(state.gameStopSyncConfirmation) {
-        if (state.gameStopSyncConfirmation != null) dialog = DialogKind.StopGameAndSync
     }
     LaunchedEffect(state.availableUpdate, state.noticeAccepted) {
         if (state.availableUpdate != null && state.noticeAccepted == true) dialog = DialogKind.UpdateAvailable
@@ -803,63 +793,87 @@ private fun DownloadTaskCard(task: DownloadTask, actions: ManagerActions, onShow
 
 @Composable
 private fun MyModsScreen(state: ManagerUiState, actions: ManagerActions, wide: Boolean, onShowDialog: (DialogKind) -> Unit) {
-    val storageMessage = gameStorageMessage(state.gameModStorage)
+    val syncStatus = state.gameModSync
+    val activationRequired = syncStatus?.availability == GameModSyncAvailability.ActivationRequired
+    val externalMods = syncStatus?.mods.orEmpty().filterNot { it.managedByManager }
     ScreenList(wide) {
         item {
             HeroPanel(
-                eyebrow = "同步mod列表",
-                title = if (state.cachedMods.isEmpty()) "Mod管理" else "Mod管理",
-                body = storageMessage.summary,
-                action = storageMessage.actionLabel,
-                actionEnabled = storageMessage.actionEnabled && !state.deploymentInProgress && !state.cachedModDeletionInProgress,
-                onAction = when (storageMessage.action) {
-                    LibraryAction.Import -> actions.importMod
-                    LibraryAction.Launch -> actions.launchGame
-                    LibraryAction.Sync -> { { onShowDialog(DialogKind.SyncMods) } }
-                    LibraryAction.Refresh -> actions.refreshGameMods
+                eyebrow = "同步给游戏",
+                title = "管理 Mod",
+                body = when {
+                    state.gameModSyncInProgress -> "正在同步 Mod 到游戏目录…"
+                    activationRequired -> "请先启动游戏并保持在后台，返回此处会自动继续同步。"
+                    syncStatus?.isReady == true -> "Manager 只管理同步到游戏目录。加载、热开关和排序请在游戏内官方 Mod 面板完成。"
+                    syncStatus != null -> syncStatus.reason ?: "暂时无法读取游戏 Mod 目录。"
+                    else -> "正在检查游戏 Mod 目录…"
+                },
+                action = when {
+                    activationRequired -> "启动游戏"
+                    syncStatus?.isReady != true -> "重新检查"
+                    else -> null
+                },
+                actionEnabled = !state.gameModSyncInProgress && !state.cachedModDeletionInProgress,
+                onAction = when {
+                    activationRequired -> actions.launchGameForModSync
+                    syncStatus?.isReady != true -> actions.refreshGameMods
+                    else -> null
                 },
             )
         }
         item { ImportButton("从本地添加 Mod", onClick = actions.importMod) }
-        item { SectionLabel("我的 Mod", "${state.deploymentPlan.size} 个") }
-        if (state.deploymentPlan.isEmpty()) item { EmptyPanel("还没有 Mod", "你可以从创意工坊下载，或从本地选择 ZIP 文件导入。") }
-        items(state.deploymentPlan, key = { it.cacheKey }) { entry ->
+        item { NoticeStrip("游戏内管理", "“同步给游戏”只决定文件是否位于游戏 Mod 目录；请在游戏内官方 Mod 面板刷新、热加载、开关和排序。") }
+        item { SectionLabel("Manager 管理的 Mod", "${state.gameModSyncItems.size} 个") }
+        if (state.gameModSyncItems.isEmpty()) {
+            item { EmptyPanel("还没有 Mod", "你可以从创意工坊下载，或从本地选择 ZIP 文件导入。") }
+        }
+        items(state.gameModSyncItems, key = GameModSyncItem::cacheKey) { item ->
             Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(16.dp)) {
                 Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
-                            Text(entry.displayName, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                            Text("排序 ${entry.order + 1}", fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                            Text(item.displayName, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                syncItemStatus(item, state),
+                                fontSize = 12.sp,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            )
                         }
-                        StatusPill(if (entry.enabled) "已启用" else "未启用")
+                        StatusPill(if (item.syncedToGame) "同步给游戏" else "未同步")
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        val enabled = !state.deploymentInProgress && !state.cachedModDeletionInProgress
-                        SmallAction(if (entry.enabled) "停用" else "启用", enabled) { actions.setModEnabled(entry.cacheKey, !entry.enabled) }
-                        SmallAction("上移", enabled && entry.order > 0) { actions.moveMod(entry.cacheKey, -1) }
-                        SmallAction("下移", enabled) { actions.moveMod(entry.cacheKey, 1) }
-                        SmallAction("删除", enabled) { onShowDialog(DialogKind.DeleteCachedMod(entry.cacheKey)) }
+                        val enabled = !state.gameModSyncInProgress && !state.cachedModDeletionInProgress
+                        SmallAction(if (item.syncedToGame) "从游戏中移除" else "同步给游戏", enabled) {
+                            actions.setModSyncedToGame(item.cacheKey, !item.syncedToGame)
+                        }
+                        SmallAction("删除 Mod", enabled) { onShowDialog(DialogKind.DeleteCachedMod(item.cacheKey)) }
                     }
                 }
             }
         }
-        state.gameModStorage?.mods?.takeIf { it.isNotEmpty() }?.let { mods ->
-            item { DiagnosticPanel("查看游戏启用的mod", mods.joinToString("\n") { it.displayName ?: it.directoryName }) }
+        if (externalMods.isNotEmpty()) {
+            item { SectionLabel("游戏中的其他 Mod", "${externalMods.size} 个") }
+            item { NoticeStrip("直接加入的 Mod", "这些文件夹由其他方式写入游戏目录。Manager 会显示它们，但不会修改、接管或删除。") }
+            items(externalMods, key = { it.directoryName }) { mod ->
+                Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(16.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(mod.directoryName, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                        Text("加载、热开关和排序请在游戏内官方 Mod 面板完成。", fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                    }
+                }
+            }
         }
     }
 }
 
-private enum class LibraryAction { Import, Launch, Sync, Refresh }
-private data class LibraryPresentation(val summary: String, val actionLabel: String, val action: LibraryAction, val actionEnabled: Boolean = true)
-
-private fun gameStorageMessage(storage: GameModStorageStatus?): LibraryPresentation = when {
-    storage == null -> LibraryPresentation("正在检查游戏是否已准备好使用 Mod。", "重新检查", LibraryAction.Refresh)
-    storage.isReady -> LibraryPresentation("游戏已准备好。同步后，启用的 Mod 会在下次启动游戏时生效。", "同步 Mod", LibraryAction.Sync)
-    storage.failureCode == ModStorageFailureCode.GameRunning || storage.availability == ModStorageAvailability.GameRunning -> LibraryPresentation("请先退出游戏，再同步 Mod。", "同步 Mod", LibraryAction.Sync)
-    storage.failureCode == ModStorageFailureCode.ExternalChangesDetected -> LibraryPresentation("发现游戏内的其他 Mod。同步前会由你确认是否替换。", "同步 Mod", LibraryAction.Sync)
-    storage.availability == ModStorageAvailability.ProviderUnavailable -> LibraryPresentation("需要先启动游戏，以启用 Mod 服务。启动后保持游戏在后台运行，返回此处即可同步mod。", "启动游戏以启用服务", LibraryAction.Launch)
-    storage.availability in setOf(ModStorageAvailability.ProviderMissing, ModStorageAvailability.Unauthorized, ModStorageAvailability.Incompatible) -> LibraryPresentation("游戏还没有进行修补，无法同步mod。请先在首页修补游戏。", "重新检查", LibraryAction.Refresh)
-    else -> LibraryPresentation("暂时无法同步 Mod。请重新检查游戏状态。", "重新检查", LibraryAction.Refresh)
+private fun syncItemStatus(item: GameModSyncItem, state: ManagerUiState): String {
+    val pending = state.pendingGameModSyncOperations.firstOrNull { it.cacheKey == item.cacheKey }
+    return when {
+        pending != null && pending.type == com.sultansgame.modmanager.model.GameModSyncOperationType.Sync -> "等待同步到游戏"
+        pending != null -> "等待从游戏中移除"
+        item.syncedToGame -> "已同步到游戏目录"
+        else -> "未同步到游戏目录"
+    }
 }
 
 @Composable
@@ -896,22 +910,11 @@ private fun DialogHost(state: ManagerUiState, actions: ManagerActions, dialog: D
         DialogKind.Notice -> LegalNoticeDialog(actions.acceptNotice, onDismiss)
         DialogKind.Privacy -> TextDialog("隐私与数据流", "你选择导入的 Mod、下载暂存和修补工件保存在应用私有目录。浏览创意工坊时只会连接 Steam 公开服务和经过校验的下载地址。密码和 Steam Guard 验证码只用于认证；选择记住登录状态时，刷新令牌会由 Android Keystore 加密保存。", onDismiss)
         DialogKind.License -> TextDialog("开源许可", "本项目以 GNU GPLv3 开源", onDismiss)
-        DialogKind.ClearCache -> ConfirmDialog("清理本地 Mod 缓存？", "这会删除应用内已添加的 Mod", "确认清理", { actions.clearModCache(); onDismiss() }, onDismiss)
+        DialogKind.ClearCache -> ConfirmDialog("清理 Manager 私有 Mod 缓存？", "这会删除 Manager 已添加的 Mod，并安排从游戏 Mod 目录中移除对应内容。游戏中的其他 Mod 不会受影响。", "确认清理", { actions.clearModCache(); onDismiss() }, onDismiss)
         is DialogKind.DeleteCachedMod -> {
-            val entry = state.deploymentPlan.firstOrNull { it.cacheKey == dialog.cacheKey }
-            if (entry != null) ConfirmDialog("删除 ${entry.displayName}？", "这会删除应用内的 Mod，并从同步列表移除。游戏内已有 Mod 不会立即改变，之后同步时才会更新。", "删除 Mod", { actions.deleteCachedMod(entry.cacheKey); onDismiss() }, onDismiss)
+            val item = state.gameModSyncItems.firstOrNull { it.cacheKey == dialog.cacheKey }
+            if (item != null) ConfirmDialog("删除 ${item.displayName}？", "这会删除 Manager 私有缓存，并从游戏 Mod 目录移除对应内容。若游戏服务暂不可用，返回 Manager 后会自动继续。", "删除 Mod", { actions.deleteCachedMod(item.cacheKey); onDismiss() }, onDismiss)
         }
-        DialogKind.SyncMods -> {
-            val external = state.gameModStorage?.mods.orEmpty().filterNot { it.managedBySnapshot }
-            ConfirmDialog(
-                "同步 Mod 到游戏？",
-                if (external.isEmpty()) "会将当前启用的 Mod 和顺序同步到游戏。" else "发现 ${external.size} 个不由本应用管理的游戏内 Mod。继续会用当前列表替换它们；取消则不会修改游戏。",
-                if (external.isEmpty()) "确认同步" else "替换并同步",
-                { actions.syncMods(external.isNotEmpty()); onDismiss() },
-                onDismiss,
-            )
-        }
-        DialogKind.StopGameAndSync -> ConfirmDialog("结束游戏进程后同步mod", "游戏正在运行。继续会先结束游戏进程后尝试同步mod", "结束游戏并同步mod", { actions.confirmStopGameAndSync(); onDismiss() }, { actions.dismissStopGameAndSync(); onDismiss() })
         DialogKind.XiaomiInstallRisk -> TextDialog(
             "小米设备安装提示",
             "由于 MIUI / 澎湃系统对Android API的修改，安装过程可能出现无法预知的情况并导致失败。如果遇到安装失败，大概率可以通过系统设置的开发者选项关闭 MIUI 优化/系统优化来修复",
