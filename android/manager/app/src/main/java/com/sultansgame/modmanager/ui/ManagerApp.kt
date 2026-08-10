@@ -99,6 +99,7 @@ import com.sultansgame.modmanager.model.WorkshopBrowseTagGroupSelectionMode
 import com.sultansgame.modmanager.model.WorkshopItem
 import com.sultansgame.modmanager.platform.game.GameProbeResult
 import com.sultansgame.modmanager.workshop.WorkshopHttpPolicy
+import kotlinx.coroutines.delay
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.Text
@@ -912,11 +913,7 @@ private fun DialogHost(state: ManagerUiState, actions: ManagerActions, dialog: D
             )
         }
         DialogKind.StopGameAndSync -> ConfirmDialog("结束游戏进程后同步mod", "游戏正在运行。继续会先结束游戏进程后尝试同步mod", "结束游戏并同步mod", { actions.confirmStopGameAndSync(); onDismiss() }, { actions.dismissStopGameAndSync(); onDismiss() })
-        DialogKind.XiaomiInstallRisk -> TextDialog(
-            "小米设备安装提示",
-            "由于 MIUI / 澎湃系统对Android API的修改，安装过程可能出现无法预知的情况并导致失败。如果遇到安装失败，大概率可以通过系统设置的开发者选项关闭 MIUI 优化/系统优化来修复",
-            onDismiss,
-        )
+        DialogKind.XiaomiInstallRisk -> XiaomiInstallRiskDialog(onDismiss)
         DialogKind.UpdateAvailable -> {
             state.availableUpdate?.let { update ->
                 UpdateAvailableDialog(
@@ -1309,6 +1306,44 @@ private fun LegalNoticeDialog(onAccept: () -> Unit, onDismiss: (() -> Unit)? = n
                 ConfirmationCheckbox("我已阅读并理解", checked) { checked = it }
                 PrimaryButton("确认", checked) { onAccept(); onDismiss?.invoke() }
                 onDismiss?.let { SecondaryButton("取消", onClick = it) }
+            }
+        }
+    }
+}
+
+private const val XIAOMI_INSTALL_RISK_READ_DELAY_MILLIS = 5_000L
+
+@Composable
+private fun XiaomiInstallRiskDialog(onDismiss: () -> Unit) {
+    var canDismiss by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        delay(XIAOMI_INSTALL_RISK_READ_DELAY_MILLIS)
+        canDismiss = true
+    }
+
+    Dialog(
+        onDismissRequest = { if (canDismiss) onDismiss() },
+        properties = DialogProperties(
+            dismissOnBackPress = canDismiss,
+            dismissOnClickOutside = canDismiss,
+        ),
+    ) {
+        Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(22.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text("小米设备安装提示", fontSize = 21.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    "由于 MIUI / 澎湃系统对Android API的修改，安装过程可能出现无法预知的情况并导致失败。如果遇到安装失败，大概率可以通过系统设置的开发者选项关闭 MIUI 优化/系统优化来修复",
+                    fontSize = 14.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+                Text(
+                    if (canDismiss) "已阅读 5 秒，现在可以关闭。" else "请阅读上方提示，5 秒后可以关闭。",
+                    fontSize = 13.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                )
+                PrimaryButton(if (canDismiss) "关闭" else "请阅读（5 秒）", canDismiss, onDismiss)
             }
         }
     }
