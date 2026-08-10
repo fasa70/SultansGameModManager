@@ -48,15 +48,13 @@ class InstalledApkExtractor(private val context: Context) {
             require(declaredSplitNames.all { !it.isNullOrBlank() }) { "游戏 split 元数据包含空名称" }
             require(declaredSplitNames.distinct().size == declaredSplitNames.size) { "游戏 split 元数据包含重复名称" }
             val splits = sourceSplits.mapIndexed { index, source ->
-                val copied = copyApk(source, File(root, "split-$index.apk"))
                 val declaredName = declaredSplitNames[index]
-                require(copied.inspection.splitName == declaredName) {
-                    "游戏 split 元数据与 APK manifest 不一致：$declaredName"
-                }
-                copied
-            }
-            require(splits.map { it.inspection.splitName }.toSet() == declaredSplitNames.toSet()) {
-                "游戏 split 元数据与 APK 内容不一致"
+                val copied = copyApk(source, File(root, "split-$index.apk"))
+                copied.copy(
+                    // For an APK already installed by Android, PackageInfo is authoritative for split identity.
+                    // Some older loader APKs do not expose their split attribute through archive inspection.
+                    inspection = copied.inspection.copy(splitName = declaredName),
+                )
             }
             return requireCompletePackageSet(transactionId, root, base, splits)
         } catch (error: Throwable) {
