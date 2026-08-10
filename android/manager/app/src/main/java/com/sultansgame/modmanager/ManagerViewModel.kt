@@ -502,32 +502,31 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun importZip(uri: Uri) {
+        if (mutableState.value.pendingExternalZip != null || mutableState.value.zipImportInProgress) {
+            mutableState.value = mutableState.value.copy(feedback = FeedbackMessage("请先处理当前待导入的 ZIP 文件。", isError = true))
+            return
+        }
         viewModelScope.launch {
-            mutableState.value = mutableState.value.copy(feedback = FeedbackMessage("正在校验并导入 ZIP Mod…"))
-            runCatching { withContext(Dispatchers.IO) { zipImporter.importZip(uri) } }
-                .onSuccess(::updateImportedMods)
+            mutableState.value = mutableState.value.copy(feedback = FeedbackMessage("正在安全接收 ZIP 文件…"))
+            runCatching { withContext(Dispatchers.IO) { externalZipInbox.receive(uri) } }
+                .onSuccess { request -> inspectPendingZip(request, showExternalConfirmation = false) }
                 .onFailure { error ->
                     mutableState.value = mutableState.value.copy(
-                        feedback = FeedbackMessage("ZIP 导入失败：${error.message ?: "无法验证内容"}", isError = true),
+                        feedback = FeedbackMessage("无法接收 ZIP：${error.message ?: "请重试"}", isError = true),
                     )
                 }
         }
     }
 
     fun receiveExternalZip(uri: Uri) {
-        if (mutableState.value.pendingExternalZip != null) {
+        if (mutableState.value.pendingExternalZip != null || mutableState.value.zipImportInProgress) {
             mutableState.value = mutableState.value.copy(feedback = FeedbackMessage("请先处理当前待导入的外部 ZIP 文件。", isError = true))
             return
         }
         viewModelScope.launch {
             mutableState.value = mutableState.value.copy(feedback = FeedbackMessage("正在安全接收外部 ZIP 文件…"))
             runCatching { withContext(Dispatchers.IO) { externalZipInbox.receive(uri) } }
-                .onSuccess { request ->
-                    mutableState.value = mutableState.value.copy(
-                        pendingExternalZip = request,
-                        feedback = null,
-                    )
-                }
+                .onSuccess { request -> inspectPendingZip(request, showExternalConfirmation = true) }
                 .onFailure { error ->
                     mutableState.value = mutableState.value.copy(
                         feedback = FeedbackMessage("无法接收外部 ZIP：${error.message ?: "请重试"}", isError = true),
@@ -536,28 +535,94 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun confirmExternalZipImport() {
-        val request = mutableState.value.pendingExternalZip ?: return
-        mutableState.value = mutableState.value.copy(pendingExternalZip = null, feedback = FeedbackMessage("正在校验并导入 ${request.displayName}…"))
+    private fun inspectPendingZip(request: com.sultansgame.modmanager.platform.saf.ExternalZipImportRequest, showExternalConfirmation: Boolean) {
         viewModelScope.launch {
             try {
-                val imported = withContext(Dispatchers.IO) { zipImporter.importZip(externalZipInbox.fileFor(request)) }
-                updateImportedMods(imported)
-            } catch (error: CancellationException) {
-                throw error
+                val inspection = withContext(Dispatchers.IO) { zipImporter.inspect(externalZipInbox.fileFor(request)) }
+                mutableState.value = mutableState.value.copy(
+                    pendingExternalZip = request,
+                    pendingZipPassword = inspection.passwordRequired,
+                    feedback = null,
+                )
+                if (!inspection.passwordRequired && !showExternalConfirmation) {
+                    confirmExternalZipImport()
+                }
             } catch (error: Exception) {
+                withContext(Dispatchers.IO) { externalZipInbox.discard(request) }
                 mutableState.value = mutableState.value.copy(
                     feedback = FeedbackMessage("ZIP 导入失败：${error.message ?: "无法验证内容"}", isError = true),
                 )
-            } finally {
-                withContext(Dispatchers.IO) { externalZipInbox.discard(request) }
             }
         }
     }
 
+    fun confirmExternalZipImport() {
+        val request = mutableState.value.pendingExternalZip ?: return
+        if (mutableState.value.pendingZipPassword) return
+        mutableState.value = mutableState.value.copy(zipImportInProgress = true, feedback = FeedbackMessage("正在校验并导入 ${request.displayName}…"))
+        viewModelScope.launch {
+            try {
+                val imported = withContext(Dispatchers.IO) { zipImporter.importZip(externalZipInbox.fileFor(request)) }
+                updateImportedMods(imported)
+                clearPendingZip(request)
+            } catch (error: CancellationException) {
+                clearPendingZip(request)
+                throw error
+            } catch (error: Exception) {
+                clearPendingZip(request)
+                mutableState.value = mutableState.value.copy(
+                    feedback = FeedbackMessage("ZIP 导入失败：${error.message ?: "无法验证内容"}", isError = true),
+                )
+            } finally {
+                mutableState.value = mutableState.value.copy(zipImportInProgress = false)
+            }
+        }
+    }
+
+    fun submitZipPassword(password: CharArray) {
+        val request = mutableState.value.pendingExternalZip ?: run {
+            password.fill('\u0000')
+            return
+        }
+        if (!mutableState.value.pendingZipPassword || mutableState.value.zipImportInProgress) {
+            password.fill('\u0000')
+            return
+        }
+        mutableState.value = mutableState.value.copy(zipImportInProgress = true, feedback = null)
+        viewModelScope.launch {
+            try {
+                val imported = withContext(Dispatchers.IO) {
+                    zipImporter.importZip(externalZipInbox.fileFor(request), password)
+                }
+                updateImportedMods(imported)
+                clearPendingZip(request)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: com.sultansgame.modmanager.platform.saf.ZipImportException.InvalidPasswordOrEncryptedData) {
+                mutableState.value = mutableState.value.copy(
+                    feedback = FeedbackMessage("密码错误，或 ZIP 加密内容已损坏，请重试。", isError = true),
+                )
+            } catch (error: Exception) {
+                clearPendingZip(request)
+                mutableState.value = mutableState.value.copy(
+                    feedback = FeedbackMessage("ZIP 导入失败：${error.message ?: "无法验证内容"}", isError = true),
+                )
+            } finally {
+                password.fill('\u0000')
+                mutableState.value = mutableState.value.copy(zipImportInProgress = false)
+            }
+        }
+    }
+
+    private suspend fun clearPendingZip(request: com.sultansgame.modmanager.platform.saf.ExternalZipImportRequest) {
+        withContext(Dispatchers.IO) { externalZipInbox.discard(request) }
+        mutableState.value = mutableState.value.copy(pendingExternalZip = null, pendingZipPassword = false)
+    }
+
     fun cancelExternalZipImport() {
         val request = mutableState.value.pendingExternalZip ?: return
-        mutableState.value = mutableState.value.copy(pendingExternalZip = null)
+        if (mutableState.value.zipImportInProgress) return
+        mutableState.value = mutableState.value.copy(pendingExternalZip = null, pendingZipPassword = false)
         viewModelScope.launch(Dispatchers.IO) { externalZipInbox.discard(request) }
     }
 

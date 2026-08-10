@@ -20,6 +20,7 @@ protobufPlugin = "0.9.4"
 okio = "3.9.1"
 xz = "1.10"
 zstd = "1.5.6-9"
+zip4j = "2.11.6"
 work = "2.10.1"
 navigation = "2.9.7"
 room = "2.7.2"
@@ -51,6 +52,7 @@ okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
 protobuf-javalite = { module = "com.google.protobuf:protobuf-javalite", version.ref = "protobuf" }
 xz = { module = "org.tukaani:xz", version.ref = "xz" }
 zstd = { module = "com.github.luben:zstd-jni", version.ref = "zstd" }
+zip4j = { module = "net.lingala.zip4j:zip4j", version.ref = "zip4j" }
 androidx-lifecycle-viewmodel = { module = "androidx.lifecycle:lifecycle-viewmodel-ktx", version.ref = "lifecycle" }
 androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
 androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }
