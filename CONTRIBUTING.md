@@ -57,7 +57,7 @@ cd android/manager
 1. Run the Manager JVM suite:
    `./gradlew :core:model:test :core:apk:test :core:storage:test :core:workshop:test :core:steam-protocol:test :core:workshop-download:test :app:testDebugUnitTest`
 2. If modifying native code, configure the official backend with all release gates enabled, build the host tests, and run `ctest --test-dir native/build-host --output-on-failure`.
-3. If modifying the frozen split or native loader, verify the unsigned template, ZIP_STORED native entry, embedded native SHA, complete template SHA, and production/test pins as described in [docs/build.md](docs/build.md).
+3. If modifying the loader template or native loader, verify the unsigned template, package/version/split structure, ZIP_STORED native entry, and embedded native SHA as described in [docs/build.md](docs/build.md). Record the complete template SHA as release provenance; it is not a runtime patch gate.
 4. Run `./gradlew :app:connectedDebugAndroidTest` only when an emulator/device is explicitly available and installation is authorized; otherwise record it as skipped rather than claiming it passed.
 5. Keep PRs focused — one concern per PR
 

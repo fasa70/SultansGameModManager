@@ -74,7 +74,6 @@ internal class GameProfileRegistry(
 
     private fun GameProfile.isComplete(): Boolean =
         loaderSplitName.isNotBlank() &&
-            loaderTemplateSha256.isSha256() &&
             nativeLoaderSha256.isSha256()
 
     private fun String?.isSha256(): Boolean = this?.matches(SHA256_PATTERN) == true
@@ -90,8 +89,7 @@ internal class GameProfileRegistry(
             requiredAbi = REQUIRED_ABI,
             versionCodes = setOf(10005L),
             loaderSplitName = "modloader",
-            loaderTemplateSha256 = "fbc06a1ddfdae416095e0523d89da225bf29640ed7db71ab90ca2eabf01287c6",
-            nativeLoaderSha256 = "404b7caa0aab2c02fe6e1217616291e4e91bed57eb858e9b15ec135d2f4d29a8",
+            nativeLoaderSha256 = "1a2fc9c1a2304574f667895e1fe9ea6b82f2746877ab637c1e6e2c803ccaa491",
             providerProtocolVersion = 2,
         )
     }

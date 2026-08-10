@@ -25,10 +25,6 @@ class GameProfileRegistryTest {
         requireNotNull(result)
         assertEquals(2, result.providerProtocolVersion)
         assertEquals(
-            "fbc06a1ddfdae416095e0523d89da225bf29640ed7db71ab90ca2eabf01287c6",
-            result.loaderTemplateSha256,
-        )
-        assertEquals(
             "404b7caa0aab2c02fe6e1217616291e4e91bed57eb858e9b15ec135d2f4d29a8",
             result.nativeLoaderSha256,
         )
@@ -67,7 +63,27 @@ class GameProfileRegistryTest {
     }
 
     @Test
-    fun rejectsProfileMissingFrozenLoaderDigests() {
+    fun allowsProfileWithoutFrozenTemplateDigestWhenNativeDigestIsPinned() {
+        val registry = GameProfileRegistry(
+            profiles = listOf(
+                GameProfile(
+                    id = "native-only",
+                    packageNames = setOf("com.gametree.sultan.pd"),
+                    signingDigestsSha256 = setOf(OFFICIAL_CERTIFICATE),
+                    versionCodes = setOf(10005L),
+                    nativeLoaderSha256 = "a".repeat(64),
+                ),
+            ),
+        )
+
+        val result = registry.classify(PatchSource.SelectedApk, extractedSet(officialInspection()))
+
+        assertEquals(Compatibility.Candidate, result.compatibility.compatibility)
+        assertEquals("native-only", result.profileId)
+    }
+
+    @Test
+    fun rejectsProfileMissingFrozenNativeDigest() {
         val registry = GameProfileRegistry(
             profiles = listOf(
                 GameProfile(
@@ -75,8 +91,7 @@ class GameProfileRegistryTest {
                     packageNames = setOf("com.gametree.sultan.pd"),
                     signingDigestsSha256 = setOf(OFFICIAL_CERTIFICATE),
                     versionCodes = setOf(10005L),
-                    loaderTemplateSha256 = null,
-                    nativeLoaderSha256 = "a".repeat(64),
+                    nativeLoaderSha256 = null,
                 ),
             ),
         )

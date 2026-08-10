@@ -16,7 +16,6 @@ interface SplitArtifactFactory {
 data class LoaderSplitRequest(
     val targetApplicationId: String,
     val loaderSplitName: String,
-    val loaderTemplateSha256: String,
     val target: ApkInspection,
     val templateOutputPath: String,
 )

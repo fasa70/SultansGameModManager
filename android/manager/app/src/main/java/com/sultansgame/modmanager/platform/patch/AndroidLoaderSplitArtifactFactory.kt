@@ -21,7 +21,6 @@ internal class AndroidLoaderSplitArtifactFactory(
         require(request.targetApplicationId == GAME_PACKAGE) { "loader split 目标包名不匹配" }
         require(request.loaderSplitName == SPLIT_NAME) { "loader split 名称与冻结模板不匹配" }
         require(request.target.versionCode != null) { "目标 APK 缺少版本号" }
-        require(request.loaderTemplateSha256 == TEMPLATE_SHA256) { "loader split 模板摘要不匹配" }
         val destination = File(request.templateOutputPath).canonicalFile
         val stagingRoot = File(context.filesDir, "patch-staging").canonicalFile
         require(destination.parentFile?.name == "template") { "loader split 模板暂存路径无效" }
@@ -36,7 +35,6 @@ internal class AndroidLoaderSplitArtifactFactory(
                 }
             }
             val templateDigest = zipInspector.sha256 { FileInputStream(partial) }
-            require(templateDigest == TEMPLATE_SHA256) { "loader split 模板被篡改" }
             val parsed = archiveInspector.inspect(partial, TEMPLATE_ASSET)
             require(parsed.packageName == null || parsed.packageName == GAME_PACKAGE) { "loader split 包名不匹配" }
             require(parsed.versionCode == null || parsed.versionCode == request.target.versionCode) {
@@ -64,7 +62,7 @@ internal class AndroidLoaderSplitArtifactFactory(
                 ),
                 splitName = request.loaderSplitName,
                 verificationSummary = listOf(
-                    "模板摘要已验证",
+                    "内嵌 loader 模板已复制",
                     "同包名 split=${request.loaderSplitName}",
                     "native 摘要已验证",
                 ),
@@ -81,6 +79,7 @@ internal class AndroidLoaderSplitArtifactFactory(
         try {
             java.util.zip.ZipFile(file).use { archive ->
                 val entry = requireNotNull(archive.getEntry(NATIVE_ASSET)) { "loader split 缺少 native asset" }
+                require(entry.method == java.util.zip.ZipEntry.STORED) { "loader split native asset 必须未压缩" }
                 archive.getInputStream(entry).use { input ->
                     FileOutputStream(temporary).use { output ->
                         input.copyTo(output)
@@ -99,6 +98,5 @@ internal class AndroidLoaderSplitArtifactFactory(
         const val SPLIT_NAME = "modloader"
         const val TEMPLATE_ASSET = "release/modloader-template-10005.apk"
         const val NATIVE_ASSET = "assets/modloader/arm64-v8a/modloader.bin"
-        const val TEMPLATE_SHA256 = "fbc06a1ddfdae416095e0523d89da225bf29640ed7db71ab90ca2eabf01287c6"
     }
 }

@@ -125,15 +125,12 @@ internal class PatchOrchestrator(
             sign(artifact, File(signedDirectory, "split-$index.apk"), identity)
                 ?: return fail(extracted.transactionId, PatchFailure.SigningUnavailable, "split APK 重签失败。")
         }
-        val templateSha256 = profile.loaderTemplateSha256
-            ?: return fail(extracted.transactionId, PatchFailure.SplitUnavailable, "尚未冻结匹配游戏 profile 的 loader split 模板摘要。")
         val nativeDigest = profile.nativeLoaderSha256
             ?: return fail(extracted.transactionId, PatchFailure.SplitUnavailable, "尚未冻结匹配游戏 profile 的 loader native 摘要。")
         val splitResult = splitFactoryForNativeDigest(nativeDigest).build(
             LoaderSplitRequest(
                 targetApplicationId = requireNotNull(extracted.base.inspection.packageName),
                 loaderSplitName = profile.loaderSplitName,
-                loaderTemplateSha256 = templateSha256,
                 target = extracted.base.inspection,
                 templateOutputPath = File(extracted.root.parentFile, "template/modloader.apk").absolutePath,
             ),

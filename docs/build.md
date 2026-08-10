@@ -32,7 +32,7 @@ bash scripts/build-release-local.sh
 
 The local wrapper only discovers machine-specific JDK/SDK/NDK defaults. The tracked pipeline auto-detects CMake, Ninja, AAPT2, D8, `apksigner`, and `llvm-readelf`; all Python file operations use UTF-8. It stages the candidate and digest pins, verifies the complete closure, applies them transactionally, assembles the signed Manager APK, verifies the APK, and rolls the release files back if a later step fails. Do not run it in a worktree with uncommitted release target files.
 
-The native and template identities are recorded in `release/loader-template-10005.json`. Do not hand-edit only one digest pin: the frozen APK, metadata, production profile, factory, and Android test fixture must change together.
+The native and template identities are recorded in `release/loader-template-10005.json`. The complete template SHA-256 is release provenance; runtime patching only pins the embedded native SHA-256 and validates the template structure/signing state. Do not hand-edit only one digest or the frozen binary metadata.
 
 ## Native release requirements
 
@@ -86,7 +86,7 @@ unzip -t android/manager/app/src/main/assets/release/modloader-template-10005.ap
 sha256sum android/manager/app/src/main/assets/release/modloader-template-10005.apk
 ```
 
-The template must remain unsigned and its native entry must be stored rather than deflated. Manager patching independently rechecks the full template and embedded native digest before signing.
+The template must remain unsigned and its native entry must be stored rather than deflated. Manager patching independently validates package/version/split structure, unsigned state, native `ZIP_STORED`, and embedded native digest before signing. The complete template digest is checked by the release/provenance verifier, not used as a patch-time rejection gate.
 
 ## Running tests
 

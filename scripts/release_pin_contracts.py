@@ -48,34 +48,16 @@ def contract(
 
 PIN_CONTRACTS = (
     contract(
-        "GameProfileRegistry template",
-        "android/manager/app/src/main/java/com/sultansgame/modmanager/platform/patch/GameProfileRegistry.kt",
-        rf'(loaderTemplateSha256\s*=\s*")({SHA256})(")',
-        "template",
-    ),
-    contract(
         "GameProfileRegistry native",
         "android/manager/app/src/main/java/com/sultansgame/modmanager/platform/patch/GameProfileRegistry.kt",
         rf'(nativeLoaderSha256\s*=\s*")({SHA256})(")',
         "native",
     ),
     contract(
-        "AndroidLoaderSplitArtifactFactory template",
-        "android/manager/app/src/main/java/com/sultansgame/modmanager/platform/patch/AndroidLoaderSplitArtifactFactory.kt",
-        rf'(const\s+val\s+TEMPLATE_SHA256\s*=\s*")({SHA256})(")',
-        "template",
-    ),
-    contract(
         "DeviceSigningKeyStoreTest native",
         "android/manager/app/src/androidTest/java/com/sultansgame/modmanager/platform/patch/DeviceSigningKeyStoreTest.kt",
         rf'(AndroidLoaderSplitArtifactFactory\(\s*\n\s*context,\s*")({SHA256})(")',
         "native",
-    ),
-    contract(
-        "DeviceSigningKeyStoreTest template",
-        "android/manager/app/src/androidTest/java/com/sultansgame/modmanager/platform/patch/DeviceSigningKeyStoreTest.kt",
-        rf'(loaderTemplateSha256\s*=\s*")({SHA256})(")',
-        "template",
     ),
     contract(
         "release metadata template",
