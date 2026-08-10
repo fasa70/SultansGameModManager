@@ -17,6 +17,11 @@ sealed interface PackageInstallSubmission {
     data class Failed(val reason: String) : PackageInstallSubmission
 }
 
+sealed interface PackageInstallSessionState {
+    data object Pending : PackageInstallSessionState
+    data object Missing : PackageInstallSessionState
+}
+
 data class PackageInstallStatus(
     val sessionId: Int,
     val status: Int,
@@ -92,6 +97,13 @@ class PackageInstallerGateway(private val context: Context) {
             PackageInstallSubmission.Failed(error.message ?: "无法提交系统安装会话。")
         }
     }
+
+    fun sessionState(sessionId: Int): PackageInstallSessionState =
+        if (context.packageManager.packageInstaller.getSessionInfo(sessionId) == null) {
+            PackageInstallSessionState.Missing
+        } else {
+            PackageInstallSessionState.Pending
+        }
 
     fun parseStatus(intent: Intent): PackageInstallStatus? {
         val sessionId = intent.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, -1)

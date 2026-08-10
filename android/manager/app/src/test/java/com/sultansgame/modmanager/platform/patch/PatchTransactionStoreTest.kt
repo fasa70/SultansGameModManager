@@ -2,6 +2,7 @@ package com.sultansgame.modmanager.platform.patch
 
 import android.content.Context
 import android.content.ContextWrapper
+import com.sultansgame.modmanager.model.PatchInstallMode
 import com.sultansgame.modmanager.model.PatchStage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -168,6 +169,11 @@ class PatchTransactionStoreTest {
         stage = stage,
         sessionId = null,
         artifactDigests = digests,
+        expectedCertificateSha256 = CERTIFICATE,
+        expectedVersionCode = 10005L,
+        expectedSplitNames = listOf("modloader"),
+        sourceSplitNames = listOf("modloader"),
+        installMode = PatchInstallMode.FreshInstall,
         signedArtifactNames = artifactNames,
     )
 
@@ -179,5 +185,6 @@ class PatchTransactionStoreTest {
 
     private companion object {
         const val DIGEST = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        const val CERTIFICATE = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     }
 }

@@ -1,6 +1,7 @@
 package com.sultansgame.modmanager.platform.patch
 
 import android.content.Context
+import com.sultansgame.modmanager.model.PatchInstallMode
 import com.sultansgame.modmanager.model.PatchMode
 import com.sultansgame.modmanager.model.PatchStage
 import java.io.File
@@ -17,6 +18,8 @@ internal data class PatchTransaction(
     val expectedCertificateSha256: String? = null,
     val expectedVersionCode: Long? = null,
     val expectedSplitNames: List<String> = emptyList(),
+    val sourceSplitNames: List<String> = emptyList(),
+    val installMode: PatchInstallMode? = null,
     val signedArtifactNames: List<String> = emptyList(),
     val failure: String? = null,
 )
@@ -103,6 +106,8 @@ internal class PatchTransactionStore {
             transaction.expectedCertificateSha256?.let { setProperty("certificate", it) }
             transaction.expectedVersionCode?.let { setProperty("versionCode", it.toString()) }
             setProperty("splitNames", transaction.expectedSplitNames.joinToString(","))
+            setProperty("sourceSplitNames", transaction.sourceSplitNames.joinToString(","))
+            transaction.installMode?.let { setProperty("installMode", it.name) }
             setProperty("signedArtifacts", transaction.signedArtifactNames.joinToString(","))
             transaction.failure?.let { setProperty("failure", it) }
             FileOutputStream(temporary).use { output ->
@@ -128,7 +133,9 @@ internal class PatchTransactionStore {
                     profileId = getProperty("profileId"),
                     expectedCertificateSha256 = getProperty("certificate"),
                     expectedVersionCode = getProperty("versionCode")?.toLongOrNull(),
-                    expectedSplitNames = getProperty("splitNames").orEmpty().split(',').filter(String::isNotBlank),
+                expectedSplitNames = getProperty("splitNames").orEmpty().split(',').filter(String::isNotBlank),
+                    sourceSplitNames = getProperty("sourceSplitNames").orEmpty().split(',').filter(String::isNotBlank),
+                    installMode = getProperty("installMode")?.let(PatchInstallMode::valueOf),
                     signedArtifactNames = getProperty("signedArtifacts").orEmpty().split(',').filter(String::isNotBlank),
                     failure = getProperty("failure"),
                 )
@@ -163,7 +170,15 @@ internal class PatchTransactionStore {
             signedArtifactNames.distinct().size == signedArtifactNames.size &&
             signedArtifactNames.all { it == File(it).name } &&
             artifactDigests.size == signedArtifactNames.size &&
-            artifactDigests.all { it.matches(SHA256_PATTERN) }
+            artifactDigests.all { it.matches(SHA256_PATTERN) } &&
+            expectedSplitNames.size == signedArtifactNames.size - 1 &&
+            expectedSplitNames.distinct().size == expectedSplitNames.size &&
+            expectedSplitNames.none(String::isBlank) &&
+            sourceSplitNames.distinct().size == sourceSplitNames.size &&
+            sourceSplitNames.none(String::isBlank) &&
+            expectedCertificateSha256?.matches(SHA256_PATTERN) == true &&
+            expectedVersionCode != null &&
+            installMode != null
 
     private companion object {
         private val SHA256_PATTERN = Regex("[0-9a-fA-F]{64}")

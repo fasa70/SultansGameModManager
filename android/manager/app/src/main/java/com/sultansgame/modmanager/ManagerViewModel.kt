@@ -316,6 +316,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                     GameProbeResult.NotInstalled -> PatchUiState.ReadyToInstall(
                         currentPatch.transactionId,
                         "已确认原版游戏未安装；可安装已准备的修补工件。",
+                        com.sultansgame.modmanager.model.PatchInstallMode.FreshInstall,
                     )
                     is GameProbeResult.Found -> currentPatch.copy(
                         gameState = result,
@@ -1061,7 +1062,11 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         if (!packageInstaller.canRequestInstalls()) return
         mutableState.value = mutableState.value.copy(
             patch = current.transactionId?.let { transactionId ->
-                PatchUiState.ReadyToInstall(transactionId, "已获得安装授权；请确认后安装已准备的修补工件。")
+                PatchUiState.ReadyToInstall(
+                    transactionId,
+                    "已获得安装授权；请确认后安装已准备的修补工件。",
+                    com.sultansgame.modmanager.model.PatchInstallMode.FreshInstall,
+                )
             } ?: current.input?.let { input ->
                 PatchUiState.Review(input, requireNotNull(current.confirmation))
             } ?: PatchUiState.ChooseSource,
@@ -1153,8 +1158,9 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                 confirmation = confirmation,
             )
             is PatchOrchestrationResult.ReadyToInstall -> PatchUiState.ReadyToInstall(
-                result.transactionId,
-                result.summary,
+                transactionId = result.transactionId,
+                summary = result.summary,
+                installMode = result.installMode,
             )
             is PatchOrchestrationResult.NeedsGameUninstall -> {
                 val currentGameState = withContext(Dispatchers.IO) { gameProbe.probe() }
@@ -1163,11 +1169,12 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                     GameProbeResult.NotInstalled -> PatchUiState.ReadyToInstall(
                         result.transactionId,
                         "已确认原版游戏未安装；可安装已准备的修补工件。",
+                        com.sultansgame.modmanager.model.PatchInstallMode.FreshInstall,
                     )
                     else -> PatchUiState.AwaitingOriginalUninstall(
                         transactionId = result.transactionId,
                         gameState = currentGameState,
-                        summary = "签名工件已准备。请先在系统界面卸载当前游戏，再返回此处继续。",
+                        summary = result.reason,
                     )
                 }
             }
@@ -1234,7 +1241,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     private fun com.sultansgame.modmanager.platform.patch.PatchTransaction.toRecoveryUiModel() =
         PreparedPatchRecovery(
             transactionId = id,
-            summary = "发现已准备的修补 APK；继续前会校验工件和设备签名身份。",
+            summary = "发现已准备的修补 APK；继续前会校验工件、设备签名身份和当前安装 split。",
         )
 
     private fun PatchWorkspaceCleanupSummary.toCleanupUiModel() = PatchCleanupUiModel(

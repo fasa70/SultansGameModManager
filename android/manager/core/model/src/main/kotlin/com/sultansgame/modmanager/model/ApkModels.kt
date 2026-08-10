@@ -63,6 +63,11 @@ enum class PatchMode {
     Experimental,
 }
 
+enum class PatchInstallMode {
+    FreshInstall,
+    SameDeviceOverwrite,
+}
+
 enum class DeviceSigningKeyState {
     NotCreated,
     Ready,
