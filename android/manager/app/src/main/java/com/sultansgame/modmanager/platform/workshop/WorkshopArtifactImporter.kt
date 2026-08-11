@@ -7,6 +7,7 @@ import com.sultansgame.modmanager.model.DownloadTask
 import com.sultansgame.modmanager.platform.saf.ZipModImporter
 import com.sultansgame.modmanager.platform.storage.AndroidPrivateModCache
 import com.sultansgame.modmanager.storage.ImportValidationException
+import com.sultansgame.modmanager.storage.ModDisplayNamePolicy
 import java.io.File
 import java.util.UUID
 
@@ -29,7 +30,10 @@ class WorkshopArtifactImporter(
         WorkshopStagingArtifact.verify(staging, task)
         val payloads = WorkshopStagingArtifact.payloadRoots(staging)
         if (payloads.size == 1 && payloads.single().isFile && isZip(payloads.single())) {
-            return zipImporter.importDownloadedZip(payloads.single()).copy(
+            return zipImporter.importDownloadedZip(
+                payloads.single(),
+                displayName = ModDisplayNamePolicy.normalize(task.title),
+            ).copy(
                 source = CacheSource.Workshop,
                 publishedFileId = task.publishedFileId,
             )
@@ -39,7 +43,7 @@ class WorkshopArtifactImporter(
             payloads.size == 1 && payloads.single().isDirectory && hasManifest(payloads.single()) -> payloads.single()
             else -> throw ImportValidationException("下载结果不是包含唯一 Info.json 的 ZIP 或 Mod 目录")
         }
-        return cache.importDirectory(root, CacheSource.Workshop).copy(publishedFileId = task.publishedFileId)
+        return cache.importDirectory(root, CacheSource.Workshop, root.name).copy(publishedFileId = task.publishedFileId)
     }
 
     fun discard(task: DownloadTask) {

@@ -2,7 +2,6 @@ package com.sultansgame.modmanager.storage
 
 import com.sultansgame.modmanager.model.ModFile
 import com.sultansgame.modmanager.model.ModFileKind
-import com.sultansgame.modmanager.model.ModManifest
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
@@ -13,21 +12,18 @@ import kotlin.io.path.name
 import kotlin.streams.toList
 
 data class ValidatedModImport(
-    val manifest: ModManifest,
+    val displayName: String,
     val files: List<ModFile>,
     val contentDigestSha256: String,
     val sizeBytes: Long,
 )
 
-class ModImportValidator(
-    private val manifestValidator: InfoJsonValidator = InfoJsonValidator(),
-) {
-    fun validate(root: Path): ValidatedModImport {
+class ModImportValidator {
+    fun validate(root: Path, displayName: String = root.name): ValidatedModImport {
         require(Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(root)) {
             "Mod 根目录不可读"
         }
-        val manifestPath = findManifest(root)
-        val manifest = readManifest(manifestPath)
+        findManifest(root)
         val files = mutableListOf<ModFile>()
         val digests = mutableListOf<String>()
         val normalizedPaths = mutableSetOf<String>()
@@ -46,7 +42,12 @@ class ModImportValidator(
         val contentDigest = MessageDigest.getInstance("SHA-256")
             .digest(digests.sorted().joinToString("\n").toByteArray())
             .joinToString("") { "%02x".format(it) }
-        return ValidatedModImport(manifest, files.sortedBy { it.relativePath }, contentDigest, totalSize)
+        return ValidatedModImport(
+            displayName = ModDisplayNamePolicy.normalize(displayName) ?: ModDisplayNamePolicy.fallback(contentDigest),
+            files = files.sortedBy { it.relativePath },
+            contentDigestSha256 = contentDigest,
+            sizeBytes = totalSize,
+        )
     }
 
     private fun findManifest(root: Path): Path {
@@ -59,18 +60,6 @@ class ModImportValidator(
         }
         if (candidates.size != 1) throw ImportValidationException("根目录必须包含唯一的 Info.json")
         return candidates.single()
-    }
-
-    private fun readManifest(path: Path): ModManifest {
-        val attributes = Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
-        if (!attributes.isRegularFile || !ModPathPolicy.isSupportedSize(attributes.size(), path.name)) {
-            throw ImportValidationException("Info.json 不可读")
-        }
-        return try {
-            manifestValidator.parse(Files.readAllBytes(path))
-        } catch (error: InvalidManifestException) {
-            throw ImportValidationException(error.message ?: "Info.json 无效")
-        }
     }
 
     private fun visit(
@@ -132,6 +121,23 @@ class ModImportValidator(
         path.endsWith(".wav", ignoreCase = true) || path.endsWith(".mp3", ignoreCase = true) || path.endsWith(".ogg", ignoreCase = true) -> ModFileKind.Audio
         else -> null
     }
+}
+
+object ModDisplayNamePolicy {
+    private const val MAXIMUM_DISPLAY_NAME_LENGTH = 128
+
+    fun normalize(raw: String): String? {
+        val normalized = raw.filterNot(Char::isISOControl)
+            .trim()
+            .split(Regex("\\s+"))
+            .filter(String::isNotEmpty)
+            .joinToString(" ")
+            .take(MAXIMUM_DISPLAY_NAME_LENGTH)
+            .trim()
+        return normalized.takeIf(String::isNotEmpty)
+    }
+
+    fun fallback(cacheKey: String): String = "已缓存 Mod · ${cacheKey.take(8)}"
 }
 
 class ImportValidationException(message: String) : IllegalArgumentException(message)

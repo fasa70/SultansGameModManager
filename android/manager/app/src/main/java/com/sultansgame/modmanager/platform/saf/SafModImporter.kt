@@ -2,12 +2,14 @@ package com.sultansgame.modmanager.platform.saf
 
 import android.content.Context
 import android.net.Uri
+import android.provider.OpenableColumns
 import com.sultansgame.modmanager.model.CacheSource
 import com.sultansgame.modmanager.model.CachedMod
 import com.sultansgame.modmanager.model.MAXIMUM_MOD_PATH_DEPTH
 import com.sultansgame.modmanager.platform.storage.AndroidPrivateModCache
 import com.sultansgame.modmanager.storage.ImportValidationException
 import com.sultansgame.modmanager.storage.MAXIMUM_MOD_ENTRY_COUNT
+import com.sultansgame.modmanager.storage.ModDisplayNamePolicy
 import com.sultansgame.modmanager.storage.ModPathPolicy
 import com.sultansgame.modmanager.storage.StorageBudget
 import net.lingala.zip4j.ZipFile
@@ -47,23 +49,32 @@ class ZipModImporter(
                     output.fd.sync()
                 }
             } ?: throw ImportValidationException("无法读取所选 ZIP")
-            return importZip(temporary)
+            return importZip(temporary, archiveDisplayName = displayNameFor(uri))
         } finally {
             temporary.delete()
         }
     }
 
-    fun importZip(file: File, password: CharArray? = null): List<CachedMod> {
+    fun importZip(
+        file: File,
+        password: CharArray? = null,
+        archiveDisplayName: String? = null,
+    ): List<CachedMod> {
         validateArchiveFile(file)
-        return importZipFile(file, allowMultipleRoots = true, password = password)
+        return importZipFile(file, allowMultipleRoots = true, password = password, archiveDisplayName = archiveDisplayName)
     }
 
-    fun importDownloadedZip(file: File, password: CharArray? = null): CachedMod {
+    fun importDownloadedZip(file: File, password: CharArray? = null, displayName: String? = null): CachedMod {
         validateArchiveFile(file)
-        return importZipFile(file, allowMultipleRoots = false, password = password).single()
+        return importZipFile(file, allowMultipleRoots = false, password = password, archiveDisplayName = displayName).single()
     }
 
-    private fun importZipFile(file: File, allowMultipleRoots: Boolean, password: CharArray?): List<CachedMod> {
+    private fun importZipFile(
+        file: File,
+        allowMultipleRoots: Boolean,
+        password: CharArray?,
+        archiveDisplayName: String? = null,
+    ): List<CachedMod> {
         val stagingRoot = File(context.filesDir, "mod-cache")
         if (!stagingRoot.mkdirs() && !stagingRoot.isDirectory) throw ImportValidationException("无法创建私有导入目录")
         val staging = File(stagingRoot, ".${UUID.randomUUID()}.partial")
@@ -73,8 +84,11 @@ class ZipModImporter(
             if (!allowMultipleRoots && roots.size != 1) {
                 throw ImportValidationException("下载的 ZIP 必须只包含一个 Mod 根目录")
             }
-            roots.forEach(cache::validateDirectory)
-            return cache.importDirectories(roots, CacheSource.SafArchive)
+            val names = roots.map { root ->
+                val sourceName = if (root == staging) archiveDisplayName ?: file.nameWithoutExtension else root.name
+                ModDisplayNamePolicy.normalize(sourceName) ?: file.nameWithoutExtension
+            }
+            return cache.importDirectoriesWithNames(roots.zip(names), CacheSource.SafArchive)
         } finally {
             staging.deleteRecursively()
         }
@@ -157,6 +171,19 @@ class ZipModImporter(
             output.write(buffer, 0, count)
         }
     }
+
+    private fun displayNameFor(uri: Uri): String? = context.contentResolver.query(
+        uri,
+        arrayOf(OpenableColumns.DISPLAY_NAME),
+        null,
+        null,
+        null,
+    )?.use { cursor ->
+        val column = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+        cursor.takeIf { column >= 0 && it.moveToFirst() }?.getString(column)
+    }?.let { name ->
+        name.removeSuffix(".zip").removeSuffix(".ZIP")
+    } ?: uri.lastPathSegment?.substringAfterLast('/')?.removeSuffix(".zip")
 
     private fun normalizeEntry(name: String): String {
         if (name.isEmpty() || name.startsWith('/') || name.startsWith('\\')) throw ImportValidationException("ZIP 包含不安全路径")

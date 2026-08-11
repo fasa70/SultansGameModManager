@@ -35,12 +35,12 @@ class ZipModImporterInstrumentedTest {
             .orEmpty()
         try {
             writeZip(archive)
-            val importer = ZipModImporter(context, AndroidPrivateModCache(cacheRoot))
+            val importer = ZipModImporter(context, AndroidPrivateModCache(cacheRoot, context))
 
             val imported = importer.importZip(Uri.fromFile(archive))
 
             assertEquals(1, imported.size)
-            assertEquals("Private staging regression", imported.single().displayName)
+            assertEquals("zip-mod-import-$id", imported.single().displayName)
             val destination = File(cacheRoot, imported.single().cacheKey)
             assertTrue(destination.isDirectory)
             assertTrue(File(destination, "Info.json").isFile)
@@ -58,19 +58,19 @@ class ZipModImporterInstrumentedTest {
     }
 
     @Test
-    fun importsMultipleRootsAsOneBatch() {
+    fun importsMultipleRootsUsingDirectoryNames() {
         val id = UUID.randomUUID().toString()
         val archive = File(context.cacheDir, "zip-mod-multiple-$id.zip")
         val cacheRoot = File(context.filesDir, "zip-mod-multiple-cache-$id")
         try {
             ZipOutputStream(archive.outputStream()).use { output ->
-                writeEntry(output, "first/Info.json", "{\"name\":\"First\"}")
-                writeEntry(output, "second/Info.json", "{\"name\":\"Second\"}")
+                writeEntry(output, "first/Info.json", "not-json")
+                writeEntry(output, "second/Info.json", "{\"name\":")
             }
 
-            val imported = ZipModImporter(context, AndroidPrivateModCache(cacheRoot)).importZip(archive)
+            val imported = ZipModImporter(context, AndroidPrivateModCache(cacheRoot, context)).importZip(archive)
 
-            assertEquals(listOf("First", "Second"), imported.map { it.displayName })
+            assertEquals(listOf("first", "second"), imported.map { it.displayName })
             assertEquals(2, cacheRoot.listFiles()?.count { it.isDirectory && !it.name.startsWith('.') })
         } finally {
             archive.delete()
@@ -92,7 +92,7 @@ class ZipModImporterInstrumentedTest {
             File(invalid, "Info.json").writeText("not-json")
 
             val error = runCatching {
-                AndroidPrivateModCache(cacheRoot).importDirectories(
+                AndroidPrivateModCache(cacheRoot, context).importDirectories(
                     listOf(valid, invalid),
                     com.sultansgame.modmanager.model.CacheSource.SafArchive,
                 )
@@ -102,6 +102,30 @@ class ZipModImporterInstrumentedTest {
             assertFalse(cacheRoot.listFiles()?.any { it.isDirectory && !it.name.startsWith('.') } == true)
         } finally {
             root.deleteRecursively()
+            cacheRoot.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun acceptsMalformedInfoJsonWithoutChangingPayload() {
+        val id = UUID.randomUUID().toString()
+        val archive = File(context.cacheDir, "zip-mod-malformed-$id.zip")
+        val cacheRoot = File(context.filesDir, "zip-mod-malformed-cache-$id")
+        val manifest = byteArrayOf('{'.code.toByte(), 0.toByte(), '}'.code.toByte())
+        try {
+            ZipOutputStream(archive.outputStream()).use { output ->
+                output.putNextEntry(ZipEntry("Info.json"))
+                output.write(manifest)
+                output.closeEntry()
+            }
+
+            val imported = ZipModImporter(context, AndroidPrivateModCache(cacheRoot, context)).importZip(archive)
+            val cachedManifest = File(cacheRoot, "${imported.single().cacheKey}/Info.json")
+
+            assertEquals(archive.nameWithoutExtension, imported.single().displayName)
+            assertTrue(cachedManifest.readBytes().contentEquals(manifest))
+        } finally {
+            archive.delete()
             cacheRoot.deleteRecursively()
         }
     }
@@ -135,7 +159,7 @@ class ZipModImporterInstrumentedTest {
         val testRoot = File(context.filesDir, "symbolic-link-mod-$id")
         val target = File(testRoot, "target")
         val link = File(testRoot, "link")
-        val cache = AndroidPrivateModCache(File(context.filesDir, "symbolic-link-cache-$id"))
+        val cache = AndroidPrivateModCache(File(context.filesDir, "symbolic-link-cache-$id"), context)
         try {
             assertTrue(target.mkdirs())
             File(target, "Info.json").writeText("{\"name\":\"Link target\"}")
