@@ -355,7 +355,7 @@ private fun MainContent(
         if (wide) ContentHeader(destination)
         when (destination) {
             Destination.Start -> StartScreen(state, actions, wide, onSelectDestination)
-            Destination.Acquire -> AcquireNavigation(state, actions, wide, onShowDialog)
+            Destination.Acquire -> AcquireNavigation(state, actions, wide)
             Destination.Library -> MyModsScreen(state, actions, wide, onShowDialog)
             Destination.Settings -> SettingsScreen(state, actions, wide, onShowDialog)
         }
@@ -563,11 +563,11 @@ private fun ResumePatchCard(recovery: PreparedPatchRecovery, actions: ManagerAct
 }
 
 @Composable
-private fun AcquireNavigation(state: ManagerUiState, actions: ManagerActions, wide: Boolean, onShowDialog: (DialogKind) -> Unit) {
+private fun AcquireNavigation(state: ManagerUiState, actions: ManagerActions, wide: Boolean) {
     val navController = rememberNavController()
     NavHost(navController, startDestination = "browse") {
         composable("browse") {
-            AcquireModsScreen(state, actions, wide, onOpenQueue = { navController.navigate("queue") }, onOpenDetail = { id ->
+            AcquireModsScreen(state, actions, wide, onOpenDetail = { id ->
                 actions.lookupWorkshop(id)
                 navController.navigate("detail/$id")
             })
@@ -578,22 +578,19 @@ private fun AcquireNavigation(state: ManagerUiState, actions: ManagerActions, wi
             LaunchedEffect(id) { if (!id.isNullOrBlank() && detail?.item?.publishedFileId.toString() != id) actions.lookupWorkshop(id) }
             when {
                 id.isNullOrBlank() -> ScreenList(wide) { item { SecondaryButton("返回创意工坊", onClick = { navController.popBackStack() }) } }
-                detail != null && detail.item.publishedFileId.toString() == id -> WorkshopDetailScreen(detail.item, state.downloadTasks, wide, actions, onBack = { actions.lookupWorkshop(""); navController.popBackStack() }, onOpenQueue = { navController.navigate("queue") })
+                detail != null && detail.item.publishedFileId.toString() == id -> WorkshopDetailScreen(detail.item, wide, onBack = { actions.lookupWorkshop(""); navController.popBackStack() })
                 state.workshop is WorkshopUiState.Error -> ScreenList(wide) { item { FriendlyErrorPanel("暂时无法读取此 Mod", "请返回创意工坊重试。", (state.workshop as WorkshopUiState.Error).reason) } }
                 else -> ScreenList(wide) { item { LoadingPanel("正在读取 Mod 信息…") } }
             }
         }
-        composable("queue") { DownloadCenterScreen(state, actions, wide, onBack = { navController.popBackStack() }, onShowDialog = onShowDialog) }
     }
 }
 
 @Composable
-private fun AcquireModsScreen(state: ManagerUiState, actions: ManagerActions, wide: Boolean, onOpenQueue: () -> Unit, onOpenDetail: (String) -> Unit) {
+private fun AcquireModsScreen(state: ManagerUiState, actions: ManagerActions, wide: Boolean, onOpenDetail: (String) -> Unit) {
     var query by rememberSaveable { mutableStateOf(state.workshopBrowse.query.searchText) }
-    var showLogin by rememberSaveable { mutableStateOf(false) }
     var showFilters by rememberSaveable { mutableStateOf(false) }
     var filterDraft by remember { mutableStateOf(state.workshopBrowse.query) }
-    val signedIn = state.steamAuthState as? SteamAuthState.SignedIn
     LaunchedEffect(state.workshopBrowse.query) { filterDraft = state.workshopBrowse.query }
     LaunchedEffect(state.workshopBrowse.items.isEmpty(), state.workshopBrowse.error, state.workshopBrowse.hasLoadedOnce, state.workshopBrowse.isRefreshing) {
         if (state.workshopBrowse.items.isEmpty() && state.workshopBrowse.error == null && !state.workshopBrowse.hasLoadedOnce && !state.workshopBrowse.isRefreshing) {
@@ -602,18 +599,14 @@ private fun AcquireModsScreen(state: ManagerUiState, actions: ManagerActions, wi
     }
     val submitSearch = { actions.browseWorkshop(state.workshopBrowse.query.copy(searchText = query, page = 1).normalized()) }
     ScreenList(wide) {
+        item { NoticeStrip("创意工坊浏览模式", "因登录与下载功能不稳定，现已将相关功能隐藏，只开放浏览访问功能。") }
         item {
-            HeroPanel("获取 Mod", "创意工坊", "浏览创意工坊并下载mod", action = "点这里也可以从本地添加 Mod", onAction = actions.importMod)
+            HeroPanel("获取 Mod", "创意工坊", "浏览创意工坊；如需添加 Mod，请从本地导入。", action = "点这里也可以从本地添加 Mod", onAction = actions.importMod)
         }
         item {
             Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(18.dp)) {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text("搜索创意工坊", modifier = Modifier.weight(1f), fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                        SmallAction(if (signedIn == null) "登录 Steam" else "退出 Steam") {
-                            if (signedIn == null) showLogin = true else actions.logoutSteam()
-                        }
-                    }
+                    Text("搜索创意工坊", fontSize = 16.sp, fontWeight = FontWeight.Bold)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Bottom) {
                         LabeledTextField(
                             value = query,
@@ -633,7 +626,6 @@ private fun AcquireModsScreen(state: ManagerUiState, actions: ManagerActions, wi
                         SmallAction("热门", !state.workshopBrowse.isRefreshing) { actions.browseWorkshop(state.workshopBrowse.query.copy(searchText = query, sortKey = WorkshopBrowseQuery.SORT_TREND, page = 1)) }
                         SmallAction("最新", !state.workshopBrowse.isRefreshing) { actions.browseWorkshop(state.workshopBrowse.query.copy(searchText = query, sortKey = WorkshopBrowseQuery.SORT_MOST_RECENT, page = 1)) }
                         SmallAction("筛选", !state.workshopBrowse.isRefreshing) { showFilters = true }
-                        SmallAction("下载 ${state.downloadTasks.count { it.stage !in setOf(DownloadStage.Imported, DownloadStage.Cancelled) }}") { onOpenQueue() }
                     }
                 }
             }
@@ -652,7 +644,6 @@ private fun AcquireModsScreen(state: ManagerUiState, actions: ManagerActions, wi
             if (state.workshopBrowse.hasMore) item { PrimaryButton(if (state.workshopBrowse.isLoadingMore) "正在加载…" else "加载更多", !state.workshopBrowse.isLoadingMore && !state.workshopBrowse.isRefreshing) { actions.browseWorkshop(state.workshopBrowse.query.copy(page = state.workshopBrowse.query.page + 1)) } }
         } else if (state.workshopBrowse.hasLoadedOnce && state.workshopBrowse.error == null) item { EmptyPanel("没有找到 Mod", "试试其他关键词或清除筛选条件。") }
     }
-    if (showLogin) SteamLoginDialog(state.steamAuthState, actions) { showLogin = false }
     if (showFilters) FilterDialog(state, query, filterDraft, { filterDraft = it }, { query = it }, { result -> actions.browseWorkshop(result); showFilters = false }, { showFilters = false })
 }
 
@@ -734,7 +725,7 @@ private fun DateRangeEditor(title: String, range: WorkshopDateRangeFilter, onCha
 }
 
 @Composable
-private fun WorkshopDetailScreen(item: WorkshopItem, tasks: List<DownloadTask>, wide: Boolean, actions: ManagerActions, onBack: () -> Unit, onOpenQueue: () -> Unit) {
+private fun WorkshopDetailScreen(item: WorkshopItem, wide: Boolean, onBack: () -> Unit) {
     ScreenList(wide) {
         item { SecondaryButton("返回创意工坊", onClick = onBack) }
         item {
@@ -749,18 +740,8 @@ private fun WorkshopDetailScreen(item: WorkshopItem, tasks: List<DownloadTask>, 
             }
         }
         item { NoticeStrip("关于此 Mod", item.description.ifBlank { "Steam 未提供更多说明。" }) }
-        item {
-            val active = tasks.firstOrNull { it.publishedFileId == item.publishedFileId && it.stage !in setOf(DownloadStage.Imported, DownloadStage.Cancelled, DownloadStage.Failed) }
-            when {
-                active != null -> {
-                    NoticeStrip("已在下载中心", downloadStatus(active))
-                    PrimaryButton("查看下载", onClick = onOpenQueue)
-                }
-                item.canDownload -> PrimaryButton("下载并检查") { actions.queueWorkshopDownload(item) }
-                else -> NoticeStrip("当前无法下载", "此内容没有可验证的下载方式。")
-            }
-        }
-        item { DiagnosticPanel("技术详情", "条目编号：${item.publishedFileId}\n下载方式：${if (item.canDirectDownload) "公开地址" else "Steam 内容"}") }
+        item { NoticeStrip("当前仅开放浏览", "登录与下载功能已隐藏；如需添加 Mod，请从本地导入 ZIP 文件。") }
+        item { DiagnosticPanel("技术详情", "条目编号：${item.publishedFileId}\n访问方式：Steam 公开服务") }
     }
 }
 
