@@ -294,7 +294,7 @@ Output: `native/build-android/libmodloader.so`. Release artifacts must be ELF64/
 
 #### Release build
 
-The tracked release entry rebuilds the native loader, protocol v2 Bootstrap AAR, frozen split template, digest pins, and signed Manager APK in that order. It requires the local, untracked release keystore/password files and environment variables for the SDK, NDK, and JDK:
+The tracked release entry rebuilds the native loader, protocol v2 Bootstrap AAR, unsigned split template, structural metadata, and signed Manager APK in that order. It requires the local, untracked release keystore/password files and environment variables for the SDK, NDK, and JDK:
 
 ```bash
 export JAVA_HOME="/path/to/jdk-21"

@@ -74,14 +74,13 @@ internal class GameProfileRegistry(
 
     private fun GameProfile.isComplete(): Boolean =
         loaderSplitName.isNotBlank() &&
-            nativeLoaderSha256.isSha256()
-
-    private fun String?.isSha256(): Boolean = this?.matches(SHA256_PATTERN) == true
+            packageNames.isNotEmpty() &&
+            versionCodes.isNotEmpty() &&
+            signingDigestsSha256.isNotEmpty()
 
     private companion object {
         const val TARGET_PACKAGE = "com.gametree.sultan.pd"
         const val REQUIRED_ABI = "arm64-v8a"
-        val SHA256_PATTERN = Regex("[0-9a-f]{64}", RegexOption.IGNORE_CASE)
         val OFFICIAL_10005 = GameProfile(
             id = "official-android-2026-07-27",
             packageNames = setOf(TARGET_PACKAGE),
@@ -89,7 +88,6 @@ internal class GameProfileRegistry(
             requiredAbi = REQUIRED_ABI,
             versionCodes = setOf(10005L),
             loaderSplitName = "modloader",
-            nativeLoaderSha256 = "1a2fc9c1a2304574f667895e1fe9ea6b82f2746877ab637c1e6e2c803ccaa491",
             providerProtocolVersion = 2,
         )
     }

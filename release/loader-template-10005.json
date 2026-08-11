@@ -3,7 +3,5 @@
   "splitName": "modloader",
   "versionCode": 10005,
   "versionName": "1.0.5",
-  "providerProtocolVersion": 2,
-  "templateSha256": "8422a6531dffc8bdc60308abc7c08c33526943e174c7a26102dac4e3695127f3",
-  "nativeSha256": "1a2fc9c1a2304574f667895e1fe9ea6b82f2746877ab637c1e6e2c803ccaa491"
+  "providerProtocolVersion": 2
 }

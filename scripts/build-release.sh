@@ -161,17 +161,16 @@ printf '%s\n' '[1/5] Configure and build official native loader'
 MSYS_NO_PATHCONV=1 "$cmake" -S "$(native_path "$repo_root/native")" -B "$(native_path "$native_build")" -G Ninja -DCMAKE_MAKE_PROGRAM="$(native_path "$ninja")" -DCMAKE_TOOLCHAIN_FILE="$(native_path "$android_ndk/build/cmake/android.toolchain.cmake")" -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-35 -DMODLOADER_BACKEND_MODE=1 -DMODLOADER_OFFICIAL_URI_HOOKS=ON -DMODLOADER_OFFICIAL_URI_TEXTURE_HOOK=ON -DMODLOADER_OFFICIAL_TMP_GLYPH_HOOKS=ON -DCMAKE_BUILD_TYPE=Release
 MSYS_NO_PATHCONV=1 "$cmake" --build "$(native_path "$native_build")"
   require_file 'native Dobby submodule' "$repo_root/native/third_party/dobby/CMakeLists.txt"
-  require_file 'native loader' "$native_binary"; native_sha256="$(sha256sum "$native_binary" | cut -d' ' -f1)"; assert_native_elf "$readelf" "$native_binary" "$readelf_report"
+  require_file 'native loader' "$native_binary"; assert_native_elf "$readelf" "$native_binary" "$readelf_report"
 
 export JAVA_HOME="$java_home"
 printf '%s\n' '[2/5] Build protocol v2 Bootstrap AAR'
 (cd "$repo_root/android/manager" && bash ./gradlew :bootstrap:assembleRelease -PmanagerCertificateSha256="$certificate_sha256" -PmodloaderBinary="$(native_path "$native_binary")")
 printf '%s\n' '[3/5] Build and validate frozen split candidate'
 python -X utf8 "$repo_root/android/bootstrap/build_split_template.py" --bootstrap-aar "$(native_path "$repo_root/android/bootstrap/build/outputs/aar/bootstrap-release.aar")" --bootstrap-manifest "$(native_path "$repo_root/android/bootstrap/src/main/AndroidManifest.xml")" --android-jar "$(native_path "$android_jar")" --aapt2 "$(native_path "$aapt2")" --d8 "$(native_path "$d8")" --output "$(native_path "$template_candidate")" --version-code 10005 --version-name 1.0.5
-candidate_sha256="$(sha256sum "$template_candidate" | cut -d' ' -f1)"
-python -X utf8 "$repo_root/android/bootstrap/build_split_template.py" --verify --output "$(native_path "$template_candidate")" --expected-native-sha256 "$native_sha256"
-printf '%s\n' '[4/5] Stage and validate template pins'
-PYTHONPATH="$script_dir" python -X utf8 "$script_dir/update-release-pins.py" --root "$repo_root" --template "$template_candidate" --stage "$publish_stage" --template-sha256 "$candidate_sha256" --native-sha256 "$native_sha256"
+python -X utf8 "$repo_root/android/bootstrap/build_split_template.py" --verify --output "$(native_path "$template_candidate")" --version-code 10005 --version-name 1.0.5
+printf '%s\n' '[4/5] Stage and validate loader template'
+PYTHONPATH="$script_dir" python -X utf8 "$script_dir/update-release-pins.py" --root "$repo_root" --template "$template_candidate" --stage "$publish_stage"
 PYTHONPATH="$script_dir" python -X utf8 "$script_dir/verify-loader-template.py" --root "$publish_stage"
 printf '%s\n' '[5/5] Apply transaction and assemble signed Manager release'
 transaction_active=1

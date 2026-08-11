@@ -107,9 +107,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         transactions = transactions,
         archiveInspector = archiveInspector,
         gameProbe = gameProbe,
-        splitFactoryForNativeDigest = { nativeDigest ->
-            AndroidLoaderSplitArtifactFactory(application, nativeDigest)
-        },
+        splitFactory = AndroidLoaderSplitArtifactFactory(application),
     )
     private val loaderBridge: LoaderBridge = AndroidModStorageLoaderBridge(application, File(application.filesDir, "mod-cache"))
     private val legalNotice = LegalNoticeRepository(application)

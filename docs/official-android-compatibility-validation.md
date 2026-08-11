@@ -1,74 +1,50 @@
 # Official Android compatibility validation
 
-## 2026-08-09 final UI + URI + TMP combination
+## Supported loader contract
 
-The official native backend was validated on the ARM64 Android 1.0.5 profile with the following compatibility features enabled together:
+The supported template is an unsigned same-package split for the ARM64 Android 1.0.5 profile. It identifies package `com.gametree.sultan.pd`, split `modloader`, version code `10005`, and version name `1.0.5`. Its native payload is stored at `assets/modloader/arm64-v8a/modloader.bin` without ZIP compression.
 
-- official Mod UI reveal and panel observers;
-- resource argument compatibility for `LoadSprite`, `LoadSpriteImmediate`, `LoadAudioClip`, and `UnityWebRequestTexture.GetTexture`;
-- TMP glyph field-name compatibility from `m_SpriteGlyphTable` to `m_GlyphTable`.
+Native and template contents are intentionally not pinned by checked-in SHA-256 values. Rebuilding native code therefore does not require changing source constants, test fixtures or release metadata. The exact bytes may be printed as ephemeral build provenance but are not runtime patch gates.
 
-### GetTexture SIGILL isolation
+The Bootstrap ModStorage protocol is version 2.
 
-Instrumenting or replacing the single-argument `GetTexture(System.String)` entry at RVA `0x3ff95dc` caused SIGILL when the official Mod panel loaded previews. IDA confirmed that entry is only a forwarding stub:
+## Runtime and release validation
 
-```text
-MOV W1, WZR
-B   0x3ff95e4
+Validation must cover:
+
+- ARM64/AArch64 native output;
+- four `PT_LOAD` segments aligned to `0x4000`;
+- no `TEXTREL`;
+- readable ZIP/APK with no duplicate entries;
+- required manifest, resources, DEX and native entries;
+- unsigned template with native entry `ZIP_STORED` and non-empty;
+- package, split, version, provider and protocol contract;
+- Manager APK embedding the exact staged template bytes;
+- device-local v1/v2 signing, payload preservation and complete final split installation verification.
+
+The Manager performs structural checks before signing, then verifies the signed loader's v1/v2 signatures, device certificate, payload and final split set. Native content changes are accepted when these structural and signing contracts remain valid.
+
+## Device evidence
+
+The official native backend has been validated with UI reveal, URI/Texture and TMP glyph compatibility hooks. The supported release workflow must rebuild the native artifact and rerun the ELF, template structure and instrumentation checks after native or Bootstrap changes.
+
+## Commands
+
+```bash
+PYTHONPATH=scripts python -X utf8 scripts/verify-loader-template.py --root .
+PYTHONPATH=scripts python -X utf8 scripts/verify-loader-template.py --root . --manager-apk android/manager/app/build/outputs/apk/release/app-release.apk
 ```
 
-The stable implementation leaves that forwarding stub untouched and replaces the full `GetTexture(System.String, System.Boolean)` implementation at RVA `0x3ff95e4`. The replacement preserves the ARM64 IL2CPP arguments, rewrites only eligible Mod paths, and calls the saved trampoline. Both overloads remain gated by exact metadata signatures, static flags, RVAs, and code fingerprints.
+On a compatible device, run the Android instrumentation suite and a complete migration/install smoke test after native or Bootstrap changes.
 
-Rewritten managed strings are retained with bounded, deduplicated GC handles for the process lifetime. `LoadSpriteImmediate` continues to receive an absolute filesystem path; URI-based loaders receive `file://` arguments.
+## Release metadata
 
-### Device evidence
+`release/loader-template-10005.json` records only package, split, version and provider protocol. Legacy hash fields are removed on the next staged release.
 
-The final combination reported:
+Certificate fingerprints and ordinary APK/mod integrity digests remain separate mechanisms and are not part of the native/template pin policy.
 
-```text
-official_uri=ready
-uri_sprite=ready
-uri_audio=ready
-uri_texture=ready
-tmp_glyph=ready
-ui_reveal=ready
-official_ui_observer=ready
-official_canary=ready
-```
+## Rebuild policy
 
-After the user manually opened the official Mod UI and refreshed:
+When native changes, rebuild and rerun structural, native ELF, signing and instrumentation validation. Do not edit a native/template SHA-256 in project files.
 
-```text
-mods=5
-panel_mods=5
-GetTexture rewrites=5
-```
-
-The user confirmed that all previews rendered correctly and that the TMP compatibility fix was effective. The natural official activation chain progressed from `active_mods=0` through `active_mods=4`; resource logs also confirmed audio, sprite, and immediate-path handling. An automated follow-up observed the same PID for 301 seconds with zero SIGILL/fatal matches. The PID was then externally replaced after the user had finished interacting, without a SIGILL/fatal record for the original process, so this is recorded as five minutes of continuous-process evidence rather than a completed ten-minute single-process run. No loader code directly invoked `RefreshMods`, `LoadUserMods`, `LoadGlobalMods`, `ActiveMod`, or `ModLoader.Run`, and no Mod data or `mods.json` was modified.
-
-### Frozen Manager template
-
-The current master release template combines the protocol v2 Bootstrap with the official UI reveal, URI/Texture, and TMP compatibility native build. It is built from the native artifact with every release gate explicitly enabled, then regenerated from the Bootstrap AAR; the Manager only consumes this verified frozen asset.
-
-```text
-embedded native SHA-256:
-404b7caa0aab2c02fe6e1217616291e4e91bed57eb858e9b15ec135d2f4d29a8
-
-complete unsigned template SHA-256:
-fbc06a1ddfdae416095e0523d89da225bf29640ed7db71ab90ca2eabf01287c6
-
-Bootstrap ModStorage protocol:
-2
-```
-
-The frozen template is unsigned, identifies package `com.gametree.sultan.pd`, split `modloader`, version code `10005`, and version name `1.0.5`; its native payload is stored at `assets/modloader/arm64-v8a/modloader.bin` without ZIP compression. The public identity is recorded in `release/loader-template-10005.json`; production and test digest pins must be updated with the binary in the same change.
-
-### Offline acceptance
-
-- Native host tests: 2/2 passed for the validated native artifact.
-- Android target: ELF64 AArch64.
-- Four `PT_LOAD` segments, each aligned to `0x4000`.
-- No `TEXTREL`.
-- Frozen Manager embedded native SHA-256: `404b7caa0aab2c02fe6e1217616291e4e91bed57eb858e9b15ec135d2f4d29a8`.
-- Frozen unsigned template SHA-256: `fbc06a1ddfdae416095e0523d89da225bf29640ed7db71ab90ca2eabf01287c6`.
-- The native payload and template were rebuilt and checked for digest closure, stored compression, and unsigned state before publication.
+Follow `docs/build.md` for the authoritative commands.

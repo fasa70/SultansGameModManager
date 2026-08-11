@@ -19,15 +19,12 @@ class GameProfileRegistryTest {
     }
 
     @Test
-    fun freezesProtocolV2OfficialLoaderIdentity() {
+    fun acceptsProfileWithoutNativeDigestPin() {
         val result = GameProfileRegistry().profile("official-android-2026-07-27")
 
         requireNotNull(result)
+        assertEquals("modloader", result.loaderSplitName)
         assertEquals(2, result.providerProtocolVersion)
-        assertEquals(
-            "1a2fc9c1a2304574f667895e1fe9ea6b82f2746877ab637c1e6e2c803ccaa491",
-            result.nativeLoaderSha256,
-        )
     }
 
     @Test
@@ -63,35 +60,15 @@ class GameProfileRegistryTest {
     }
 
     @Test
-    fun allowsProfileWithoutFrozenTemplateDigestWhenNativeDigestIsPinned() {
-        val registry = GameProfileRegistry(
-            profiles = listOf(
-                GameProfile(
-                    id = "native-only",
-                    packageNames = setOf("com.gametree.sultan.pd"),
-                    signingDigestsSha256 = setOf(OFFICIAL_CERTIFICATE),
-                    versionCodes = setOf(10005L),
-                    nativeLoaderSha256 = "a".repeat(64),
-                ),
-            ),
-        )
-
-        val result = registry.classify(PatchSource.SelectedApk, extractedSet(officialInspection()))
-
-        assertEquals(Compatibility.Candidate, result.compatibility.compatibility)
-        assertEquals("native-only", result.profileId)
-    }
-
-    @Test
-    fun rejectsProfileMissingFrozenNativeDigest() {
+    fun rejectsProfileMissingStructuralLoaderIdentity() {
         val registry = GameProfileRegistry(
             profiles = listOf(
                 GameProfile(
                     id = "incomplete",
-                    packageNames = setOf("com.gametree.sultan.pd"),
-                    signingDigestsSha256 = setOf(OFFICIAL_CERTIFICATE),
-                    versionCodes = setOf(10005L),
-                    nativeLoaderSha256 = null,
+                    packageNames = emptySet(),
+                    signingDigestsSha256 = emptySet(),
+                    versionCodes = emptySet(),
+                    loaderSplitName = "",
                 ),
             ),
         )

@@ -43,7 +43,7 @@ internal class PatchOrchestrator(
     private val transactions: PatchTransactionStore,
     private val archiveInspector: AndroidApkArchiveInspector,
     private val gameProbe: PackageManagerGameProbe,
-    private val splitFactoryForNativeDigest: (String) -> SplitArtifactFactory,
+    private val splitFactory: SplitArtifactFactory,
 ) {
     fun submit(
         source: PatchSource,
@@ -137,9 +137,7 @@ internal class PatchOrchestrator(
                 )
             }
         }
-        val nativeDigest = profile.nativeLoaderSha256
-            ?: return fail(extracted.transactionId, PatchFailure.SplitUnavailable, "尚未冻结匹配游戏 profile 的 loader native 摘要。")
-        val splitResult = splitFactoryForNativeDigest(nativeDigest).build(
+        val splitResult = splitFactory.build(
             LoaderSplitRequest(
                 targetApplicationId = requireNotNull(extracted.base.inspection.packageName),
                 loaderSplitName = profile.loaderSplitName,

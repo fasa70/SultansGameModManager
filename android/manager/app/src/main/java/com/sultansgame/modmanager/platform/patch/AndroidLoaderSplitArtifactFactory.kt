@@ -9,10 +9,11 @@ import com.sultansgame.modmanager.split.SplitArtifactFactory
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
 
 internal class AndroidLoaderSplitArtifactFactory(
     private val context: Context,
-    private val expectedNativeSha256: String,
 ) : SplitArtifactFactory {
     private val archiveInspector = AndroidApkArchiveInspector(context)
     private val zipInspector = ReadOnlyApkInspector()
@@ -34,7 +35,6 @@ internal class AndroidLoaderSplitArtifactFactory(
                     output.fd.sync()
                 }
             }
-            val templateDigest = zipInspector.sha256 { FileInputStream(partial) }
             val parsed = archiveInspector.inspect(partial, TEMPLATE_ASSET)
             require(parsed.packageName == null || parsed.packageName == GAME_PACKAGE) { "loader split 包名不匹配" }
             require(parsed.versionCode == null || parsed.versionCode == request.target.versionCode) {
@@ -42,21 +42,20 @@ internal class AndroidLoaderSplitArtifactFactory(
             }
             require(parsed.splitName == null || parsed.splitName == request.loaderSplitName) { "loader split 名称不匹配" }
             require(parsed.signerDigestsSha256.isEmpty()) { "loader split 模板必须未签名" }
+            validateTemplateZip(partial)
             val inspection = parsed.copy(
                 packageName = GAME_PACKAGE,
                 versionCode = request.target.versionCode,
                 versionName = request.target.versionName,
                 splitName = request.loaderSplitName,
             )
-            val nativeDigest = nativeDigest(partial)
-            require(nativeDigest == expectedNativeSha256) { "loader split native 摘要不匹配" }
             if (!partial.renameTo(destination)) {
                 throw java.io.IOException("无法提交 loader split 模板")
             }
             LoaderSplitResult.Built(
                 artifact = LoaderSplitArtifact(
                     path = destination.absolutePath,
-                    sha256 = templateDigest,
+                    sha256 = zipInspector.sha256 { FileInputStream(destination) },
                     sizeBytes = destination.length(),
                     inspection = inspection,
                 ),
@@ -64,7 +63,7 @@ internal class AndroidLoaderSplitArtifactFactory(
                 verificationSummary = listOf(
                     "内嵌 loader 模板已复制",
                     "同包名 split=${request.loaderSplitName}",
-                    "native 摘要已验证",
+                    "模板结构已验证",
                 ),
             )
         } finally {
@@ -74,22 +73,22 @@ internal class AndroidLoaderSplitArtifactFactory(
         LoaderSplitResult.Unavailable(error.message ?: "无法构建 loader split")
     }
 
-    private fun nativeDigest(file: File): String {
-        val temporary = File.createTempFile("modloader-native", ".bin", context.cacheDir)
-        try {
-            java.util.zip.ZipFile(file).use { archive ->
-                val entry = requireNotNull(archive.getEntry(NATIVE_ASSET)) { "loader split 缺少 native asset" }
-                require(entry.method == java.util.zip.ZipEntry.STORED) { "loader split native asset 必须未压缩" }
-                archive.getInputStream(entry).use { input ->
-                    FileOutputStream(temporary).use { output ->
-                        input.copyTo(output)
-                        output.fd.sync()
-                    }
-                }
+    private fun validateTemplateZip(file: File) {
+        ZipFile(file).use { archive ->
+            val entries = archive.entries().asSequence().toList()
+            val names = entries.map(ZipEntry::getName)
+            require(names.size == names.toSet().size) { "loader split 模板包含重复 ZIP entry" }
+            REQUIRED_ENTRIES.forEach { name ->
+                val entry = requireNotNull(archive.getEntry(name)) { "loader split 模板缺少 $name" }
+                require(!entry.isDirectory) { "loader split 模板 entry 无效：$name" }
+                require(archive.getInputStream(entry).use { it.read() >= 0 }) { "loader split 模板 entry 无法读取：$name" }
             }
-            return zipInspector.sha256 { FileInputStream(temporary) }
-        } finally {
-            temporary.delete()
+            val native = requireNotNull(archive.getEntry(NATIVE_ASSET))
+            require(native.method == ZipEntry.STORED) { "loader split native asset 必须未压缩" }
+            require(native.size > 0L) { "loader split native asset 为空" }
+            require(names.none { it.startsWith("META-INF/", ignoreCase = true) && SIGNATURE_ENTRY.matches(it.substringAfterLast('/')) }) {
+                "loader split 模板必须未签名"
+            }
         }
     }
 
@@ -98,5 +97,7 @@ internal class AndroidLoaderSplitArtifactFactory(
         const val SPLIT_NAME = "modloader"
         const val TEMPLATE_ASSET = "release/modloader-template-10005.apk"
         const val NATIVE_ASSET = "assets/modloader/arm64-v8a/modloader.bin"
+        val REQUIRED_ENTRIES = setOf("AndroidManifest.xml", "resources.arsc", "classes.dex", NATIVE_ASSET)
+        val SIGNATURE_ENTRY = Regex(".+\\.(RSA|DSA|EC|SF|MF)", RegexOption.IGNORE_CASE)
     }
 }

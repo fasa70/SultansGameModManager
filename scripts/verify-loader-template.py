@@ -1,36 +1,23 @@
 #!/usr/bin/env python3
-"""Verify the frozen loader template and every checked-in digest pin."""
+"""Verify loader template structure and release metadata."""
 
 from __future__ import annotations
 
 import argparse
-import hashlib
-import json
 import re
 import zipfile
 from pathlib import Path
 
-from release_pin_contracts import PIN_CONTRACTS, read_utf8, target_paths, validate_digest
+from release_pin_contracts import METADATA_PATH, REQUIRED_METADATA, TEMPLATE_PATH, read_metadata, target_paths
 
 NATIVE_ENTRY = "assets/modloader/arm64-v8a/modloader.bin"
 REQUIRED_ENTRIES = {"AndroidManifest.xml", "resources.arsc", "classes.dex", NATIVE_ENTRY}
+SIGNATURE_ENTRY = re.compile(r"META-INF/[^/]+\.(RSA|DSA|EC|SF|MF)$", re.IGNORECASE)
 
 
-def digest_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
-def digest_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def verify_template(path: Path, expected: dict) -> None:
-    if digest_file(path) != expected["templateSha256"]:
-        raise SystemExit(f"Template SHA-256 mismatch: {path}")
+def verify_template(path: Path) -> None:
+    if not path.is_file():
+        raise SystemExit(f"Missing template: {path}")
     try:
         with zipfile.ZipFile(path) as archive:
             if archive.testzip() is not None:
@@ -42,42 +29,37 @@ def verify_template(path: Path, expected: dict) -> None:
             missing = REQUIRED_ENTRIES.difference(names)
             if missing:
                 raise SystemExit(f"Template is missing entries: {sorted(missing)}")
+            if any(SIGNATURE_ENTRY.fullmatch(name) for name in names):
+                raise SystemExit("Template contains APK signature entries")
             native_info = archive.getinfo(NATIVE_ENTRY)
             if native_info.compress_type != zipfile.ZIP_STORED:
                 raise SystemExit("Template native entry is not ZIP_STORED")
-            if any(
-                re.fullmatch(r"META-INF/[^/]+\.(RSA|DSA|EC|SF|MF)", name, re.IGNORECASE)
-                for name in names
-            ):
-                raise SystemExit("Template contains APK signature entries")
-            native = archive.read(NATIVE_ENTRY)
+            if native_info.file_size <= 0:
+                raise SystemExit("Template native entry is empty")
+            for name in REQUIRED_ENTRIES:
+                if not archive.read(name):
+                    raise SystemExit(f"Template entry is empty: {name}")
     except zipfile.BadZipFile as error:
         raise SystemExit(f"Invalid template ZIP: {path}: {error}") from error
-    if digest_bytes(native) != expected["nativeSha256"]:
-        raise SystemExit("Embedded native SHA-256 mismatch")
 
 
-def verify_pins(root: Path, expected: dict) -> None:
-    for item in PIN_CONTRACTS:
-        path = root / item.relative_path
-        try:
-            item.read(read_utf8(path), expected[f"{item.digest_kind}Sha256"])
-        except (OSError, ValueError) as error:
-            raise SystemExit(str(error)) from error
-    metadata = json.loads(read_utf8(root / "release/loader-template-10005.json"))
-    for key in ("packageName", "splitName", "versionCode", "versionName", "providerProtocolVersion"):
-        if key not in metadata:
-            raise SystemExit(f"Release metadata is missing {key}")
+def verify_metadata(path: Path) -> dict:
+    metadata = read_metadata(path)
+    missing = [key for key in REQUIRED_METADATA if key not in metadata]
+    if missing:
+        raise SystemExit(f"Release metadata is missing: {', '.join(missing)}")
+    return metadata
 
 
-def verify_manager_apk(path: Path, expected: dict) -> None:
+def verify_manager_apk(path: Path, template_path: Path) -> None:
     try:
-        with zipfile.ZipFile(path) as archive:
-            template = archive.read("assets/release/modloader-template-10005.apk")
-    except (KeyError, zipfile.BadZipFile) as error:
-        raise SystemExit(f"Manager APK does not contain a valid frozen template: {error}") from error
-    if digest_bytes(template) != expected["templateSha256"]:
-        raise SystemExit("Manager APK contains a different loader template")
+        with zipfile.ZipFile(path) as archive, template_path.open("rb") as expected:
+            actual = archive.open(f"assets/release/{Path(TEMPLATE_PATH).name}")
+            with actual:
+                if actual.read() != expected.read():
+                    raise SystemExit("Manager APK contains a different loader template")
+    except (KeyError, zipfile.BadZipFile, OSError) as error:
+        raise SystemExit(f"Manager APK does not contain a valid loader template: {error}") from error
 
 
 def main() -> None:
@@ -90,18 +72,11 @@ def main() -> None:
     if args.print_targets:
         print("\n".join(target_paths()))
         return
-    metadata_path = root / "release/loader-template-10005.json"
-    expected = json.loads(read_utf8(metadata_path))
-    validate_digest(expected["templateSha256"], "metadata template SHA-256")
-    validate_digest(expected["nativeSha256"], "metadata native SHA-256")
-    verify_template(root / "android/manager/app/src/main/assets/release/modloader-template-10005.apk", expected)
-    verify_pins(root, expected)
+    metadata = verify_metadata(root / METADATA_PATH)
+    verify_template(root / TEMPLATE_PATH)
     if args.manager_apk is not None:
-        verify_manager_apk(args.manager_apk.resolve(), expected)
-    print(
-        f"template={expected['templateSha256']} native={expected['nativeSha256']} "
-        f"protocol={expected['providerProtocolVersion']}"
-    )
+        verify_manager_apk(args.manager_apk.resolve(), root / TEMPLATE_PATH)
+    print(f"package={metadata['packageName']} split={metadata['splitName']} protocol={metadata['providerProtocolVersion']}")
 
 
 if __name__ == "__main__":

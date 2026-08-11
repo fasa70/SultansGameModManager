@@ -1,30 +1,16 @@
-"""Stage the frozen loader template and every checked-in digest pin."""
+"""Stage the loader template and structure metadata."""
 
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 from pathlib import Path
 
-from release_pin_contracts import (
-    PIN_CONTRACTS,
-    read_utf8,
-    validate_digest,
-    write_utf8,
-)
-
-TEMPLATE_PATH = "android/manager/app/src/main/assets/release/modloader-template-10005.apk"
+from release_pin_contracts import METADATA_PATH, TEMPLATE_PATH, clean_metadata, read_metadata, write_utf8
 
 
-def stage_release(
-    root: Path,
-    template: Path,
-    stage: Path,
-    template_sha256: str,
-    native_sha256: str,
-) -> None:
-    validate_digest(template_sha256, "template SHA-256")
-    validate_digest(native_sha256, "native SHA-256")
+def stage_release(root: Path, template: Path, stage: Path) -> None:
     if not template.is_file():
         raise SystemExit(f"Missing candidate template: {template}")
     if stage.exists() and any(stage.iterdir()):
@@ -35,18 +21,11 @@ def stage_release(
     staged_template.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(template, staged_template)
 
-    for relative_path in sorted({item.relative_path for item in PIN_CONTRACTS}):
-        source = root / relative_path
-        if not source.is_file():
-            raise SystemExit(f"Missing release pin file: {source}")
-        text = read_utf8(source)
-        for item in (entry for entry in PIN_CONTRACTS if entry.relative_path == relative_path):
-            value = template_sha256 if item.digest_kind == "template" else native_sha256
-            try:
-                text = item.update(text, value)
-            except ValueError as error:
-                raise SystemExit(str(error)) from error
-        write_utf8(stage / relative_path, text)
+    metadata = clean_metadata(read_metadata(root / METADATA_PATH))
+    missing = [key for key in ("packageName", "splitName", "versionCode", "versionName", "providerProtocolVersion") if key not in metadata]
+    if missing:
+        raise SystemExit(f"Release metadata is missing: {', '.join(missing)}")
+    write_utf8(stage / METADATA_PATH, json.dumps(metadata, ensure_ascii=False, indent=2) + "\n")
 
 
 def main() -> None:
@@ -54,17 +33,9 @@ def main() -> None:
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--template", type=Path, required=True)
     parser.add_argument("--stage", type=Path, required=True)
-    parser.add_argument("--template-sha256", required=True)
-    parser.add_argument("--native-sha256", required=True)
     args = parser.parse_args()
-    stage_release(
-        args.root.resolve(),
-        args.template.resolve(),
-        args.stage.resolve(),
-        args.template_sha256,
-        args.native_sha256,
-    )
-    print(f"staged={args.stage} template={args.template_sha256} native={args.native_sha256}")
+    stage_release(args.root.resolve(), args.template.resolve(), args.stage.resolve())
+    print(f"staged={args.stage} template={args.template}")
 
 
 if __name__ == "__main__":

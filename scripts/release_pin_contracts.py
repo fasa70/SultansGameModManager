@@ -1,77 +1,20 @@
-"""Shared digest pin contracts for the frozen loader release."""
+"""Shared release template structure contracts."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-import re
+import json
 from pathlib import Path
 
-
-SHA256 = r"[0-9a-f]{64}"
-
-
-@dataclass(frozen=True)
-class PinContract:
-    name: str
-    relative_path: str
-    pattern: re.Pattern[str]
-    digest_kind: str
-
-    def find(self, text: str) -> list[re.Match[str]]:
-        return list(self.pattern.finditer(text))
-
-    def update(self, text: str, value: str) -> str:
-        matches = self.find(text)
-        if len(matches) != 1:
-            raise ValueError(
-                f"{self.name}: expected exactly one match, found {len(matches)}"
-            )
-        match = matches[0]
-        return text[: match.start(2)] + value + text[match.end(2) :]
-
-    def read(self, text: str, expected: str) -> None:
-        matches = self.find(text)
-        if len(matches) != 1:
-            raise ValueError(
-                f"{self.name}: expected exactly one match, found {len(matches)}"
-            )
-        actual = matches[0].group(2)
-        if actual != expected:
-            raise ValueError(f"{self.name}: expected {expected}, found {actual}")
-
-
-def contract(
-    name: str, relative_path: str, expression: str, digest_kind: str
-) -> PinContract:
-    return PinContract(name, relative_path, re.compile(expression, re.MULTILINE), digest_kind)
-
-
-PIN_CONTRACTS = (
-    contract(
-        "GameProfileRegistry native",
-        "android/manager/app/src/main/java/com/sultansgame/modmanager/platform/patch/GameProfileRegistry.kt",
-        rf'(nativeLoaderSha256\s*=\s*")({SHA256})(")',
-        "native",
-    ),
-    contract(
-        "DeviceSigningKeyStoreTest native",
-        "android/manager/app/src/androidTest/java/com/sultansgame/modmanager/platform/patch/DeviceSigningKeyStoreTest.kt",
-        rf'(AndroidLoaderSplitArtifactFactory\(\s*\n\s*context,\s*")({SHA256})(")',
-        "native",
-    ),
-    contract(
-        "release metadata template",
-        "release/loader-template-10005.json",
-        rf'("templateSha256"\s*:\s*")({SHA256})(")',
-        "template",
-    ),
-    contract(
-        "release metadata native",
-        "release/loader-template-10005.json",
-        rf'("nativeSha256"\s*:\s*")({SHA256})(")',
-        "native",
-    ),
+TEMPLATE_PATH = "android/manager/app/src/main/assets/release/modloader-template-10005.apk"
+METADATA_PATH = "release/loader-template-10005.json"
+REQUIRED_METADATA = (
+    "packageName",
+    "splitName",
+    "versionCode",
+    "versionName",
+    "providerProtocolVersion",
 )
+LEGACY_DIGEST_KEYS = ("templateSha256", "nativeSha256")
 
 
 def read_utf8(path: Path) -> str:
@@ -85,28 +28,29 @@ def write_utf8(path: Path, text: str) -> None:
         stream.write(text)
 
 
+def read_metadata(path: Path) -> dict:
+    value = json.loads(read_utf8(path))
+    if not isinstance(value, dict):
+        raise ValueError(f"Release metadata must be an object: {path}")
+    return value
+
+
+def clean_metadata(value: dict) -> dict:
+    return {key: value[key] for key in REQUIRED_METADATA if key in value}
+
+
 def target_paths() -> tuple[str, ...]:
-    return (
-        "android/manager/app/src/main/assets/release/modloader-template-10005.apk",
-        *sorted({item.relative_path for item in PIN_CONTRACTS}),
-    )
-
-
-def contracts_for(relative_path: str) -> tuple[PinContract, ...]:
-    return tuple(item for item in PIN_CONTRACTS if item.relative_path == relative_path)
-
-
-def validate_digest(value: str, name: str) -> None:
-    if re.fullmatch(SHA256, value) is None:
-        raise ValueError(f"{name} is not a lowercase SHA-256 digest")
+    return (TEMPLATE_PATH, METADATA_PATH)
 
 
 __all__ = [
-    "PIN_CONTRACTS",
-    "PinContract",
-    "contracts_for",
+    "LEGACY_DIGEST_KEYS",
+    "METADATA_PATH",
+    "REQUIRED_METADATA",
+    "TEMPLATE_PATH",
+    "clean_metadata",
+    "read_metadata",
     "read_utf8",
     "target_paths",
-    "validate_digest",
     "write_utf8",
 ]

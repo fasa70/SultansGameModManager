@@ -9,13 +9,11 @@ from pathlib import Path
 import shutil
 import tempfile
 
-from release_pin_contracts import PIN_CONTRACTS
+from release_pin_contracts import target_paths
 
 
 TEMPLATE = "android/manager/app/src/main/assets/release/modloader-template-10005.apk"
-TARGETS = (TEMPLATE,) + tuple(
-    dict.fromkeys(item.relative_path for item in PIN_CONTRACTS)
-)
+TARGETS = target_paths()
 
 
 def atomic_copy(source: Path, destination: Path) -> None:
