@@ -54,6 +54,7 @@ sealed interface DownloadFailure {
     data object ResponseTooLarge : DownloadFailure { override val retryable = false }
     data object SizeMismatch : DownloadFailure { override val retryable = false }
     data object ChecksumMismatch : DownloadFailure { override val retryable = false }
+    data object InsufficientStorage : DownloadFailure { override val retryable = true }
     data class HttpFailure(val statusCode: Int?) : DownloadFailure {
         override val retryable: Boolean = statusCode == 408 || statusCode == 429 || (statusCode != null && statusCode >= 500)
     }

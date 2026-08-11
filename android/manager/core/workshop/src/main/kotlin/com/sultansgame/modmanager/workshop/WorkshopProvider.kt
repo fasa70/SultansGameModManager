@@ -24,7 +24,8 @@ interface DownloadTaskRepository {
 
 object WorkshopHttpPolicy {
     const val MAXIMUM_REDIRECTS = 5
-    const val MAXIMUM_ARTIFACT_SIZE_BYTES: Long = 512L * 1024L * 1024L
+    // Artifact bodies are streamed to disk; storage admission is handled by the target-volume budget.
+    const val MAXIMUM_ARTIFACT_SIZE_BYTES: Long = Long.MAX_VALUE
 
     // New hosts must be verified against a public Steam response before inclusion.
     private val artifactHosts = setOf("api.steampowered.com", "steamusercontent-a.akamaihd.net")

@@ -1,12 +1,11 @@
 package com.sultansgame.modmanager.storage
 
-import com.sultansgame.modmanager.model.MAXIMUM_MOD_FILE_SIZE_BYTES
+import com.sultansgame.modmanager.model.MAXIMUM_MOD_CONFIG_FILE_SIZE_BYTES
 import com.sultansgame.modmanager.model.MAXIMUM_MOD_MEDIA_FILE_SIZE_BYTES
 import com.sultansgame.modmanager.model.MAXIMUM_MOD_PATH_DEPTH
 import java.util.Locale
 
 const val MAXIMUM_MOD_ENTRY_COUNT = 10_000
-const val MAXIMUM_MOD_TOTAL_SIZE_BYTES: Long = 512L * 1024L * 1024L
 
 object ModPathPolicy {
     fun normalize(relativePath: String): String? {
@@ -24,10 +23,12 @@ object ModPathPolicy {
         sizeBytes in 0..maximumSizeBytes(relativePath)
 
     private fun maximumSizeBytes(relativePath: String): Long =
-        if (relativePath.lowercase(Locale.ROOT).let { it.endsWith(".png") || it.endsWith(".wav") || it.endsWith(".mp3") || it.endsWith(".ogg") }) {
+        if (relativePath.lowercase(Locale.ROOT).let {
+                it.endsWith(".png") || it.endsWith(".wav") || it.endsWith(".mp3") || it.endsWith(".ogg")
+            }) {
             MAXIMUM_MOD_MEDIA_FILE_SIZE_BYTES
         } else {
-            MAXIMUM_MOD_FILE_SIZE_BYTES
+            MAXIMUM_MOD_CONFIG_FILE_SIZE_BYTES
         }
 
     private const val NUL_CHARACTER: Char = 0.toChar()

@@ -177,6 +177,7 @@ class WorkshopDownloadWorker(
         top.apricityx.workshop.workshop.DownloadFailure.ResponseTooLarge -> DownloadFailureCode.ResponseTooLarge
         top.apricityx.workshop.workshop.DownloadFailure.SizeMismatch -> DownloadFailureCode.SizeMismatch
         top.apricityx.workshop.workshop.DownloadFailure.ChecksumMismatch -> DownloadFailureCode.ChecksumMismatch
+        top.apricityx.workshop.workshop.DownloadFailure.InsufficientStorage -> DownloadFailureCode.InsufficientStorage
         is top.apricityx.workshop.workshop.DownloadFailure.HttpFailure -> DownloadFailureCode.HttpFailure
         top.apricityx.workshop.workshop.DownloadFailure.Network -> DownloadFailureCode.Network
     }
