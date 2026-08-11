@@ -156,7 +156,7 @@ cmake --build native/build-android
 
 - [Dobby](https://github.com/jmpews/Dobby) — ARM64 动态二进制插桩框架
 - [apksig](https://android.googlesource.com/platform/tools/apksig) — Android APK 签名库
-- Workshop-Native — [创意工坊适配来源](https://github.com/cjtestuse/Workshop-Native)
+- [Workshop-Native](https://github.com/cjtestuse/Workshop-Native) — 创意工坊适配来源
 
 ---
 
