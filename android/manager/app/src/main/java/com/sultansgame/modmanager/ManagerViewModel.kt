@@ -75,7 +75,7 @@ sealed interface ManagerUiEvent {
 }
 
 class ManagerViewModel(application: Application) : AndroidViewModel(application) {
-    private val privateModCache = AndroidPrivateModCache(File(application.filesDir, "mod-cache"))
+    private val privateModCache = AndroidPrivateModCache(File(application.filesDir, "mod-cache"), application)
     private val deploymentPlan = DeploymentPlanStore(application)
     private val zipImporter = ZipModImporter(application, privateModCache)
     private val externalZipInbox = ExternalZipInbox(application)
@@ -526,7 +526,12 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         mutableState.value = mutableState.value.copy(zipImportInProgress = true, feedback = FeedbackMessage("正在校验并导入 ${request.displayName}…"))
         viewModelScope.launch {
             try {
-                val imported = withContext(Dispatchers.IO) { zipImporter.importZip(externalZipInbox.fileFor(request)) }
+                val imported = withContext(Dispatchers.IO) {
+                    zipImporter.importZip(
+                        externalZipInbox.fileFor(request),
+                        archiveDisplayName = request.displayName,
+                    )
+                }
                 updateImportedMods(imported)
                 clearPendingZip(request)
             } catch (error: CancellationException) {
@@ -556,7 +561,11 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             try {
                 val imported = withContext(Dispatchers.IO) {
-                    zipImporter.importZip(externalZipInbox.fileFor(request), password)
+                    zipImporter.importZip(
+                        externalZipInbox.fileFor(request),
+                        password,
+                        archiveDisplayName = request.displayName,
+                    )
                 }
                 updateImportedMods(imported)
                 clearPendingZip(request)

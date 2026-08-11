@@ -16,12 +16,12 @@ class PrivateCacheRepository(
     private val cacheRoot: Path,
     private val validator: ModImportValidator = ModImportValidator(),
 ) {
-    fun importDirectory(sourceRoot: Path, source: CacheSource): CachedMod {
+    fun importDirectory(sourceRoot: Path, source: CacheSource, displayName: String = sourceRoot.fileName.toString()): CachedMod {
         cacheRoot.createDirectories()
         val staging = cacheRoot.resolve(".${UUID.randomUUID()}.partial")
         try {
             copyDirectory(sourceRoot, staging)
-            val validated = validator.validate(staging)
+            val validated = validator.validate(staging, displayName)
             val destination = cacheRoot.resolve(validated.contentDigestSha256)
             if (!Files.exists(destination, LinkOption.NOFOLLOW_LINKS)) {
                 moveAtomically(staging, destination)
@@ -31,7 +31,7 @@ class PrivateCacheRepository(
             return CachedMod(
                 cacheKey = validated.contentDigestSha256,
                 contentDigestSha256 = validated.contentDigestSha256,
-                displayName = validated.manifest.name,
+                displayName = validated.displayName,
                 source = source,
                 sizeBytes = validated.sizeBytes,
                 importedAtEpochMillis = System.currentTimeMillis(),

@@ -1,5 +1,6 @@
 package com.sultansgame.modmanager.platform.storage
 
+import android.content.Context
 import android.system.Os
 import android.system.OsConstants
 import com.sultansgame.modmanager.model.CacheSource
@@ -7,9 +8,9 @@ import com.sultansgame.modmanager.model.CachedMod
 import com.sultansgame.modmanager.model.CachedModState
 import com.sultansgame.modmanager.storage.ImportValidationException
 import com.sultansgame.modmanager.storage.InfoJsonValidator
-import com.sultansgame.modmanager.storage.InvalidManifestException
 import com.sultansgame.modmanager.storage.MAXIMUM_MOD_ENTRY_COUNT
 import com.sultansgame.modmanager.storage.MAXIMUM_MOD_TOTAL_SIZE_BYTES
+import com.sultansgame.modmanager.storage.ModDisplayNamePolicy
 import com.sultansgame.modmanager.storage.ModPathPolicy
 import java.io.File
 import java.io.FileInputStream
@@ -29,21 +30,36 @@ sealed interface CachedModDeletionResult {
     data class Failed(val reason: String) : CachedModDeletionResult
 }
 
-class AndroidPrivateModCache(private val cacheRoot: File) {
+class AndroidPrivateModCache(
+    private val cacheRoot: File,
+    context: Context? = null,
+) {
     private val manifestValidator = InfoJsonValidator()
+    private val namePreferences = context?.getSharedPreferences(NAME_PREFERENCES, Context.MODE_PRIVATE)
 
     fun listCached(): List<CachedMod> {
         if (!cacheRoot.isDirectory) return emptyList()
-        return cacheRoot.listFiles()
-            ?.filter { it.isDirectory && !it.name.startsWith('.') && it.name.matches(Regex("[0-9a-f]{64}")) }
-            ?.sortedBy { it.name }
-            ?.mapNotNull { directory ->
+        val directories = cacheRoot.listFiles()
+            ?.filter { it.isDirectory && !it.name.startsWith('.') && it.name.matches(CACHE_KEY_REGEX) }
+            .orEmpty()
+        val names = namePreferences?.let { preferences ->
+            val currentKeys = directories.mapTo(mutableSetOf(), File::getName)
+            val editor = preferences.edit()
+            preferences.all.keys.filterNot(currentKeys::contains).forEach(editor::remove)
+            editor.apply()
+            directories.associate { directory -> directory.name to preferences.getString(directory.name, null) }
+        }.orEmpty()
+        return directories
+            .sortedBy(File::getName)
+            .mapNotNull { directory ->
                 runCatching {
-                    val validated = validate(directory)
+                    val validated = validate(directory, directory.name)
+                    val displayName = names[directory.name]
+                        ?: migrateLegacyDisplayName(directory, directory.name)
                     CachedMod(
                         cacheKey = directory.name,
                         contentDigestSha256 = directory.name,
-                        displayName = validated.name,
+                        displayName = displayName,
                         source = CacheSource.SafTree,
                         sizeBytes = validated.sizeBytes,
                         importedAtEpochMillis = directory.lastModified(),
@@ -51,11 +67,11 @@ class AndroidPrivateModCache(private val cacheRoot: File) {
                     )
                 }.getOrNull()
             }
-            .orEmpty()
     }
 
     fun clear() {
         cacheRoot.deleteRecursively()
+        namePreferences?.edit()?.clear()?.apply()
     }
 
     fun deleteCached(cacheKey: String): CachedModDeletionResult {
@@ -73,9 +89,10 @@ class AndroidPrivateModCache(private val cacheRoot: File) {
             if (!deleteRecursivelyWithoutLinks(target) || target.exists()) {
                 CachedModDeletionResult.Failed("无法完全删除私有缓存目录。")
             } else {
+                namePreferences?.edit()?.remove(cacheKey)?.apply()
                 CachedModDeletionResult.Deleted
             }
-        } catch (error: SecurityException) {
+        } catch (_: SecurityException) {
             CachedModDeletionResult.Failed("没有删除私有缓存的权限。")
         } catch (error: Exception) {
             CachedModDeletionResult.Failed(error.message ?: "无法删除私有缓存目录。")
@@ -87,12 +104,16 @@ class AndroidPrivateModCache(private val cacheRoot: File) {
             ?.filter { it.name.startsWith('.') && it.name.endsWith(".partial") }
             ?.forEach(File::deleteRecursively)
     }
-    fun importDirectory(sourceRoot: File, source: CacheSource): CachedMod =
-        importDirectories(listOf(sourceRoot), source).single()
 
-    fun importDirectories(sourceRoots: List<File>, source: CacheSource): List<CachedMod> {
+    fun importDirectory(sourceRoot: File, source: CacheSource, displayName: String = sourceRoot.name): CachedMod =
+        importDirectoriesWithNames(listOf(sourceRoot to displayName), source).single()
+
+    fun importDirectories(sourceRoots: List<File>, source: CacheSource): List<CachedMod> =
+        importDirectoriesWithNames(sourceRoots.map { it to it.name }, source)
+
+    fun importDirectoriesWithNames(sourceRoots: List<Pair<File, String>>, source: CacheSource): List<CachedMod> {
         if (sourceRoots.isEmpty()) return emptyList()
-        val validated = sourceRoots.map { it to validateDirectory(it) }
+        val validated = sourceRoots.map { (root, displayName) -> root to validateDirectory(root, displayName) }
             .distinctBy { it.second.digest }
         if (!cacheRoot.mkdirs() && !cacheRoot.isDirectory) throw ImportValidationException("无法创建私有缓存目录")
         val pending = mutableListOf<PendingImport>()
@@ -102,7 +123,7 @@ class AndroidPrivateModCache(private val cacheRoot: File) {
                 val staging = File(cacheRoot, ".${UUID.randomUUID()}.partial")
                 pending += PendingImport(sourceRoot, expected, staging)
                 copyDirectory(sourceRoot, staging, 0)
-                val copied = validateDirectory(staging)
+                val copied = validateDirectory(staging, expected.name)
                 if (copied.digest != expected.digest || copied.sizeBytes != expected.sizeBytes) {
                     throw ImportValidationException("导入内容在复制期间发生变化")
                 }
@@ -115,6 +136,7 @@ class AndroidPrivateModCache(private val cacheRoot: File) {
                 } else {
                     item.staging.deleteRecursively()
                 }
+                saveDisplayName(item.validated.digest, item.validated.name)
                 CachedMod(
                     cacheKey = item.validated.digest,
                     contentDigestSha256 = item.validated.digest,
@@ -138,10 +160,11 @@ class AndroidPrivateModCache(private val cacheRoot: File) {
         val staging: File,
     )
 
+    fun validateDirectory(sourceRoot: File): AndroidValidatedMod = validateDirectory(sourceRoot, sourceRoot.name)
 
-    fun validateDirectory(sourceRoot: File): AndroidValidatedMod {
+    private fun validateDirectory(sourceRoot: File, displayName: String): AndroidValidatedMod {
         if (!sourceRoot.isDirectory || isSymbolicLink(sourceRoot)) throw ImportValidationException("Mod 根目录不可读")
-        return validate(sourceRoot)
+        return validate(sourceRoot, displayName)
     }
 
     private fun copyDirectory(source: File, target: File, depth: Int) {
@@ -158,16 +181,11 @@ class AndroidPrivateModCache(private val cacheRoot: File) {
         } ?: throw ImportValidationException("无法读取导入目录")
     }
 
-    private fun validate(root: File): AndroidValidatedMod {
-        val manifest = root.listFiles()
-            ?.filter { it.isFile && it.name.equals("info.json", ignoreCase = true) }
-            ?.singleOrNull()
-            ?: throw ImportValidationException("根目录必须包含唯一的 Info.json")
-        val parsedManifest = try {
-            manifestValidator.parse(manifest.readBytes())
-        } catch (error: InvalidManifestException) {
-            throw ImportValidationException(error.message ?: "Info.json 无效")
-        }
+    private fun validate(root: File, displayName: String): AndroidValidatedMod {
+        val manifestCount = root.listFiles()
+            ?.count { it.isFile && it.name.equals("info.json", ignoreCase = true) }
+            ?: throw ImportValidationException("无法读取导入目录")
+        if (manifestCount != 1) throw ImportValidationException("根目录必须包含唯一的 Info.json")
         val entries = mutableListOf<String>()
         var count = 0
         var total = 0L
@@ -194,15 +212,33 @@ class AndroidPrivateModCache(private val cacheRoot: File) {
         scan(root, "", 0)
         val digest = MessageDigest.getInstance("SHA-256").digest(entries.sorted().joinToString("\n").toByteArray())
             .joinToString("") { "%02x".format(it) }
-        return AndroidValidatedMod(parsedManifest.name, digest, total)
+        return AndroidValidatedMod(
+            name = ModDisplayNamePolicy.normalize(displayName) ?: ModDisplayNamePolicy.fallback(digest),
+            digest = digest,
+            sizeBytes = total,
+        )
+    }
+
+    private fun migrateLegacyDisplayName(directory: File, cacheKey: String): String {
+        val name = runCatching {
+            val manifest = directory.listFiles()
+                ?.singleOrNull { it.isFile && it.name.equals("info.json", ignoreCase = true) }
+                ?: return@runCatching null
+            manifestValidator.parse(manifest.readBytes()).name
+        }.getOrNull()?.let(ModDisplayNamePolicy::normalize)
+            ?: ModDisplayNamePolicy.fallback(cacheKey)
+        saveDisplayName(cacheKey, name)
+        return name
+    }
+
+    private fun saveDisplayName(cacheKey: String, displayName: String) {
+        namePreferences?.edit()?.putString(cacheKey, displayName)?.apply()
     }
 
     private fun containsSymbolicLink(directory: File): Boolean {
         if (isSymbolicLink(directory)) return true
         val children = directory.listFiles() ?: return true
-        return children.any { child ->
-            isSymbolicLink(child) || (child.isDirectory && containsSymbolicLink(child))
-        }
+        return children.any { child -> isSymbolicLink(child) || (child.isDirectory && containsSymbolicLink(child)) }
     }
 
     private fun deleteRecursivelyWithoutLinks(directory: File): Boolean {
@@ -221,6 +257,7 @@ class AndroidPrivateModCache(private val cacheRoot: File) {
     }
 
     private companion object {
+        const val NAME_PREFERENCES = "mod-cache-names"
         val CACHE_KEY_REGEX = Regex("[0-9a-f]{64}")
     }
 
