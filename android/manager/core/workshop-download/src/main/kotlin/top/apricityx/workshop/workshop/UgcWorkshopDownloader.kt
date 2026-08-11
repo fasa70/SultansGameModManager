@@ -176,12 +176,13 @@ class UgcWorkshopDownloader(
         }
         var totalSize = 0L
         manifest.files.forEach { file ->
-            if (file.size < 0 || file.size > MAXIMUM_MANIFEST_FILE_SIZE_BYTES) {
-                throw WorkshopDownloadException("Workshop manifest contains an oversized file")
+            if (file.size < 0) {
+                throw WorkshopDownloadException("Workshop manifest contains an invalid file size")
             }
-            totalSize = Math.addExact(totalSize, file.size)
-            if (totalSize > MAXIMUM_MANIFEST_TOTAL_SIZE_BYTES) {
-                throw WorkshopDownloadException("Workshop manifest exceeds the total size limit")
+            totalSize = try {
+                Math.addExact(totalSize, file.size)
+            } catch (_: ArithmeticException) {
+                throw WorkshopDownloadException("Workshop manifest total size is too large")
             }
             val components = file.path.replace('\\', '/').split('/')
             if (file.path.isBlank() || components.size > MAXIMUM_MANIFEST_PATH_DEPTH ||

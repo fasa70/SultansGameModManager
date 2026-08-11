@@ -6,6 +6,7 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
 import com.sultansgame.modmanager.storage.ImportValidationException
+import com.sultansgame.modmanager.storage.StorageBudget
 import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
@@ -18,15 +19,15 @@ data class ExternalZipImportRequest(
 
 sealed interface ExternalZipIntentResult {
     data object Ignored : ExternalZipIntentResult
-
     data object MultipleFilesNotSupported : ExternalZipIntentResult
-
     data class Accepted(val uri: Uri) : ExternalZipIntentResult
-
     data class Rejected(val reason: String) : ExternalZipIntentResult
 }
 
-class ExternalZipInbox(private val context: Context) {
+class ExternalZipInbox(
+    private val context: Context,
+    private val budget: StorageBudget = StorageBudget.UNBOUNDED,
+) {
     fun inspect(intent: Intent): ExternalZipIntentResult = when (intent.action) {
         Intent.ACTION_VIEW -> inspectUri(intent.data, intent.flags)
         Intent.ACTION_SEND -> inspectUri(intent.parcelableStream(), intent.flags)
@@ -65,7 +66,9 @@ class ExternalZipInbox(private val context: Context) {
     }
 
     fun recoverInterruptedReceipts() {
-        inboxRoot().listFiles()?.forEach(File::delete)
+        inboxRoot().listFiles()
+            ?.filter { it.name.startsWith('.') && it.name.endsWith(".partial") }
+            ?.forEach(File::delete)
     }
 
     private fun inspectUri(uri: Uri?, flags: Int): ExternalZipIntentResult {
@@ -98,8 +101,8 @@ class ExternalZipInbox(private val context: Context) {
         while (true) {
             val count = input.read(buffer)
             if (count < 0) return total
+            budget.checkChunk(inboxRoot(), total, count.toLong(), "接收 ZIP")
             total = Math.addExact(total, count.toLong())
-            if (total > MAXIMUM_ARCHIVE_SIZE_BYTES) throw ImportValidationException("ZIP 原始文件大小超出限制")
             output.write(buffer, 0, count)
         }
     }
@@ -109,7 +112,6 @@ class ExternalZipInbox(private val context: Context) {
 
     private companion object {
         const val INBOX_DIRECTORY = "external-zip-inbox"
-        const val MAXIMUM_ARCHIVE_SIZE_BYTES = 512L * 1024 * 1024
         val REQUEST_ID_REGEX = Regex("[0-9a-f-]{36}")
     }
 }

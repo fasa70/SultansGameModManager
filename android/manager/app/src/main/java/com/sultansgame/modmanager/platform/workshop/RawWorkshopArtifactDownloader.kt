@@ -22,15 +22,9 @@ sealed interface RawArtifactDownloadResult {
 
 class RawWorkshopArtifactDownloader(private val cacheRoot: File) {
     fun download(url: String, declaredSizeBytes: Long?): RawArtifactDownloadResult {
-        if (!WorkshopHttpPolicy.isAllowedArtifactUrl(url)) {
-            return RawArtifactDownloadResult.Failed(DownloadFailureCode.UnsafeUrl)
-        }
-        if (declaredSizeBytes != null && declaredSizeBytes > WorkshopHttpPolicy.MAXIMUM_ARTIFACT_SIZE_BYTES) {
-            return RawArtifactDownloadResult.Failed(DownloadFailureCode.ResponseTooLarge)
-        }
-        if (!cacheRoot.mkdirs() && !cacheRoot.isDirectory) {
-            return RawArtifactDownloadResult.Failed(DownloadFailureCode.Network)
-        }
+        if (!WorkshopHttpPolicy.isAllowedArtifactUrl(url)) return RawArtifactDownloadResult.Failed(DownloadFailureCode.UnsafeUrl)
+        if (declaredSizeBytes != null && declaredSizeBytes < 0L) return RawArtifactDownloadResult.Failed(DownloadFailureCode.SizeMismatch)
+        if (!cacheRoot.mkdirs() && !cacheRoot.isDirectory) return RawArtifactDownloadResult.Failed(DownloadFailureCode.Network)
         val partial = File(cacheRoot, ".${UUID.randomUUID()}.part")
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
             instanceFollowRedirects = false
@@ -43,9 +37,6 @@ class RawWorkshopArtifactDownloader(private val cacheRoot: File) {
             if (responseCode in 300..399) return RawArtifactDownloadResult.Failed(DownloadFailureCode.UnsafeUrl)
             if (responseCode !in 200..299) return RawArtifactDownloadResult.Failed(httpFailure(responseCode))
             val contentLength = connection.getHeaderField("Content-Length")?.toLongOrNull()?.takeIf { it >= 0 }
-            if (contentLength != null && contentLength > WorkshopHttpPolicy.MAXIMUM_ARTIFACT_SIZE_BYTES) {
-                return RawArtifactDownloadResult.Failed(DownloadFailureCode.ResponseTooLarge)
-            }
             if (declaredSizeBytes != null && contentLength != null && contentLength != declaredSizeBytes) {
                 return RawArtifactDownloadResult.Failed(DownloadFailureCode.SizeMismatch)
             }
@@ -57,19 +48,14 @@ class RawWorkshopArtifactDownloader(private val cacheRoot: File) {
                     while (true) {
                         val count = input.read(buffer)
                         if (count < 0) break
-                        total += count
-                        if (total > WorkshopHttpPolicy.MAXIMUM_ARTIFACT_SIZE_BYTES) {
-                            return RawArtifactDownloadResult.Failed(DownloadFailureCode.ResponseTooLarge)
-                        }
+                        total = Math.addExact(total, count.toLong())
                         digest.update(buffer, 0, count)
                         output.write(buffer, 0, count)
                     }
                     output.fd.sync()
                 }
             }
-            if (declaredSizeBytes != null && total != declaredSizeBytes) {
-                return RawArtifactDownloadResult.Failed(DownloadFailureCode.SizeMismatch)
-            }
+            if (declaredSizeBytes != null && total != declaredSizeBytes) return RawArtifactDownloadResult.Failed(DownloadFailureCode.SizeMismatch)
             val hex = digest.digest().joinToString("") { "%02x".format(it) }
             val completed = File(cacheRoot, "$hex.download")
             if (completed.exists()) partial.delete() else if (!partial.renameTo(completed)) {

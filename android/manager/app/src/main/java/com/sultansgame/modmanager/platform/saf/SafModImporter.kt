@@ -8,8 +8,8 @@ import com.sultansgame.modmanager.model.MAXIMUM_MOD_PATH_DEPTH
 import com.sultansgame.modmanager.platform.storage.AndroidPrivateModCache
 import com.sultansgame.modmanager.storage.ImportValidationException
 import com.sultansgame.modmanager.storage.MAXIMUM_MOD_ENTRY_COUNT
-import com.sultansgame.modmanager.storage.MAXIMUM_MOD_TOTAL_SIZE_BYTES
 import com.sultansgame.modmanager.storage.ModPathPolicy
+import com.sultansgame.modmanager.storage.StorageBudget
 import net.lingala.zip4j.ZipFile
 import java.io.File
 import java.io.FileOutputStream
@@ -27,6 +27,7 @@ data class ZipArchiveInspection(val passwordRequired: Boolean)
 class ZipModImporter(
     private val context: Context,
     private val cache: AndroidPrivateModCache,
+    private val budget: StorageBudget = StorageBudget.UNBOUNDED,
 ) {
     fun inspect(file: File): ZipArchiveInspection {
         validateArchiveFile(file)
@@ -98,11 +99,7 @@ class ZipModImporter(
             throw ZipImportException.InvalidArchive()
         }
         zip.use { archive ->
-            val headers = try {
-                archive.fileHeaders
-            } catch (_: Exception) {
-                throw ZipImportException.InvalidArchive()
-            }
+            val headers = try { archive.fileHeaders } catch (_: Exception) { throw ZipImportException.InvalidArchive() }
             headers.forEach { entry ->
                 val normalized = normalizeEntry(entry.fileName)
                 if (++entries > MAXIMUM_MOD_ENTRY_COUNT) throw ImportValidationException("文件或目录数量超出限制")
@@ -125,10 +122,11 @@ class ZipModImporter(
                                 while (true) {
                                     val count = input.read(buffer)
                                     if (count < 0) break
-                                    fileSize += count
-                                    if (!ModPathPolicy.isSupportedSize(fileSize, normalized)) throw ImportValidationException("ZIP 文件大小超出限制")
-                                    totalSize = Math.addExact(totalSize, count.toLong())
-                                    if (totalSize > MAXIMUM_MOD_TOTAL_SIZE_BYTES) throw ImportValidationException("ZIP 总大小超出限制")
+                                    budget.checkChunk(root, fileSize, count.toLong(), "解压 ZIP")
+                                    fileSize = Math.addExact(fileSize, count.toLong())
+                                    totalSize = try { Math.addExact(totalSize, count.toLong()) } catch (_: ArithmeticException) {
+                                        throw ImportValidationException("ZIP 总大小超出可表示范围")
+                                    }
                                     output.write(buffer, 0, count)
                                 }
                                 output.fd.sync()
@@ -146,7 +144,6 @@ class ZipModImporter(
 
     private fun validateArchiveFile(file: File) {
         if (!file.isFile) throw ImportValidationException("ZIP 文件不可读")
-        if (file.length() > MAXIMUM_ARCHIVE_SIZE_BYTES) throw ImportValidationException("ZIP 原始文件大小超出限制")
     }
 
     private fun copyBounded(input: java.io.InputStream, output: FileOutputStream) {
@@ -155,8 +152,8 @@ class ZipModImporter(
         while (true) {
             val count = input.read(buffer)
             if (count < 0) return
+            budget.checkChunk(context.cacheDir, total, count.toLong(), "接收 ZIP")
             total = Math.addExact(total, count.toLong())
-            if (total > MAXIMUM_ARCHIVE_SIZE_BYTES) throw ImportValidationException("ZIP 原始文件大小超出限制")
             output.write(buffer, 0, count)
         }
     }
@@ -180,8 +177,4 @@ class ZipModImporter(
 
     private fun hasManifest(directory: File): Boolean = directory.listFiles()
         ?.count { it.isFile && it.name.equals("info.json", ignoreCase = true) } == 1
-
-    private companion object {
-        const val MAXIMUM_ARCHIVE_SIZE_BYTES = 512L * 1024 * 1024
-    }
 }

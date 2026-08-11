@@ -38,6 +38,7 @@ enum class GameModSyncFailureCode {
     ValidationFailed,
     TransferInterrupted,
     CommitFailed,
+    InsufficientStorage,
     InternalError,
     Unknown,
 }

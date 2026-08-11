@@ -41,9 +41,8 @@ public final class ModStorageProvider extends ContentProvider {
     private static final String RESULT_FAILED = "failed";
     private static final String RESULT_VALIDATION_FAILED = "validationFailed";
     private static final String RESULT_COMMIT_FAILED = "commitFailed";
+    private static final String RESULT_INSUFFICIENT_STORAGE = "insufficientStorage";
     private static final int MAX_ENTRY_COUNT = 10_000;
-    private static final long MAX_FILE_SIZE = 256L * 1024L * 1024L;
-    private static final long MAX_TOTAL_SIZE = 1024L * 1024L * 1024L;
 
     @Override
     public boolean onCreate() {
@@ -92,6 +91,7 @@ public final class ModStorageProvider extends ContentProvider {
             copyMod(stream, staging, cacheKey);
         } catch (IOException error) {
             deleteRecursively(staging);
+            if (isStorageFailure(error)) return result(RESULT_INSUFFICIENT_STORAGE, "游戏存储空间不足，请释放空间后重试");
             return result(RESULT_VALIDATION_FAILED,
                     error.getMessage() == null ? "Mod 数据校验失败" : error.getMessage());
         } catch (Exception error) {
@@ -114,6 +114,7 @@ public final class ModStorageProvider extends ContentProvider {
         } catch (Exception error) {
             deleteRecursively(staging);
             if (!target.exists() && backup.exists()) backup.renameTo(target);
+            if (isStorageFailure(error)) return result(RESULT_INSUFFICIENT_STORAGE, "游戏存储空间不足，请释放空间后重试");
             return result(RESULT_COMMIT_FAILED,
                     error.getMessage() == null ? "Mod 同步失败" : error.getMessage());
         }
@@ -170,12 +171,11 @@ public final class ModStorageProvider extends ContentProvider {
             String relativePath = input.readUTF();
             long size = input.readLong();
             String expectedDigest = input.readUTF();
-            if (!isSafeRelativePath(relativePath) || size < 0 || size > MAX_FILE_SIZE ||
+            if (!isSafeRelativePath(relativePath) || size < 0 ||
                     !expectedDigest.matches("[0-9a-f]{64}")) {
                 throw new IOException("Mod 文件无效");
             }
             totalSize = Math.addExact(totalSize, size);
-            if (totalSize > MAX_TOTAL_SIZE) throw new IOException("Mod 总大小超出限制");
             File target = new File(staging, relativePath);
             File parent = target.getParentFile();
             if (parent == null || (!parent.exists() && !parent.mkdirs())) {
@@ -201,6 +201,15 @@ public final class ModStorageProvider extends ContentProvider {
         if (input.read() != -1) throw new IOException("Mod 数据包含额外内容");
         if (!hasInfoJson(staging)) throw new IOException("Mod 缺少 Info.json");
         writeManagedMarker(staging, cacheKey);
+    }
+
+    private static boolean isStorageFailure(Throwable error) {
+        for (Throwable current = error; current != null; current = current.getCause()) {
+            String message = current.getMessage();
+            if (message != null && (message.contains("ENOSPC") || message.contains("No space left") ||
+                    message.contains("EDQUOT") || message.contains("File too large"))) return true;
+        }
+        return false;
     }
 
     private static void writeManagedMarker(File root, String cacheKey) throws IOException {

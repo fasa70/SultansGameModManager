@@ -37,8 +37,11 @@ class ModImportValidator(
         visit(root, "", 0, files, digests, normalizedPaths, caseFoldedPaths) { size ->
             entryCount += 1
             if (entryCount > MAXIMUM_MOD_ENTRY_COUNT) throw ImportValidationException("文件数量超出限制")
-            totalSize = Math.addExact(totalSize, size)
-            if (totalSize > MAXIMUM_MOD_TOTAL_SIZE_BYTES) throw ImportValidationException("总大小超出限制")
+            totalSize = try {
+                Math.addExact(totalSize, size)
+            } catch (_: ArithmeticException) {
+                throw ImportValidationException("Mod 总大小超出可表示范围")
+            }
         }
         val contentDigest = MessageDigest.getInstance("SHA-256")
             .digest(digests.sorted().joinToString("\n").toByteArray())

@@ -9,8 +9,8 @@ import com.sultansgame.modmanager.storage.ImportValidationException
 import com.sultansgame.modmanager.storage.InfoJsonValidator
 import com.sultansgame.modmanager.storage.InvalidManifestException
 import com.sultansgame.modmanager.storage.MAXIMUM_MOD_ENTRY_COUNT
-import com.sultansgame.modmanager.storage.MAXIMUM_MOD_TOTAL_SIZE_BYTES
 import com.sultansgame.modmanager.storage.ModPathPolicy
+import com.sultansgame.modmanager.storage.StorageBudget
 import java.io.File
 import java.io.FileInputStream
 import java.security.MessageDigest
@@ -29,7 +29,10 @@ sealed interface CachedModDeletionResult {
     data class Failed(val reason: String) : CachedModDeletionResult
 }
 
-class AndroidPrivateModCache(private val cacheRoot: File) {
+class AndroidPrivateModCache(
+    private val cacheRoot: File,
+    private val budget: StorageBudget = StorageBudget.UNBOUNDED,
+) {
     private val manifestValidator = InfoJsonValidator()
 
     fun listCached(): List<CachedMod> {
@@ -75,7 +78,7 @@ class AndroidPrivateModCache(private val cacheRoot: File) {
             } else {
                 CachedModDeletionResult.Deleted
             }
-        } catch (error: SecurityException) {
+        } catch (_: SecurityException) {
             CachedModDeletionResult.Failed("没有删除私有缓存的权限。")
         } catch (error: Exception) {
             CachedModDeletionResult.Failed(error.message ?: "无法删除私有缓存目录。")
@@ -87,6 +90,7 @@ class AndroidPrivateModCache(private val cacheRoot: File) {
             ?.filter { it.name.startsWith('.') && it.name.endsWith(".partial") }
             ?.forEach(File::deleteRecursively)
     }
+
     fun importDirectory(sourceRoot: File, source: CacheSource): CachedMod =
         importDirectories(listOf(sourceRoot), source).single()
 
@@ -99,8 +103,14 @@ class AndroidPrivateModCache(private val cacheRoot: File) {
         val committed = mutableListOf<File>()
         try {
             validated.forEach { (sourceRoot, expected) ->
+                val destination = File(cacheRoot, expected.digest)
+                if (destination.isDirectory && !isSymbolicLink(destination)) {
+                    pending += PendingImport(expected, null)
+                    return@forEach
+                }
                 val staging = File(cacheRoot, ".${UUID.randomUUID()}.partial")
-                pending += PendingImport(sourceRoot, expected, staging)
+                pending += PendingImport(expected, staging)
+                budget.requireSpace(cacheRoot, expected.sizeBytes, "缓存导入")
                 copyDirectory(sourceRoot, staging, 0)
                 val copied = validateDirectory(staging)
                 if (copied.digest != expected.digest || copied.sizeBytes != expected.sizeBytes) {
@@ -109,11 +119,11 @@ class AndroidPrivateModCache(private val cacheRoot: File) {
             }
             return pending.map { item ->
                 val destination = File(cacheRoot, item.validated.digest)
-                if (!destination.exists()) {
+                if (item.staging != null && !destination.exists()) {
                     if (!item.staging.renameTo(destination)) throw ImportValidationException("无法提交私有缓存")
                     committed += destination
                 } else {
-                    item.staging.deleteRecursively()
+                    item.staging?.deleteRecursively()
                 }
                 CachedMod(
                     cacheKey = item.validated.digest,
@@ -126,18 +136,16 @@ class AndroidPrivateModCache(private val cacheRoot: File) {
                 )
             }
         } catch (error: Exception) {
-            pending.forEach { it.staging.deleteRecursively() }
-            committed.forEach { it.deleteRecursively() }
+            pending.mapNotNull { it.staging }.forEach(File::deleteRecursively)
+            committed.forEach(File::deleteRecursively)
             throw error
         }
     }
 
     private data class PendingImport(
-        val sourceRoot: File,
         val validated: AndroidValidatedMod,
-        val staging: File,
+        val staging: File?,
     )
-
 
     fun validateDirectory(sourceRoot: File): AndroidValidatedMod {
         if (!sourceRoot.isDirectory || isSymbolicLink(sourceRoot)) throw ImportValidationException("Mod 根目录不可读")
@@ -152,10 +160,29 @@ class AndroidPrivateModCache(private val cacheRoot: File) {
             val destination = File(target, entry.name)
             when {
                 entry.isDirectory -> copyDirectory(entry, destination, depth + 1)
-                entry.isFile -> entry.inputStream().use { input -> destination.outputStream().use { output -> input.copyTo(output) } }
+                entry.isFile -> copyFile(entry, destination)
                 else -> throw ImportValidationException("包含非普通文件")
             }
         } ?: throw ImportValidationException("无法读取导入目录")
+    }
+
+    private fun copyFile(source: File, destination: File) {
+        val size = source.length()
+        if (!ModPathPolicy.isSupportedSize(size, source.name)) throw ImportValidationException("文件大小超出限制")
+        source.inputStream().use { input ->
+            destination.outputStream().use { output ->
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                var written = 0L
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    budget.checkChunk(cacheRoot, written, count.toLong(), "缓存复制")
+                    output.write(buffer, 0, count)
+                    written = Math.addExact(written, count.toLong())
+                }
+                if (written != size) throw ImportValidationException("导入文件在复制期间发生变化")
+            }
+        }
     }
 
     private fun validate(root: File): AndroidValidatedMod {
@@ -163,6 +190,9 @@ class AndroidPrivateModCache(private val cacheRoot: File) {
             ?.filter { it.isFile && it.name.equals("info.json", ignoreCase = true) }
             ?.singleOrNull()
             ?: throw ImportValidationException("根目录必须包含唯一的 Info.json")
+        if (!ModPathPolicy.isSupportedSize(manifest.length(), manifest.name)) {
+            throw ImportValidationException("Info.json 不可读")
+        }
         val parsedManifest = try {
             manifestValidator.parse(manifest.readBytes())
         } catch (error: InvalidManifestException) {
@@ -183,8 +213,9 @@ class AndroidPrivateModCache(private val cacheRoot: File) {
                         if (++count > MAXIMUM_MOD_ENTRY_COUNT) throw ImportValidationException("文件数量超出限制")
                         val size = entry.length()
                         if (!ModPathPolicy.isSupportedSize(size, relative)) throw ImportValidationException("文件大小超出限制")
-                        total = Math.addExact(total, size)
-                        if (total > MAXIMUM_MOD_TOTAL_SIZE_BYTES) throw ImportValidationException("总大小超出限制")
+                        total = try { Math.addExact(total, size) } catch (_: ArithmeticException) {
+                            throw ImportValidationException("Mod 总大小超出可表示范围")
+                        }
                         entries += "$relative\t$size\t${sha256(entry)}"
                     }
                     else -> throw ImportValidationException("包含非普通文件")

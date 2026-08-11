@@ -39,8 +39,10 @@ import com.sultansgame.modmanager.platform.game.PackageManagerGameProbe
 import com.sultansgame.modmanager.platform.saf.ExternalZipInbox
 import com.sultansgame.modmanager.platform.saf.ZipModImporter
 import com.sultansgame.modmanager.platform.storage.AndroidPrivateModCache
+import com.sultansgame.modmanager.platform.storage.AndroidStorageSpaceProbe
 import com.sultansgame.modmanager.platform.storage.CachedModDeletionResult
 import com.sultansgame.modmanager.platform.storage.DeploymentPlanStore
+import com.sultansgame.modmanager.storage.StorageBudget
 import com.sultansgame.modmanager.platform.workshop.SteamPublicMetadataTransport
 import com.sultansgame.modmanager.platform.workshop.SteamCommunityWorkshopDetailTransport
 import com.sultansgame.modmanager.platform.workshop.SteamCommunityWorkshopBrowser
@@ -75,10 +77,11 @@ sealed interface ManagerUiEvent {
 }
 
 class ManagerViewModel(application: Application) : AndroidViewModel(application) {
-    private val privateModCache = AndroidPrivateModCache(File(application.filesDir, "mod-cache"))
+    private val storageBudget = StorageBudget(AndroidStorageSpaceProbe())
+    private val privateModCache = AndroidPrivateModCache(File(application.filesDir, "mod-cache"), storageBudget)
     private val deploymentPlan = DeploymentPlanStore(application)
-    private val zipImporter = ZipModImporter(application, privateModCache)
-    private val externalZipInbox = ExternalZipInbox(application)
+    private val zipImporter = ZipModImporter(application, privateModCache, storageBudget)
+    private val externalZipInbox = ExternalZipInbox(application, storageBudget)
     private val artifactImporter = WorkshopArtifactImporter(application, privateModCache, zipImporter)
     private val taskStore = WorkshopTaskStore(application)
     private val downloadScheduler = WorkshopDownloadScheduler(application)

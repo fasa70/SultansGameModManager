@@ -168,6 +168,7 @@ enum class DownloadFailureCode {
     ResponseTooLarge,
     SizeMismatch,
     ChecksumMismatch,
+    InsufficientStorage,
     InvalidArtifact,
     ImportFailed,
     Cancelled,

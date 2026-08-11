@@ -27,7 +27,6 @@ namespace modloader {
 namespace {
 
 constexpr std::size_t kMaximumConfigFileSize = 16U * 1024U * 1024U;
-constexpr std::size_t kMaximumMediaFileSize = 256U * 1024U * 1024U;
 constexpr std::size_t kMaximumPathDepth = 8;
 
 bool IsSafePathComponent(std::string_view name) {
@@ -122,9 +121,9 @@ void ScanDirectory(IndexedMod* mod, const std::string& root, const std::string& 
         if (S_ISDIR(status.st_mode)) {
             ScanDirectory(mod, root, child_relative, depth + 1, rejected_entries);
         } else if (S_ISREG(status.st_mode)) {
-            const std::size_t maximum_size = HasSupportedMediaSuffix(child_relative) ?
-                kMaximumMediaFileSize : kMaximumConfigFileSize;
-            if (IsRegularFile(status, maximum_size)) {
+            const bool is_media = HasSupportedMediaSuffix(child_relative);
+            if ((is_media && S_ISREG(status.st_mode) && status.st_size >= 0) ||
+                (!is_media && IsRegularFile(status, kMaximumConfigFileSize))) {
                 AddFile(mod, root, child_relative, status);
             } else {
                 rejected_entries->push_back(child_path + ":file_type_or_size");

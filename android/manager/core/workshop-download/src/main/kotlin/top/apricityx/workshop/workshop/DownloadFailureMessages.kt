@@ -19,6 +19,9 @@ internal fun Throwable.toDownloadFailure(): DownloadFailure {
             message.contains("hcontent_file", ignoreCase = true) ||
             message.contains("not owned", ignoreCase = true) ||
             message.contains("unsupported workshop file type", ignoreCase = true) -> DownloadFailure.NotOwnedOrUnavailable
+        message.contains("No space left", ignoreCase = true) ||
+            message.contains("ENOSPC", ignoreCase = true) ||
+            message.contains("insufficient storage", ignoreCase = true) -> DownloadFailure.InsufficientStorage
         message.contains("exceeds the size limit", ignoreCase = true) ||
             message.contains("response exceeds", ignoreCase = true) -> DownloadFailure.ResponseTooLarge
         message.contains("length mismatch", ignoreCase = true) ||
