@@ -2,9 +2,9 @@
 
 ## Release pipeline
 
-Run `bash scripts/build-release.sh` from the repository root after configuring the JDK, Android SDK and NDK. The pipeline builds the native loader, validates its ELF/ABI/16 KB alignment contract, builds the Bootstrap AAR and unsigned loader split, stages the template and structural metadata transactionally, assembles the signed Manager APK, and verifies the final APK.
+Run `bash scripts/build-release.sh` from the repository root after configuring the JDK, Android SDK and NDK. The pipeline builds the native loader, validates its ELF/ABI/16 KB alignment contract, builds the Bootstrap AAR and unsigned loader split, stages the template and structural metadata under `android/manager/app/build/`, assembles the signed Manager APK with the generated template asset, and verifies the final APK. Release input credentials remain local and untracked under `/release/`.
 
-Native/template content is intentionally **not pinned by checked-in SHA-256**. Native changes therefore do not require updating `GameProfile`, release JSON, or test constants. The release metadata records only package, split, version and provider protocol. Certificate SHA-256 and ordinary APK/mod integrity summaries are separate mechanisms and remain in use.
+Native/template content is intentionally not pinned by checked-in SHA-256. Native changes therefore do not require updating `GameProfile`, release JSON, or test constants. Certificate SHA-256 and ordinary APK/mod integrity summaries are separate mechanisms and remain in use.
 
 ## Loader template checks
 
@@ -36,11 +36,14 @@ python ../bootstrap/build_split_template.py --verify \
 ## Verification
 
 ```bash
-PYTHONPATH=scripts python -X utf8 scripts/verify-loader-template.py --root .
 PYTHONPATH=scripts python -X utf8 scripts/verify-loader-template.py \
-  --root . --manager-apk android/manager/app/build/outputs/apk/release/app-release.apk
-unzip -t android/manager/app/src/main/assets/release/modloader-template-10005.apk
+  --stage android/manager/app/build/release-stage/publish
+PYTHONPATH=scripts python -X utf8 scripts/verify-loader-template.py \
+  --stage android/manager/app/build/release-stage/publish \
+  --manager-apk android/manager/app/build/outputs/apk/release/app-release.apk
 ```
+
+The release script removes successful staging after verification. The generated template and metadata are not source files and are not tracked by Git.
 
 ## Tests
 
@@ -59,3 +62,4 @@ Build native host tests with `-DMODLOADER_BUILD_HOST_TESTS=ON -DMODLOADER_BACKEN
 - The unsigned loader split is signed later with the same device identity as the base and original splits.
 - Native/template changes require rebuilding and structural validation, but no checked-in SHA-256 update.
 - The Bootstrap and Manager ModStorage bridge must use protocol version 2.
+- Release artifacts and release metadata are generated locally or attached to the external release page; they are not stored in the source repository.

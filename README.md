@@ -95,7 +95,6 @@ Windows 版《苏丹的游戏》提供官方 Mod 支持，而 Android 版没有�
 │   ├── src/                    # 实现
 │   └── tests/                  # 单元测试
 ├── docs/                       # 构建与架构文档
-└── release/                    # 发布身份信息（密钥文件不入库）
 ```
 
 #### 构建要求
@@ -137,7 +136,7 @@ cmake -S native -B native/build-android -G Ninja \
 cmake --build native/build-android
 ```
 
-输出：`native/build-android/libmodloader.so`。发布构建还必须满足 ELF64/AArch64、所有 `PT_LOAD` 为 `0x4000` 对齐且没有 `TEXTREL`。完整的模板重建、hash pin、Manager release 和测试流程见 [构建指南](docs/build.md)。
+输出：`native/build-android/libmodloader.so`。发布构建还必须满足 ELF64/AArch64、所有 `PT_LOAD` 为 `0x4000` 对齐且没有 `TEXTREL`。完整的模板重建、Manager release 和测试流程见 [构建指南](docs/build.md)。
 
 ### 技术栈
 
@@ -247,8 +246,7 @@ Removing a Mod from the Manager also schedules removal of the corresponding Mana
 │   ├── include/modloader/      # Headers
 │   ├── src/                    # Implementation
 │   └── tests/                  # Unit tests
-├── docs/                       # Build and architecture documents
-└── release/                    # Release identity information (key files are untracked)
+├── docs/                       # Build and architecture documentation
 ```
 
 #### Prerequisites
@@ -290,11 +288,11 @@ cmake -S native -B native/build-android -G Ninja \
 cmake --build native/build-android
 ```
 
-Output: `native/build-android/libmodloader.so`. Release artifacts must be ELF64/AArch64, have `0x4000` alignment on every `PT_LOAD`, and contain no `TEXTREL`. See the [build guide](docs/build.md) for template regeneration, hash pins, Manager release builds, and tests.
+Output: `native/build-android/libmodloader.so`. Release artifacts must be ELF64/AArch64, have `0x4000` alignment on every `PT_LOAD`, and contain no `TEXTREL`. See the [build guide](docs/build.md) for template regeneration, Manager release builds, and tests.
 
 #### Release build
 
-The tracked release entry rebuilds the native loader, protocol v2 Bootstrap AAR, unsigned split template, structural metadata, and signed Manager APK in that order. It requires the local, untracked release keystore/password files and environment variables for the SDK, NDK, and JDK:
+The release build regenerates the native loader, protocol v2 Bootstrap AAR, unsigned split template, structural metadata, and signed Manager APK in that order. It requires the local, untracked release keystore/password files and environment variables for the SDK, NDK, and JDK:
 
 ```bash
 export JAVA_HOME="/path/to/jdk-21"
@@ -303,7 +301,7 @@ export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/<ndk-version>"
 bash scripts/build-release.sh
 ```
 
-Do not run only `:app:assembleRelease -PmodloaderBinary=...`: that task consumes the already-frozen template and does not rebuild it. See the [build guide](docs/build.md) for the staged native → Bootstrap → template pipeline, digest closure, and tests.
+The template and metadata are generated under `android/manager/app/build/` and are not source-controlled. Do not run only `:app:assembleRelease -PmodloaderBinary=...`; the release pipeline must first generate and validate the loader template. See the [build guide](docs/build.md) for the staged native → Bootstrap → template pipeline and tests.
 
 ### Technology stack
 

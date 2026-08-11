@@ -1,7 +1,44 @@
+import org.gradle.api.GradleException
+import org.gradle.api.tasks.Sync
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
+}
+
+val generatedReleaseAssets = layout.buildDirectory.dir("generated/release-assets")
+val releaseTemplate = providers.gradleProperty("releaseTemplate").orNull
+val appPackagingRequested = gradle.startParameter.taskNames.any { task ->
+    task.contains(":app:") && (
+        task.contains("assemble", ignoreCase = true) ||
+            task.contains("bundle", ignoreCase = true) ||
+            task.contains("package", ignoreCase = true) ||
+            task.contains("install", ignoreCase = true) ||
+            task.contains("connected", ignoreCase = true)
+    )
+}
+val releaseBuildRequested = gradle.startParameter.taskNames.any { task ->
+    task.contains(":app:") && task.contains("release", ignoreCase = true)
+}
+val releaseTemplateFile = releaseTemplate?.let(::file)
+
+if (appPackagingRequested && releaseTemplateFile?.isFile != true) {
+    throw GradleException("app packaging requires -PreleaseTemplate=<loader template APK path>")
+}
+
+val syncReleaseTemplate = tasks.register<Sync>("syncReleaseTemplate") {
+    releaseTemplateFile?.let { from(it) }
+    into(generatedReleaseAssets.map { it.dir("release") })
+    rename { "modloader-template-10005.apk" }
+}
+
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
+    dependsOn(syncReleaseTemplate)
+}
+
+tasks.matching { it.name.contains("lint", ignoreCase = true) && it.name.contains("Release") }.configureEach {
+    dependsOn(syncReleaseTemplate)
 }
 
 android {
@@ -11,9 +48,6 @@ android {
     val releaseKeystore = rootProject.file("../../release/manager-release.jks")
     val releasePassword = rootProject.file("../../release/manager-release-password.txt")
         .takeIf { it.isFile }?.readText()?.trim()
-    val releaseBuildRequested = gradle.startParameter.taskNames.any { task ->
-        task.contains("release", ignoreCase = true)
-    }
     if (releaseBuildRequested && (!releaseKeystore.isFile || releasePassword.isNullOrBlank())) {
         throw GradleException(
             "release build requires release/manager-release.jks and " +
@@ -45,6 +79,10 @@ android {
         versionCode = 3
         versionName = "0.3.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    sourceSets {
+        getByName("main").assets.srcDir(generatedReleaseAssets.get().asFile)
     }
 
     buildFeatures {

@@ -30,16 +30,20 @@ The official native backend has been validated with UI reveal, URI/Texture and T
 
 ## Commands
 
+The release pipeline creates ephemeral template and metadata files under `android/manager/app/build/release-stage`:
+
 ```bash
-PYTHONPATH=scripts python -X utf8 scripts/verify-loader-template.py --root .
-PYTHONPATH=scripts python -X utf8 scripts/verify-loader-template.py --root . --manager-apk android/manager/app/build/outputs/apk/release/app-release.apk
+bash scripts/build-release.sh
+PYTHONPATH=scripts python -X utf8 scripts/verify-loader-template.py \
+  --stage android/manager/app/build/release-stage/publish \
+  --manager-apk android/manager/app/build/outputs/apk/release/app-release.apk
 ```
 
 On a compatible device, run the Android instrumentation suite and a complete migration/install smoke test after native or Bootstrap changes.
 
-## Release metadata
+## Release artifacts
 
-`release/loader-template-10005.json` records only package, split, version and provider protocol. Legacy hash fields are removed on the next staged release.
+The loader template and structural metadata are generated for each release build and are intentionally not tracked in the source repository. Publish the Manager APK, optional standalone loader template, metadata and SHA-256 values as external release-page artifacts.
 
 Certificate fingerprints and ordinary APK/mod integrity digests remain separate mechanisms and are not part of the native/template pin policy.
 

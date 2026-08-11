@@ -3,7 +3,6 @@
 .kotlin/
 **/build/
 *.apk
-!android/manager/app/src/main/assets/release/modloader-template-10005.apk
 *.aab
 *.dex
 
@@ -32,7 +31,7 @@ __pycache__/
 *.p12
 *.pem
 *.key
-/release/manager-release-password.txt
+/release/
 .env
 .env.*
 local.properties

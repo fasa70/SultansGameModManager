@@ -20,7 +20,6 @@ keystore="${MANAGER_RELEASE_KEYSTORE:-$repo_root/release/manager-release.jks}"
 password_file="${MANAGER_RELEASE_PASSWORD_FILE:-$repo_root/release/manager-release-password.txt}"
 script_dir="$repo_root/scripts"
 release_root="$repo_root/android/manager/app/build/release-stage"
-transaction_marker="$release_root/transaction.json"
 
 fail() { printf 'Release build failed: %s\n' "$*" >&2; exit 1; }
 require_dir() { [[ -n "$2" && -d "$2" ]] || fail "$1 is required: $2"; }
@@ -98,20 +97,6 @@ select_readelf() {
   fail 'llvm-readelf not found in the Android NDK'
 }
 
-recover_interrupted_transaction() {
-  [[ -f "$transaction_marker" ]] || return 0
-  printf '%s\n' 'Recovering interrupted release transaction'
-  python -X utf8 "$script_dir/release_transaction.py" rollback --root "$repo_root" --marker "$transaction_marker" || fail "Could not recover transaction: $transaction_marker"
-}
-
-assert_clean_targets() {
-  local target status
-  while IFS= read -r target; do
-    status="$(git -C "$repo_root" status --porcelain -- "$target")"
-    [[ -z "$status" ]] || fail "Release target has uncommitted changes: $target"
-  done < <(python -X utf8 "$script_dir/verify-loader-template.py" --print-targets --root "$repo_root")
-}
-
 assert_native_elf() {
   local readelf="$1" binary="$2" report="$3"
   "$readelf" -hW -lW -dW "$binary" >"$report"
@@ -131,8 +116,6 @@ keytool="$java_home/bin/keytool.exe"; [[ -x "$keytool" ]] || keytool="$java_home
 is_executable "$keytool" || fail "JDK keytool not found: $java_home"
 require_file 'release keystore' "$keystore"; require_file 'release password file' "$password_file"
 
-recover_interrupted_transaction
-assert_clean_targets
 cmake="$(select_cmake)"; ninja="$(select_ninja)"; readelf="$(select_readelf)"
 android_jar="$android_home/platforms/android-35/android.jar"; build_tools="$(select_build_tools)"
 aapt2="$build_tools/aapt2.exe"; [[ -f "$aapt2" ]] || aapt2="$build_tools/aapt2"
@@ -144,13 +127,9 @@ certificate_sha256="$("$keytool" -list -v -keystore "$keystore" -storepass "$pas
 [[ "$certificate_sha256" =~ ^[0-9a-f]{64}$ ]] || fail 'Could not read release certificate SHA-256'
 
 mkdir -p "$release_root"
-stage="$(mktemp -d "$release_root/run.XXXXXX")"; transaction_active=0
+stage="$(mktemp -d "$release_root/run.XXXXXX")"
 rollback_on_exit() {
   local status=$?
-  if [[ "$transaction_active" == 1 && -f "$transaction_marker" ]]; then
-    printf '%s\n' 'Build failed; rolling back release files' >&2
-    python -X utf8 "$script_dir/release_transaction.py" rollback --root "$repo_root" --marker "$transaction_marker" || printf 'Rollback failed; recover with %s\n' "$transaction_marker" >&2
-  fi
   if [[ "$status" == 0 ]]; then rm -rf "$stage"; else printf 'Release staging retained: %s\n' "$stage" >&2; fi
   exit "$status"
 }
@@ -160,8 +139,9 @@ native_build="$repo_root/native/build-android-release"; native_binary="$native_b
 printf '%s\n' '[1/5] Configure and build official native loader'
 MSYS_NO_PATHCONV=1 "$cmake" -S "$(native_path "$repo_root/native")" -B "$(native_path "$native_build")" -G Ninja -DCMAKE_MAKE_PROGRAM="$(native_path "$ninja")" -DCMAKE_TOOLCHAIN_FILE="$(native_path "$android_ndk/build/cmake/android.toolchain.cmake")" -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-35 -DMODLOADER_BACKEND_MODE=1 -DMODLOADER_OFFICIAL_URI_HOOKS=ON -DMODLOADER_OFFICIAL_URI_TEXTURE_HOOK=ON -DMODLOADER_OFFICIAL_TMP_GLYPH_HOOKS=ON -DCMAKE_BUILD_TYPE=Release
 MSYS_NO_PATHCONV=1 "$cmake" --build "$(native_path "$native_build")"
-  require_file 'native Dobby submodule' "$repo_root/native/third_party/dobby/CMakeLists.txt"
-  require_file 'native loader' "$native_binary"; assert_native_elf "$readelf" "$native_binary" "$readelf_report"
+require_file 'native Dobby submodule' "$repo_root/native/third_party/dobby/CMakeLists.txt"
+require_file 'native loader' "$native_binary"
+assert_native_elf "$readelf" "$native_binary" "$readelf_report"
 
 export JAVA_HOME="$java_home"
 printf '%s\n' '[2/5] Build protocol v2 Bootstrap AAR'
@@ -170,14 +150,13 @@ printf '%s\n' '[3/5] Build and validate frozen split candidate'
 python -X utf8 "$repo_root/android/bootstrap/build_split_template.py" --bootstrap-aar "$(native_path "$repo_root/android/bootstrap/build/outputs/aar/bootstrap-release.aar")" --bootstrap-manifest "$(native_path "$repo_root/android/bootstrap/src/main/AndroidManifest.xml")" --android-jar "$(native_path "$android_jar")" --aapt2 "$(native_path "$aapt2")" --d8 "$(native_path "$d8")" --output "$(native_path "$template_candidate")" --version-code 10005 --version-name 1.0.5
 python -X utf8 "$repo_root/android/bootstrap/build_split_template.py" --verify --output "$(native_path "$template_candidate")" --version-code 10005 --version-name 1.0.5
 printf '%s\n' '[4/5] Stage and validate loader template'
-PYTHONPATH="$script_dir" python -X utf8 "$script_dir/update-release-pins.py" --root "$repo_root" --template "$template_candidate" --stage "$publish_stage"
-PYTHONPATH="$script_dir" python -X utf8 "$script_dir/verify-loader-template.py" --root "$publish_stage"
-printf '%s\n' '[5/5] Apply transaction and assemble signed Manager release'
-transaction_active=1
-PYTHONPATH="$script_dir" python -X utf8 "$script_dir/release_transaction.py" apply --root "$repo_root" --stage "$publish_stage" --marker "$transaction_marker"
+PYTHONPATH="$script_dir" python -X utf8 "$script_dir/update-release-pins.py" --template "$template_candidate" --stage "$publish_stage"
+PYTHONPATH="$script_dir" python -X utf8 "$script_dir/verify-loader-template.py" --stage "$publish_stage"
+printf '%s\n' '[5/5] Assemble signed Manager release'
 rm -f "$manager_apk"
-(cd "$repo_root/android/manager" && bash ./gradlew :app:assembleRelease -PmanagerCertificateSha256="$certificate_sha256" -PmodloaderBinary="$(native_path "$native_binary")")
-require_file 'Manager release APK' "$manager_apk"; "$apksigner" verify "$manager_apk"
-PYTHONPATH="$script_dir" python -X utf8 "$script_dir/verify-loader-template.py" --root "$repo_root" --manager-apk "$manager_apk"
-PYTHONPATH="$script_dir" python -X utf8 "$script_dir/release_transaction.py" cleanup --root "$repo_root" --marker "$transaction_marker"; transaction_active=0
-printf 'Release APK: %s\n' "$manager_apk"; printf 'Release APK SHA-256: %s\n' "$(sha256sum "$manager_apk" | cut -d' ' -f1)"
+(cd "$repo_root/android/manager" && bash ./gradlew :app:assembleRelease -PmanagerCertificateSha256="$certificate_sha256" -PmodloaderBinary="$(native_path "$native_binary")" -PreleaseTemplate="$(native_path "$template_candidate")")
+require_file 'Manager release APK' "$manager_apk"
+"$apksigner" verify "$manager_apk"
+PYTHONPATH="$script_dir" python -X utf8 "$script_dir/verify-loader-template.py" --stage "$publish_stage" --manager-apk "$manager_apk"
+printf 'Release APK: %s\n' "$manager_apk"
+printf 'Release APK SHA-256: %s\n' "$(sha256sum "$manager_apk" | cut -d' ' -f1)"

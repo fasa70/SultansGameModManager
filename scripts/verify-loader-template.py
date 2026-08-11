@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify loader template structure and release metadata."""
+"""Verify a staged loader template and release metadata."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import re
 import zipfile
 from pathlib import Path
 
-from release_pin_contracts import METADATA_PATH, REQUIRED_METADATA, TEMPLATE_PATH, read_metadata, target_paths
+from release_pin_contracts import METADATA_NAME, REQUIRED_METADATA, TEMPLATE_NAME, read_metadata
 
 NATIVE_ENTRY = "assets/modloader/arm64-v8a/modloader.bin"
 REQUIRED_ENTRIES = {"AndroidManifest.xml", "resources.arsc", "classes.dex", NATIVE_ENTRY}
@@ -54,7 +54,7 @@ def verify_metadata(path: Path) -> dict:
 def verify_manager_apk(path: Path, template_path: Path) -> None:
     try:
         with zipfile.ZipFile(path) as archive, template_path.open("rb") as expected:
-            actual = archive.open(f"assets/release/{Path(TEMPLATE_PATH).name}")
+            actual = archive.open(f"assets/release/{TEMPLATE_NAME}")
             with actual:
                 if actual.read() != expected.read():
                     raise SystemExit("Manager APK contains a different loader template")
@@ -64,18 +64,15 @@ def verify_manager_apk(path: Path, template_path: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent)
+    parser.add_argument("--stage", type=Path, required=True)
     parser.add_argument("--manager-apk", type=Path)
-    parser.add_argument("--print-targets", action="store_true")
     args = parser.parse_args()
-    root = args.root.resolve()
-    if args.print_targets:
-        print("\n".join(target_paths()))
-        return
-    metadata = verify_metadata(root / METADATA_PATH)
-    verify_template(root / TEMPLATE_PATH)
+    stage = args.stage.resolve()
+    metadata = verify_metadata(stage / METADATA_NAME)
+    template = stage / TEMPLATE_NAME
+    verify_template(template)
     if args.manager_apk is not None:
-        verify_manager_apk(args.manager_apk.resolve(), root / TEMPLATE_PATH)
+        verify_manager_apk(args.manager_apk.resolve(), template)
     print(f"package={metadata['packageName']} split={metadata['splitName']} protocol={metadata['providerProtocolVersion']}")
 
 
