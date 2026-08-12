@@ -832,6 +832,14 @@ private fun MyModsScreen(state: ManagerUiState, actions: ManagerActions, wide: B
             )
         }
         item { ImportButton("从本地添加 Mod", onClick = actions.importMod) }
+        item {
+            PrimaryButton(
+                "合并 Mod",
+                enabled = !state.gameModSyncInProgress &&
+                    !state.cachedModDeletionInProgress,
+                onClick = actions.openMerge,
+            )
+        }
         item { NoticeStrip("请在游戏内管理Mod", "管理器只负责游戏 Mod 目录；请在游戏内官方 Mod 面板(主界面左边从上往下第五个按钮)刷新、启用Mod。") }
         item { SectionLabel("Manager 管理的 Mod", "${state.gameModSyncItems.size} 个") }
         if (state.gameModSyncItems.isEmpty()) {
