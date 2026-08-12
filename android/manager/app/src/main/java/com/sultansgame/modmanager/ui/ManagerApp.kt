@@ -1021,14 +1021,19 @@ private fun MergeModsScreen(state: ManagerUiState, actions: ManagerActions, wide
         item { HeroPanel("合并 Mod", "生成合成 Mod", "选择并排序 Mod。列表底部优先级最高；结果会作为普通 Mod 加入 Manager。", "返回管理 Mod", onAction = actions.closeMerge) }
         merge.catalogSelection?.warning?.let { warning -> item { NoticeStrip("旧版本 ID 表", warning) } }
         item { SectionLabel("选择参与合并的 Mod", "${selected.size} 个") }
-        items(state.cachedMods, key = { it.cacheKey }) { mod ->
+        items(state.cachedMods, key = { "merge-source-${it.cacheKey}" }) { mod ->
             Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(14.dp)) {
                 ConfirmationCheckbox(mod.displayName, mod.cacheKey in selected) { actions.toggleMergeMod(mod.cacheKey) }
             }
         }
         if (merge.selectedCacheKeys.isNotEmpty()) {
             item { SectionLabel("本次合并顺序", "底部优先级最高") }
-            items(merge.selectedCacheKeys.mapIndexed { index, key -> index to state.cachedMods.firstOrNull { it.cacheKey == key } }, key = { it.second?.cacheKey ?: it.first }) { (index, mod) ->
+            items(
+                merge.selectedCacheKeys.mapIndexed { index, key ->
+                    index to state.cachedMods.firstOrNull { it.cacheKey == key }
+                },
+                key = { "merge-order-${it.second?.cacheKey ?: it.first}" },
+            ) { (index, mod) ->
                 mod?.let {
                     Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(14.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
