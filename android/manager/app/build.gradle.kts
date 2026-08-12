@@ -97,6 +97,7 @@ kotlin {
 dependencies {
     implementation(project(":core:model"))
     implementation(project(":core:storage"))
+    implementation(project(":core:merge"))
     implementation(project(":core:workshop"))
     implementation(project(":core:steam-protocol"))
     implementation(project(":core:workshop-download"))
