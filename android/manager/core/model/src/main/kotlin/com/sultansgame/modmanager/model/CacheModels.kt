@@ -4,6 +4,7 @@ enum class CacheSource {
     SafTree,
     SafArchive,
     Workshop,
+    Generated,
 }
 
 enum class CachedModState {

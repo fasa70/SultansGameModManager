@@ -116,6 +116,21 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     private val legalNotice = LegalNoticeRepository(application)
     private val updateCheckSettings = UpdateCheckSettingsRepository(application)
     private val updateChecker: UpdateChecker = GitHubReleaseUpdateChecker()
+    private val mergeEngine = com.sultansgame.modmanager.merge.ModMergeEngine()
+    private val mergeRoot = File(application.cacheDir, "mod-merge")
+    private val mergeCatalog = loadMergeCatalog()
+
+    private fun loadMergeCatalog(): com.sultansgame.modmanager.merge.BaseIdCatalog = runCatching {
+        getApplication<Application>().assets.open("merge/base-id-catalog-10005.json").use { input ->
+            com.sultansgame.modmanager.merge.BaseIdCatalogJsonCodec().decode(input.readBytes().toString(Charsets.UTF_8))
+        }
+    }.getOrElse {
+        com.sultansgame.modmanager.merge.BaseIdCatalog(
+            profileId = "official-android-2026-07-27",
+            versionCode = 10005L,
+            catalogVersion = "android-10005-unavailable",
+        )
+    }
 
     private val mutableState = MutableStateFlow(ManagerUiState())
     val state: StateFlow<ManagerUiState> = mutableState.asStateFlow()
@@ -189,6 +204,101 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                 handleInstallResult(intent)
             }
         }
+    }
+
+    fun openMerge() {
+        mutableState.value = mutableState.value.copy(
+            merge = mutableState.value.merge.copy(
+                isOpen = true,
+                selectedCacheKeys = emptyList(),
+                catalogSelection = com.sultansgame.modmanager.merge.CatalogSelection(mergeCatalog, exactVersion = true),
+                conflicts = emptyList(),
+                progress = null,
+                resultCacheKey = null,
+                awaitingSyncDecision = false,
+            ),
+        )
+    }
+
+    fun closeMerge() {
+        if (mutableState.value.merge.isRunning) return
+        mutableState.value = mutableState.value.copy(merge = mutableState.value.merge.copy(isOpen = false))
+    }
+
+    fun toggleMergeMod(cacheKey: String) {
+        val current = mutableState.value.merge.selectedCacheKeys
+        val next = if (cacheKey in current) current - cacheKey else current + cacheKey
+        mutableState.value = mutableState.value.copy(merge = mutableState.value.merge.copy(selectedCacheKeys = next))
+        refreshMergePreflight()
+    }
+
+    fun moveMergeMod(from: Int, to: Int) {
+        val current = mutableState.value.merge.selectedCacheKeys.toMutableList()
+        if (from !in current.indices || to !in current.indices) return
+        val value = current.removeAt(from)
+        current.add(to, value)
+        mutableState.value = mutableState.value.copy(merge = mutableState.value.merge.copy(selectedCacheKeys = current))
+        refreshMergePreflight()
+    }
+
+    private fun refreshMergePreflight() {
+        val merge = mutableState.value.merge
+        if (merge.selectedCacheKeys.size < 2 || merge.catalogSelection == null) {
+            mutableState.value = mutableState.value.copy(merge = merge.copy(conflicts = emptyList()))
+            return
+        }
+        val roots = merge.selectedCacheKeys.map { File(File(getApplication<Application>().filesDir, "mod-cache"), it) }
+        val preflight = runCatching { mergeEngine.preflight(roots, merge.catalogSelection) }.getOrNull()
+        mutableState.value = mutableState.value.copy(merge = merge.copy(conflicts = preflight?.conflicts.orEmpty()))
+    }
+
+    fun setMergeDisplayName(value: String) {
+        mutableState.value = mutableState.value.copy(merge = mutableState.value.merge.copy(resultDisplayName = value))
+    }
+
+    fun startMerge() {
+        val merge = mutableState.value.merge
+        val selection = merge.catalogSelection ?: return
+        if (merge.selectedCacheKeys.size < 2 || merge.isRunning) return
+        mutableState.value = mutableState.value.copy(merge = merge.copy(isRunning = true, progress = "正在复制 Mod 并执行 ID 重映射…"))
+        viewModelScope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    com.sultansgame.modmanager.merge.MergeWorkspace(mergeRoot).use { workspace ->
+                        val inputs = workspace.copyInputs(merge.selectedCacheKeys.map { File(File(getApplication<Application>().filesDir, "mod-cache"), it) })
+                        val output = workspace.outputDirectory()
+                        mergeEngine.merge(inputs, selection, output, merge.selectedCacheKeys.mapNotNull { key -> mutableState.value.cachedMods.firstOrNull { it.cacheKey == key }?.displayName })
+                        privateModCache.importDirectory(output, com.sultansgame.modmanager.model.CacheSource.Generated, merge.resultDisplayName)
+                    }
+                }
+            }
+            result.onSuccess { cached ->
+                val all = (mutableState.value.cachedMods + cached).distinctBy { it.cacheKey }
+                deploymentPlan.ensureSynced(all)
+                deploymentPlan.setSyncedToGame(cached.cacheKey, true, all)
+                mutableState.value = mutableState.value.copy(
+                    cachedMods = all,
+                    merge = mutableState.value.merge.copy(isRunning = false, progress = null, resultCacheKey = cached.cacheKey, awaitingSyncDecision = true),
+                    feedback = FeedbackMessage("合并 Mod 已加入 Manager 缓存。"),
+                )
+                refreshGameModSyncItems()
+                processPendingGameModSyncOperations()
+            }.onFailure { error ->
+                mutableState.value = mutableState.value.copy(merge = mutableState.value.merge.copy(isRunning = false, progress = null), feedback = FeedbackMessage("合并失败：${error.message ?: "未知错误"}", isError = true))
+            }
+        }
+    }
+
+    fun keepOriginalSync() {
+        mutableState.value = mutableState.value.copy(merge = mutableState.value.merge.copy(awaitingSyncDecision = false))
+    }
+
+    fun stopOriginalSync() {
+        val keys = mutableState.value.merge.selectedCacheKeys
+        val cached = mutableState.value.cachedMods
+        keys.forEach { deploymentPlan.setSyncedToGame(it, false, cached) }
+        mutableState.value = mutableState.value.copy(merge = mutableState.value.merge.copy(awaitingSyncDecision = false))
+        processPendingGameModSyncOperations()
     }
 
     fun refreshGameModSync() {

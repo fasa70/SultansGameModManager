@@ -13,6 +13,20 @@ import com.sultansgame.modmanager.model.SteamAuthState
 import com.sultansgame.modmanager.model.WorkshopItem
 import com.sultansgame.modmanager.platform.game.GameProbeResult
 import com.sultansgame.modmanager.platform.saf.ExternalZipImportRequest
+import com.sultansgame.modmanager.merge.CatalogSelection
+import com.sultansgame.modmanager.merge.MergeIdConflict
+
+data class MergeUiState(
+    val isOpen: Boolean = false,
+    val selectedCacheKeys: List<String> = emptyList(),
+    val catalogSelection: CatalogSelection? = null,
+    val conflicts: List<MergeIdConflict> = emptyList(),
+    val isRunning: Boolean = false,
+    val progress: String? = null,
+    val resultCacheKey: String? = null,
+    val resultDisplayName: String = "合并 Mod - 自动生成",
+    val awaitingSyncDecision: Boolean = false,
+)
 
 data class ManagerUiState(
     val gameProbeResult: GameProbeResult? = null,
@@ -22,6 +36,7 @@ data class ManagerUiState(
     val gameModSyncInProgress: Boolean = false,
     val cachedModDeletionInProgress: Boolean = false,
     val cachedMods: List<CachedMod> = emptyList(),
+    val merge: MergeUiState = MergeUiState(),
     val workshop: WorkshopUiState = WorkshopUiState.Idle,
     val workshopBrowse: WorkshopBrowseUiState = WorkshopBrowseUiState(),
     val downloadTasks: List<DownloadTask> = emptyList(),

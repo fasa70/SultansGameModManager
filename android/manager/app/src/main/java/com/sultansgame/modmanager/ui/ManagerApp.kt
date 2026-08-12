@@ -141,6 +141,14 @@ data class ManagerActions(
     val setModSyncedToGame: (String, Boolean) -> Unit,
     val deleteCachedMod: (String) -> Unit,
     val clearModCache: () -> Unit,
+    val openMerge: () -> Unit = {},
+    val closeMerge: () -> Unit = {},
+    val toggleMergeMod: (String) -> Unit = {},
+    val moveMergeMod: (Int, Int) -> Unit = { _, _ -> },
+    val startMerge: () -> Unit = {},
+    val setMergeDisplayName: (String) -> Unit = {},
+    val keepOriginalSync: () -> Unit = {},
+    val stopOriginalSync: () -> Unit = {},
     val acceptNotice: () -> Unit,
     val setAutoUpdateCheckEnabled: (Boolean) -> Unit,
     val dismissAvailableUpdate: () -> Unit,
@@ -170,6 +178,7 @@ private sealed interface DialogKind {
     data class WorkshopTaskRemoval(val taskId: String) : DialogKind
     data object ExternalZipImport : DialogKind
     data object ZipPasswordImport : DialogKind
+    data object MergeSyncConfirmation : DialogKind
 }
 
 @Composable
@@ -182,6 +191,10 @@ fun ManagerApp(state: ManagerUiState, actions: ManagerActions) {
     val readyToInstall = state.patch as? PatchUiState.ReadyToInstall
     val deviceInstallWarning = remember {
         deviceInstallWarningFor(Build.MANUFACTURER, Build.BRAND)
+    }
+
+    LaunchedEffect(state.merge.awaitingSyncDecision) {
+        if (state.merge.awaitingSyncDecision) dialog = DialogKind.MergeSyncConfirmation
     }
 
     LaunchedEffect(readyToInstall?.transactionId, deviceInstallWarning) {
@@ -254,6 +267,7 @@ fun ManagerApp(state: ManagerUiState, actions: ManagerActions) {
             if (dialog == DialogKind.UpdateAvailable) actions.dismissAvailableUpdate()
             if (dialog == DialogKind.ExternalZipImport) actions.cancelExternalZipImport()
             if (dialog == DialogKind.ZipPasswordImport) actions.cancelExternalZipImport()
+            if (dialog == DialogKind.MergeSyncConfirmation) actions.keepOriginalSync()
             dialog = null
         },
     )
@@ -353,7 +367,8 @@ private fun MainContent(
 ) {
     Column(modifier) {
         if (wide) ContentHeader(destination)
-        when (destination) {
+        if (state.merge.isOpen) MergeModsScreen(state, actions, wide)
+        else when (destination) {
             Destination.Start -> StartScreen(state, actions, wide, onSelectDestination)
             Destination.Acquire -> AcquireNavigation(state, actions, wide)
             Destination.Library -> MyModsScreen(state, actions, wide, onShowDialog)
@@ -970,7 +985,60 @@ private fun DialogHost(state: ManagerUiState, actions: ManagerActions, dialog: D
                 onDismiss,
             )
         }
+        DialogKind.MergeSyncConfirmation -> MergeSyncConfirmationDialog(actions, onDismiss)
         null -> Unit
+    }
+}
+
+@Composable
+private fun MergeSyncConfirmationDialog(actions: ManagerActions, onDismiss: () -> Unit) {
+    Dialog(onDismissRequest = onDismiss) {
+        Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(22.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Mod 已完成合并", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Text("是否停止参与合并的原始 Mod 同步？同时同步原始 Mod 和合成 Mod 可能导致内容重复应用。", fontSize = 14.sp)
+                PrimaryButton("停止原始 Mod 同步", onClick = { actions.stopOriginalSync(); onDismiss() })
+                SecondaryButton("保持原始 Mod 同步", onClick = { actions.keepOriginalSync(); onDismiss() })
+            }
+        }
+    }
+}
+
+
+@Composable
+private fun MergeModsScreen(state: ManagerUiState, actions: ManagerActions, wide: Boolean) {
+    val merge = state.merge
+    val selected = merge.selectedCacheKeys.toSet()
+    ScreenList(wide) {
+        item { HeroPanel("合并 Mod", "生成合成 Mod", "选择并排序 Mod。列表底部优先级最高；结果会作为普通 Mod 加入 Manager。", "返回管理 Mod", onAction = actions.closeMerge) }
+        merge.catalogSelection?.warning?.let { warning -> item { NoticeStrip("旧版本 ID 表", warning) } }
+        item { SectionLabel("选择参与合并的 Mod", "${selected.size} 个") }
+        items(state.cachedMods, key = { it.cacheKey }) { mod ->
+            Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(14.dp)) {
+                ConfirmationCheckbox(mod.displayName, mod.cacheKey in selected) { actions.toggleMergeMod(mod.cacheKey) }
+            }
+        }
+        if (merge.selectedCacheKeys.isNotEmpty()) {
+            item { SectionLabel("本次合并顺序", "底部优先级最高") }
+            items(merge.selectedCacheKeys.mapIndexed { index, key -> index to state.cachedMods.firstOrNull { it.cacheKey == key } }, key = { it.second?.cacheKey ?: it.first }) { (index, mod) ->
+                mod?.let {
+                    Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(14.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("${index + 1}. ${it.displayName}", Modifier.weight(1f))
+                            SmallAction("上移", index > 0) { actions.moveMergeMod(index, index - 1) }
+                            SmallAction("下移", index < merge.selectedCacheKeys.lastIndex) { actions.moveMergeMod(index, index + 1) }
+                        }
+                    }
+                }
+            }
+        }
+        merge.conflicts.takeIf { it.isNotEmpty() }?.let { conflicts -> item { NoticeStrip("检测到 ID 冲突", "${conflicts.size} 个新增实体冲突将自动重映射。") } }
+        merge.progress?.let { progress -> item { LoadingPanel(progress) } }
+        item { PrimaryButton(if (merge.isRunning) "正在合并…" else "开始合并", merge.selectedCacheKeys.size >= 2 && !merge.isRunning, actions.startMerge) }
+        if (merge.resultCacheKey != null) {
+            item { LabeledTextField(merge.resultDisplayName, actions.setMergeDisplayName, "Manager 中的显示名称") }
+            item { NoticeStrip("合并完成", "结果已加入 Manager 缓存。") }
+        }
     }
 }
 

@@ -19,6 +19,7 @@ rootProject.name = "SultansGameModManager"
 include(":app")
 include(":core:model")
 include(":core:storage")
+include(":core:merge")
 include(":core:workshop")
 include(":core:steam-protocol")
 include(":core:workshop-download")
