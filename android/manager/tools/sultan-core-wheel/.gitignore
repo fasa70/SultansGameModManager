@@ -1,2 +1,4 @@
 # Generated Android wheel artifacts
 dist/
+.cache/
+.build/
