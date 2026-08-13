@@ -26,6 +26,7 @@ data class MergeUiState(
     val resultCacheKey: String? = null,
     val resultDisplayName: String = "合并 Mod - 自动生成",
     val awaitingSyncDecision: Boolean = false,
+    val modeLabel: String = "无本体 JSON 模式",
 )
 
 data class ManagerUiState(

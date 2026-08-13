@@ -79,8 +79,9 @@ sealed interface MergeResult {
 
 fun BaseIdCatalog.contains(entityType: String, id: String): Boolean = when (entityType) {
     "cards" -> id in cards
-    "tag" -> id in tagCodes
+    "tag", "tag_code" -> id in tagCodes
     "tag_id" -> id.toIntOrNull() in tagIds
+    "tag_name" -> id in tagNames
     "over" -> id in over
     "rite" -> id in rite
     "event" -> id in event

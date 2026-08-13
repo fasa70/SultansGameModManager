@@ -5,6 +5,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
+    alias(libs.plugins.chaquopy)
 }
 
 val generatedReleaseAssets = layout.buildDirectory.dir("generated/release-assets")
@@ -79,6 +80,9 @@ android {
         versionCode = 3
         versionName = "0.3.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     sourceSets {
@@ -94,7 +98,14 @@ kotlin {
     jvmToolchain(21)
 }
 
+chaquopy {
+    defaultConfig {
+        version = "3.11"
+    }
+}
+
 dependencies {
+    implementation(project(":merge-native"))
     implementation(project(":core:model"))
     implementation(project(":core:storage"))
     implementation(project(":core:merge"))

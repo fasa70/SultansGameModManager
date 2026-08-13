@@ -3,7 +3,7 @@ agp = "9.2.1"
 kotlin = "2.4.0"
 compileSdk = "37"
 targetSdk = "36"
-minSdk = "23"
+minSdk = "24"
 activity = "1.13.0"
 miuix = "0.9.3"
 coroutines = "1.10.2"
@@ -17,6 +17,7 @@ jspecify = "1.0.0"
 okhttp = "5.3.2"
 protobuf = "4.29.1"
 protobufPlugin = "0.9.4"
+chaquopy = "17.0.0"
 okio = "3.9.1"
 xz = "1.10"
 zstd = "1.5.6-9"
@@ -73,3 +74,4 @@ kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "ko
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 protobuf = { id = "com.google.protobuf", version.ref = "protobufPlugin" }
+chaquopy = { id = "com.chaquo.python", version.ref = "chaquopy" }

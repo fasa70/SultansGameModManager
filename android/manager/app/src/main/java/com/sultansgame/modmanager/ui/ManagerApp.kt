@@ -1019,6 +1019,12 @@ private fun MergeModsScreen(state: ManagerUiState, actions: ManagerActions, wide
     val selected = merge.selectedCacheKeys.toSet()
     ScreenList(wide) {
         item { HeroPanel("合并 Mod", "生成合成 Mod", "选择并排序 Mod。列表底部优先级最高；结果会作为普通 Mod 加入 Manager。", "返回管理 Mod", onAction = actions.closeMerge) }
+        item {
+            NoticeStrip(
+                merge.modeLabel,
+                "合并器只处理所选 Mod 的覆盖内容；缺失字段不会删除游戏本体内容。",
+            )
+        }
         merge.catalogSelection?.warning?.let { warning -> item { NoticeStrip("旧版本 ID 表", warning) } }
         item { SectionLabel("选择参与合并的 Mod", "${selected.size} 个") }
         items(state.cachedMods, key = { "merge-source-${it.cacheKey}" }) { mod ->

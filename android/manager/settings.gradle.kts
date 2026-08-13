@@ -17,6 +17,8 @@ dependencyResolutionManagement {
 rootProject.name = "SultansGameModManager"
 
 include(":app")
+include(":merge-native")
+project(":merge-native").projectDir = file("merge-native")
 include(":core:model")
 include(":core:storage")
 include(":core:merge")

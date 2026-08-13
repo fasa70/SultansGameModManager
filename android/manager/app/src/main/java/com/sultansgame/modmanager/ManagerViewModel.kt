@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.sultansgame.modmanager.bridge.LoaderBridge
+import com.sultansgame.modmanager.mergenative.NativeJsonRepair
 import com.sultansgame.modmanager.model.DownloadFailureCode
 import com.sultansgame.modmanager.model.DownloadStage
 import com.sultansgame.modmanager.model.PatchConfirmation
@@ -116,7 +117,9 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     private val legalNotice = LegalNoticeRepository(application)
     private val updateCheckSettings = UpdateCheckSettingsRepository(application)
     private val updateChecker: UpdateChecker = GitHubReleaseUpdateChecker()
-    private val mergeEngine = com.sultansgame.modmanager.merge.ModMergeEngine()
+    private val mergeEngine = com.sultansgame.modmanager.merge.ModMergeEngine(
+        repairJson = NativeJsonRepair::repair,
+    )
     private val mergeRoot = File(application.cacheDir, "mod-merge")
     private val mergeCatalog = loadMergeCatalog()
 
