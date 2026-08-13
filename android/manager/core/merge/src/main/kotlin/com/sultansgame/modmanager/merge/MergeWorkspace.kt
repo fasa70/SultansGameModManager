@@ -6,13 +6,15 @@ import java.nio.file.StandardCopyOption
 
 /** Creates a validated, read-only working copy for one merge operation. */
 class MergeWorkspace(private val root: File) : AutoCloseable {
-    val directory: File = File(root, "merge-${System.nanoTime()}")
+    val directory: File = File(root, "merge-${System.nanoTime()}-${java.util.UUID.randomUUID()}")
 
     fun copyInputs(orderedRoots: List<File>): List<File> {
         require(orderedRoots.size >= 2) { "至少选择两个 Mod" }
         require(directory.mkdirs() || directory.isDirectory) { "无法创建合并工作目录" }
         return orderedRoots.mapIndexed { index, source ->
-            require(source.isDirectory) { "Mod 缓存目录不可读：${source.name}" }
+            require(source.isDirectory && !Files.isSymbolicLink(source.toPath())) {
+                "Mod 缓存目录不可读：${source.name}"
+            }
             val destination = File(directory, "input-$index")
             copyTreeWithoutLinks(source, destination)
             destination
@@ -21,7 +23,18 @@ class MergeWorkspace(private val root: File) : AutoCloseable {
 
     fun outputDirectory(): File {
         require(directory.mkdirs() || directory.isDirectory) { "无法创建合并工作目录" }
-        return File(directory, "output").apply { require(mkdirs() || isDirectory) { "无法创建合并输出目录" } }
+        val output = File(directory, "output")
+        if (output.exists()) output.deleteRecursively()
+        require(output.mkdirs() || output.isDirectory) { "无法创建合并输出目录" }
+        return output
+    }
+
+    fun pythonOutputDirectory(): File {
+        require(directory.mkdirs() || directory.isDirectory) { "无法创建合并工作目录" }
+        val output = File(directory, "python-remap")
+        if (output.exists()) output.deleteRecursively()
+        require(output.mkdirs() || output.isDirectory) { "无法创建 Python 工作目录" }
+        return output
     }
 
     override fun close() {

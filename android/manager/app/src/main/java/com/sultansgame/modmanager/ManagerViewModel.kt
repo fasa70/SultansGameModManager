@@ -120,6 +120,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     private val mergeEngine = com.sultansgame.modmanager.merge.ModMergeEngine(
         repairJson = NativeJsonRepair::repair,
     )
+    private val mergeBridge = com.sultansgame.modmanager.platform.merge.ChaquopyMergeBridge(application)
     private val mergeRoot = File(application.cacheDir, "mod-merge")
     private val mergeCatalog = loadMergeCatalog()
 
@@ -250,9 +251,36 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             mutableState.value = mutableState.value.copy(merge = merge.copy(conflicts = emptyList()))
             return
         }
-        val roots = merge.selectedCacheKeys.map { File(File(getApplication<Application>().filesDir, "mod-cache"), it) }
-        val preflight = runCatching { mergeEngine.preflight(roots, merge.catalogSelection) }.getOrNull()
-        mutableState.value = mutableState.value.copy(merge = merge.copy(conflicts = preflight?.conflicts.orEmpty()))
+        viewModelScope.launch {
+            val preflight: com.sultansgame.modmanager.merge.MergePreflight? = runCatching {
+                withContext(Dispatchers.IO) {
+                    com.sultansgame.modmanager.merge.MergeWorkspace(mergeRoot).use { workspace ->
+                        val inputs = workspace.copyInputs(merge.selectedCacheKeys.map { key ->
+                            File(File(getApplication<Application>().filesDir, "mod-cache"), key)
+                        })
+                        val catalog = File(workspace.directory, "catalog.json")
+                        com.sultansgame.modmanager.merge.BaseIdCatalogJsonCodec().write(merge.catalogSelection.catalog, catalog)
+                        val result = mergeBridge.remap(inputs, catalog, workspace.pythonOutputDirectory())
+                        com.sultansgame.modmanager.merge.MergePreflight(
+                            conflicts = result.conflicts.map { conflict ->
+                                com.sultansgame.modmanager.merge.MergeIdConflict(
+                                    conflict.entityType,
+                                    conflict.id,
+                                    conflict.modIndexes,
+                                )
+                            },
+                            remappedEntries = result.remappedEntries,
+                            catalogWarning = merge.catalogSelection.warning,
+                        )
+                    }
+                }
+            }.getOrNull()
+            if (mutableState.value.merge.selectedCacheKeys == merge.selectedCacheKeys) {
+                mutableState.value = mutableState.value.copy(
+                    merge = mutableState.value.merge.copy(conflicts = preflight?.conflicts.orEmpty()),
+                )
+            }
+        }
     }
 
     fun setMergeDisplayName(value: String) {
@@ -263,15 +291,30 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         val merge = mutableState.value.merge
         val selection = merge.catalogSelection ?: return
         if (merge.selectedCacheKeys.size < 2 || merge.isRunning) return
-        mutableState.value = mutableState.value.copy(merge = merge.copy(isRunning = true, progress = "正在复制 Mod 并执行 ID 重映射…"))
+        mutableState.value = mutableState.value.copy(merge = merge.copy(isRunning = true, progress = "正在复制 Mod 并执行上游 ID 重映射…"))
         viewModelScope.launch {
             val result = runCatching {
                 withContext(Dispatchers.IO) {
                     com.sultansgame.modmanager.merge.MergeWorkspace(mergeRoot).use { workspace ->
-                        val inputs = workspace.copyInputs(merge.selectedCacheKeys.map { File(File(getApplication<Application>().filesDir, "mod-cache"), it) })
-                        val output = workspace.outputDirectory()
-                        mergeEngine.merge(inputs, selection, output, merge.selectedCacheKeys.mapNotNull { key -> mutableState.value.cachedMods.firstOrNull { it.cacheKey == key }?.displayName })
-                        privateModCache.importDirectory(output, com.sultansgame.modmanager.model.CacheSource.Generated, merge.resultDisplayName)
+                        val sourceRoots = merge.selectedCacheKeys.map { key ->
+                            File(File(getApplication<Application>().filesDir, "mod-cache"), key)
+                        }
+                        val inputs = workspace.copyInputs(sourceRoots)
+                        val catalog = File(workspace.directory, "catalog.json")
+                        com.sultansgame.modmanager.merge.BaseIdCatalogJsonCodec().write(selection.catalog, catalog)
+                        val remapped = mergeBridge.remap(inputs, catalog, workspace.pythonOutputDirectory())
+                        mergeEngine.mergeRemapped(
+                            remapped.roots,
+                            workspace.outputDirectory(),
+                            merge.selectedCacheKeys.mapNotNull { key ->
+                                mutableState.value.cachedMods.firstOrNull { it.cacheKey == key }?.displayName
+                            },
+                        )
+                        privateModCache.importDirectory(
+                            workspace.outputDirectory(),
+                            com.sultansgame.modmanager.model.CacheSource.Generated,
+                            merge.resultDisplayName,
+                        )
                     }
                 }
             }
@@ -291,7 +334,6 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             }
         }
     }
-
     fun keepOriginalSync() {
         mutableState.value = mutableState.value.copy(merge = mutableState.value.merge.copy(awaitingSyncDecision = false))
     }

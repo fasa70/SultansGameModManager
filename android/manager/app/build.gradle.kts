@@ -101,6 +101,14 @@ kotlin {
 chaquopy {
     defaultConfig {
         version = "3.11"
+        val wheelDirectory = file("../tools/sultan-core-wheel/dist")
+        val androidWheel = wheelDirectory.listFiles()
+            ?.firstOrNull { it.name.startsWith("sultan_core_android-") && it.name.endsWith(".whl") }
+        if (androidWheel != null) {
+            pip {
+                install(androidWheel.absolutePath)
+            }
+        }
     }
 }
 

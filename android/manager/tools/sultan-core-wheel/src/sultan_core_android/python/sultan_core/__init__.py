@@ -1,4 +1,3 @@
-"""Chaquopy-facing Python package placeholder.
+from ._native import JsonDoc
 
-The Android build installs the compiled nanobind extension as sultan_core.
-"""
+__all__ = ["JsonDoc"]
