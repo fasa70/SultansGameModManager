@@ -1,7 +1,23 @@
 cmake_minimum_required(VERSION 3.22)
 project(sultan_core_android LANGUAGES C CXX)
 
-find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
+option(SULTAN_CHAQUOPY_ANDROID "Build against a Chaquopy Android Python target" OFF)
+if(SULTAN_CHAQUOPY_ANDROID)
+    set(Python_VERSION "3.11.14" CACHE STRING "Chaquopy Python version")
+    set(Python_VERSION_MAJOR 3 CACHE STRING "" FORCE)
+    set(Python_VERSION_MINOR 11 CACHE STRING "" FORCE)
+    set(Python_INCLUDE_DIRS "${CHAQUOPY_PYTHON_INCLUDE_DIR}" CACHE PATH "" FORCE)
+    set(Python_SOABI "cpython-311" CACHE STRING "" FORCE)
+    add_library(Python::Module UNKNOWN IMPORTED)
+    set_target_properties(Python::Module PROPERTIES
+        IMPORTED_LOCATION "${CHAQUOPY_PYTHON_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${CHAQUOPY_PYTHON_INCLUDE_DIR}")
+    add_executable(Python::Interpreter IMPORTED)
+    set_target_properties(Python::Interpreter PROPERTIES
+        IMPORTED_LOCATION "${Python_EXECUTABLE}")
+else()
+    find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
+endif()
 find_package(nanobind CONFIG REQUIRED)
 
 add_library(yyjson STATIC yyjson.c)
@@ -28,6 +44,14 @@ set_target_properties(sultan_core_json PROPERTIES POSITION_INDEPENDENT_CODE ON)
 nanobind_add_module(_native MODULE module.cpp)
 target_link_libraries(_native PRIVATE sultan_core_json)
 target_include_directories(_native PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+if(SULTAN_CHAQUOPY_ANDROID)
+    get_filename_component(CHAQUOPY_PYTHON_LIBRARY_DIR
+        "${CHAQUOPY_PYTHON_LIBRARY}" DIRECTORY)
+    target_link_options(_native PRIVATE
+        "-L${CHAQUOPY_PYTHON_LIBRARY_DIR}"
+        "-lpython3.11")
+    set_target_properties(_native PROPERTIES SUFFIX ".cp311-android.so")
+endif()
 
 install(TARGETS _native LIBRARY DESTINATION sultan_core)
 install(FILES

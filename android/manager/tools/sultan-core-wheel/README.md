@@ -10,3 +10,18 @@ needed by the Android ID-remap worker. It is pinned to:
 The generated wheel is an Android/Chaquopy build artifact and must not be
 replaced by a host CPython wheel. The build is intentionally separate from
 the game loader and excludes the upstream state/delta/base-document path.
+
+## Android build inputs
+
+Chaquopy 17 uses CPython 3.11 and the `cp311-cp311-android_24_arm64_v8a`
+wheel tag for this Manager. The native module is built against the matching
+Chaquopy target headers and `libpython3.11.so`, downloaded from the Maven
+coordinate `com.chaquo.python:target:3.11.14-0`, together with the Android NDK
+27 toolchain. The generated `dist/` directory is intentionally ignored and
+must not be committed; release/build automation should generate it before
+Gradle runs the Chaquopy pip task.
+
+The CMake option `SULTAN_CHAQUOPY_ANDROID=ON` enables the imported Chaquopy
+Python target and Android suffix. A normal host build leaves that option off.
+The project metadata uses a PEP 440 version (`1.4.4.post1`), because pip rejects
+`1.4.4.android1` even though the Android wheel platform tag remains explicit.

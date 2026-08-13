@@ -4,10 +4,11 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "sultan-core-android"
-version = "1.4.4.android1"
+version = "1.4.4.post1"
 requires-python = ">=3.11,<3.12"
 
 [tool.scikit-build]
+cmake.source-dir = "src/sultan_core_android"
 cmake.version = ">=3.22"
 cmake.build-type = "Release"
 wheel.packages = ["src/sultan_core_android/python"]
