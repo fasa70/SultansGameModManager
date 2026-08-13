@@ -15,12 +15,15 @@ import com.sultansgame.modmanager.platform.game.GameProbeResult
 import com.sultansgame.modmanager.platform.saf.ExternalZipImportRequest
 import com.sultansgame.modmanager.merge.CatalogSelection
 import com.sultansgame.modmanager.merge.MergeIdConflict
+import com.sultansgame.modmanager.merge.MergePreflight
 
 data class MergeUiState(
     val isOpen: Boolean = false,
     val selectedCacheKeys: List<String> = emptyList(),
     val catalogSelection: CatalogSelection? = null,
+    val catalogError: String? = null,
     val conflicts: List<MergeIdConflict> = emptyList(),
+    val preflight: MergePreflightState = MergePreflightState.Idle,
     val isRunning: Boolean = false,
     val progress: String? = null,
     val resultCacheKey: String? = null,
@@ -28,6 +31,14 @@ data class MergeUiState(
     val awaitingSyncDecision: Boolean = false,
     val modeLabel: String = "无本体 JSON 模式",
 )
+
+sealed interface MergePreflightState {
+    data object Idle : MergePreflightState
+    data class Running(val selection: List<String>) : MergePreflightState
+    data class Ready(val selection: List<String>, val result: MergePreflight) : MergePreflightState
+    data class Failed(val selection: List<String>, val reason: String) : MergePreflightState
+}
+
 
 data class ManagerUiState(
     val gameProbeResult: GameProbeResult? = null,

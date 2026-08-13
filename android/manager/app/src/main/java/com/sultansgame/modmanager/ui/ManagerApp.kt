@@ -80,6 +80,7 @@ import com.sultansgame.modmanager.R
 import com.sultansgame.modmanager.ApksExportUiState
 import com.sultansgame.modmanager.FeedbackMessage
 import com.sultansgame.modmanager.ManagerUiState
+import com.sultansgame.modmanager.MergePreflightState
 import com.sultansgame.modmanager.PatchUiState
 import com.sultansgame.modmanager.PreparedPatchRecovery
 import com.sultansgame.modmanager.WorkshopUiState
@@ -1017,6 +1018,7 @@ private fun MergeSyncConfirmationDialog(actions: ManagerActions, onDismiss: () -
 private fun MergeModsScreen(state: ManagerUiState, actions: ManagerActions, wide: Boolean) {
     val merge = state.merge
     val selected = merge.selectedCacheKeys.toSet()
+    val preflightReady = merge.preflight is MergePreflightState.Ready
     ScreenList(wide) {
         item { HeroPanel("合并 Mod", "生成合成 Mod", "选择并排序 Mod。列表底部优先级最高；结果会作为普通 Mod 加入 Manager。", "返回管理 Mod", onAction = actions.closeMerge) }
         item {
@@ -1025,7 +1027,7 @@ private fun MergeModsScreen(state: ManagerUiState, actions: ManagerActions, wide
                 "合并器只处理所选 Mod 的覆盖内容；缺失字段不会删除游戏本体内容。",
             )
         }
-        merge.catalogSelection?.warning?.let { warning -> item { NoticeStrip("旧版本 ID 表", warning) } }
+        merge.catalogError?.let { error -> item { NoticeStrip("无法合并", error) } }
         item { SectionLabel("选择参与合并的 Mod", "${selected.size} 个") }
         items(state.cachedMods, key = { "merge-source-${it.cacheKey}" }) { mod ->
             Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(14.dp)) {
@@ -1051,9 +1053,16 @@ private fun MergeModsScreen(state: ManagerUiState, actions: ManagerActions, wide
                 }
             }
         }
-        merge.conflicts.takeIf { it.isNotEmpty() }?.let { conflicts -> item { NoticeStrip("检测到 ID 冲突", "${conflicts.size} 个新增实体冲突将自动重映射。") } }
+        when (val preflight = merge.preflight) {
+            MergePreflightState.Idle -> Unit
+            is MergePreflightState.Running -> item { LoadingPanel("正在检查 Mod 冲突…") }
+            is MergePreflightState.Failed -> item { NoticeStrip("预检失败", preflight.reason) }
+            is MergePreflightState.Ready -> if (preflight.result.conflicts.isNotEmpty()) {
+                item { NoticeStrip("检测到 ID 冲突", "${preflight.result.conflicts.size} 个冲突无法安全自动重映射，合并已阻止。") }
+            }
+        }
         merge.progress?.let { progress -> item { LoadingPanel(progress) } }
-        item { PrimaryButton(if (merge.isRunning) "正在合并…" else "开始合并", merge.selectedCacheKeys.size >= 2 && !merge.isRunning, actions.startMerge) }
+        item { PrimaryButton(if (merge.isRunning) "正在合并…" else "开始合并", preflightReady && !merge.isRunning, actions.startMerge) }
         if (merge.resultCacheKey != null) {
             item { LabeledTextField(merge.resultDisplayName, actions.setMergeDisplayName, "Manager 中的显示名称") }
             item { NoticeStrip("合并完成", "结果已加入 Manager 缓存。") }

@@ -102,11 +102,19 @@ chaquopy {
     defaultConfig {
         version = "3.11"
         val wheelDirectory = file("../tools/sultan-core-wheel/dist")
-        val androidWheel = wheelDirectory.listFiles()
-            ?.firstOrNull { it.name.startsWith("sultan_core_android-") && it.name.endsWith(".whl") }
-        if (androidWheel != null) {
+        val wheelCandidates = wheelDirectory.listFiles()
+            ?.filter { it.isFile && it.name.matches(Regex("^sultan_core_android-[^-]+-cp311-cp311-android_24_arm64_v8a\\.whl$")) }
+            .orEmpty()
+        if (appPackagingRequested) {
+            if (wheelCandidates.size != 1) {
+                throw GradleException(
+                    "Android app packaging requires exactly one cp311/cp311/" +
+                        "android_24_arm64_v8a sultan_core wheel under $wheelDirectory " +
+                        "(found ${wheelCandidates.size}); run scripts/build-sultan-core-wheel.sh",
+                )
+            }
             pip {
-                install(androidWheel.absolutePath)
+                install(wheelCandidates.single().absolutePath)
             }
         }
     }

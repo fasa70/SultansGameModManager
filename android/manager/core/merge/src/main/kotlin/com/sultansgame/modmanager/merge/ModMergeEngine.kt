@@ -72,10 +72,136 @@ class ModMergeEngine(
     ): MergePreflight = mergeRemapped(orderedRoots, outputRoot, modNames)
 
     private fun parse(text: String, relative: String): JsonElement = runCatching {
-        json.parseToJsonElement(repairJson?.invoke(text) ?: cleanJson(text))
+        val repaired = repairJson?.invoke(text) ?: cleanJson(text)
+        rejectDuplicateKeys(repaired, relative)
+        json.parseToJsonElement(repaired)
     }.getOrElse {
         val detail = it.message ?: "格式无效"
         error("JSON 解析失败（$relative）：$detail")
+    }
+
+    /**
+     * kotlinx.serialization's JsonObject is a map and silently folds duplicate
+     * members. Scan the repaired source before parsing so an overlay never
+     * changes a Mod merely by passing through the Kotlin tree model.
+     */
+    private fun rejectDuplicateKeys(text: String, relative: String) {
+        JsonKeyScanner(text).scan()
+    }
+
+    private class JsonKeyScanner(private val source: String) {
+        private var index = 0
+
+        fun scan() {
+            skipWhitespace()
+            parseValue()
+            skipWhitespace()
+            require(index == source.length) { "JSON 末尾存在无效内容" }
+        }
+
+        private fun parseValue() {
+            skipWhitespace()
+            require(index < source.length) { "JSON 值缺失" }
+            when (source[index]) {
+                '{' -> parseObject()
+                '[' -> parseArray()
+                '"' -> parseString()
+                else -> parsePrimitive()
+            }
+        }
+
+        private fun parseObject() {
+            index++
+            skipWhitespace()
+            if (consume('}')) return
+            val keys = mutableSetOf<String>()
+            while (true) {
+                skipWhitespace()
+                require(index < source.length && source[index] == '"') { "JSON 对象键无效" }
+                val key = parseString()
+                require(keys.add(key)) { "JSON 对象包含重复键：$key" }
+                skipWhitespace()
+                require(consume(':')) { "JSON 对象缺少冒号" }
+                parseValue()
+                skipWhitespace()
+                when {
+                    consume('}') -> return
+                    consume(',') -> Unit
+                    else -> error("JSON 对象缺少逗号")
+                }
+            }
+        }
+
+        private fun parseArray() {
+            index++
+            skipWhitespace()
+            if (consume(']')) return
+            while (true) {
+                parseValue()
+                skipWhitespace()
+                when {
+                    consume(']') -> return
+                    consume(',') -> Unit
+                    else -> error("JSON 数组缺少逗号")
+                }
+            }
+        }
+
+        private fun parsePrimitive() {
+            val start = index
+            while (index < source.length && source[index] !in ",]}" && !source[index].isWhitespace()) {
+                index++
+            }
+            require(index > start) { "JSON 原始值无效" }
+        }
+
+        private fun parseString(): String {
+            require(consume('"')) { "JSON 字符串无效" }
+            val value = StringBuilder()
+            while (index < source.length) {
+                when (val current = source[index++]) {
+                    '"' -> return value.toString()
+                    '\\' -> {
+                        require(index < source.length) { "JSON 转义序列不完整" }
+                        when (val escaped = source[index++]) {
+                            '"', '\\', '/' -> value.append(escaped)
+                            'b' -> value.append('\b')
+                            'f' -> value.append('')
+                            'n' -> value.append('\n')
+                            'r' -> value.append('\r')
+                            't' -> value.append('\t')
+                            'u' -> {
+                                require(index + 4 <= source.length) { "JSON Unicode 转义序列不完整" }
+                                val hex = source.substring(index, index + 4)
+                                require(hex.all { it in "0123456789abcdefABCDEF" }) {
+                                    "JSON Unicode 转义序列无效"
+                                }
+                                value.append(hex.toInt(16).toChar())
+                                index += 4
+                            }
+                            else -> error("JSON 转义序列无效")
+                        }
+                    }
+                    else -> {
+                        require(current.code >= 0x20) { "JSON 字符串包含控制字符" }
+                        value.append(current)
+                    }
+                }
+            }
+            error("JSON 字符串未闭合")
+        }
+
+        private fun consume(expected: Char): Boolean {
+            if (index < source.length && source[index] == expected) {
+                index++
+                return true
+            }
+            return false
+        }
+
+        private fun skipWhitespace() {
+            while (index < source.length && source[index].isWhitespace()) index++
+        }
     }
 
     private fun cleanJson(source: String): String {

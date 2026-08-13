@@ -23,20 +23,13 @@ data class CatalogSelection(
     val catalog: BaseIdCatalog,
     val exactVersion: Boolean,
 ) {
-    val warning: String?
-        get() = if (exactVersion) null else
-            "当前游戏版本没有精确 ID 表，正在使用旧版本 ID 表进行合并推测。新增 ID 可能与游戏本体冲突。"
+    val warning: String? = null
 }
 
 class BaseIdCatalogSelector(private val catalogs: List<BaseIdCatalog>) {
-    fun select(profileId: String, versionCode: Long): CatalogSelection? {
-        val compatible = catalogs.filter { it.profileId == profileId }
-        val exact = compatible.firstOrNull { it.versionCode == versionCode }
-        if (exact != null) return CatalogSelection(exact, exactVersion = true)
-        return compatible.filter { it.versionCode <= versionCode }
-            .maxByOrNull { it.versionCode }
-            ?.let { CatalogSelection(it, exactVersion = false) }
-    }
+    fun select(profileId: String, versionCode: Long): CatalogSelection? =
+        catalogs.firstOrNull { it.profileId == profileId && it.versionCode == versionCode }
+            ?.let { CatalogSelection(it, exactVersion = true) }
 }
 
 @Serializable

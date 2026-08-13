@@ -31,10 +31,7 @@ class MergeWorkspace(private val root: File) : AutoCloseable {
 
     fun pythonOutputDirectory(): File {
         require(directory.mkdirs() || directory.isDirectory) { "无法创建合并工作目录" }
-        val output = File(directory, "python-remap")
-        if (output.exists()) output.deleteRecursively()
-        require(output.mkdirs() || output.isDirectory) { "无法创建 Python 工作目录" }
-        return output
+        return File(directory, "python-remap")
     }
 
     override fun close() {

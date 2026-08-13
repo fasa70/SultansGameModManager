@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -22,16 +23,41 @@ from upstream_sultan.core.mod.id_remap import (
 
 
 class DirectoryStore:
-    """DataManager-shaped store with config-prefix and legacy path support."""
+    """DataManager-shaped store with one explicit config layout per Mod."""
 
     def __init__(self, roots: list[Path]):
         self.roots = [root.resolve() for root in roots]
+        self._config_layout: list[bool] = []
+        for root in self.roots:
+            config = root / "config"
+            config_json = _json_files(config) if config.is_dir() else []
+            legacy_json = [
+                path for path in _json_files(root)
+                if "config" not in path.relative_to(root).parts
+            ]
+            # Info.json is metadata, not a config file.  A second JSON tree is
+            # never silently ignored when a Mod contains both layouts.
+            legacy_config = [
+                path for path in legacy_json
+                if path.name.lower() != "info.json"
+            ]
+            if config_json and legacy_config:
+                raise ValueError(
+                    f"Mod 同时包含 config/ 和 legacy 配置布局：{root.name}"
+                )
+            self._config_layout.append(bool(config_json))
 
     def _root(self, mod_id: str) -> Path:
         index = int(mod_id)
         if index < 0 or index >= len(self.roots):
             raise ValueError(f"invalid mod id: {mod_id}")
         return self.roots[index]
+
+    def _uses_config(self, mod_id: str) -> bool:
+        index = int(mod_id)
+        if index < 0 or index >= len(self._config_layout):
+            raise ValueError(f"invalid mod id: {mod_id}")
+        return self._config_layout[index]
 
     @staticmethod
     def _logical(rel_path: str) -> str:
@@ -43,21 +69,11 @@ class DirectoryStore:
     def _physical(self, mod_id: str, logical: str, *, for_write: bool = False) -> Path:
         logical = self._logical(logical)
         root = self._root(mod_id)
-        config = root / "config"
-        config_candidate = config / logical
-        legacy_candidate = root / logical
-        if config.is_dir() or for_write:
-            candidate = config_candidate
-        else:
-            candidate = legacy_candidate
+        candidate = root / "config" / logical if self._uses_config(mod_id) else root / logical
         resolved_parent = candidate.parent.resolve()
         if root not in (resolved_parent, *resolved_parent.parents):
             raise ValueError(f"path escapes mod root: {logical}")
         return candidate
-
-    def _relative_to_root(self, mod_id: str, path: Path) -> str:
-        root = self._root(mod_id)
-        return path.relative_to(root).as_posix()
 
     def has_mod(self, mod_id: str, rel_path: str) -> bool:
         path = self._physical(mod_id, rel_path)
@@ -72,12 +88,14 @@ class DirectoryStore:
 
     def mod_files(self, mod_id: str) -> list[str]:
         root = self._root(mod_id)
-        scan = root / "config" if (root / "config").is_dir() else root
+        scan = root / "config" if self._uses_config(mod_id) else root
         result: list[str] = []
-        for path in scan.rglob("*.json"):
+        for path in _json_files(scan):
             if path.is_symlink() or not path.is_file():
                 raise ValueError(f"unsafe mod file: {path}")
-            result.append(path.relative_to(scan).as_posix())
+            relative = path.relative_to(scan).as_posix()
+            if relative.lower() != "info.json":
+                result.append(relative)
         return sorted(result)
 
     def remove_mod_file(self, mod_id: str, rel_path: str) -> None:
@@ -107,19 +125,54 @@ class DirectoryStore:
         old.rename(new)
 
 
+def _json_files(root: Path) -> list[Path]:
+    if not root.is_dir():
+        return []
+    return [path for path in root.rglob("*.json") if path.is_file()]
+
+
+def _validate_tree(root: Path) -> None:
+    for path in [root, *root.rglob("*")]:
+        if path.is_symlink():
+            raise ValueError(f"Mod 包含不安全符号链接：{path.name}")
+        if not path.is_file() and not path.is_dir():
+            raise ValueError(f"Mod 包含非普通文件：{path.name}")
+
 def _load_catalog(path: Path) -> tuple[dict[str, set[str]], set[str]]:
     data = json.loads(path.read_text(encoding="utf-8"))
+    required = {
+        "profileId", "versionCode", "catalogVersion", "cards", "tagCodes",
+        "tagIds", "tagNames", "rite", "event", "over", "loot",
+        "riteTemplate", "riteTemplateMappings",
+    }
+    missing = sorted(required - data.keys())
+    if missing:
+        raise ValueError(f"catalog 缺少必需字段：{', '.join(missing)}")
+    if not isinstance(data["versionCode"], int) or data["versionCode"] <= 0:
+        raise ValueError("catalog versionCode 无效")
+    if not isinstance(data["catalogVersion"], str) or not data["catalogVersion"]:
+        raise ValueError("catalog catalogVersion 无效")
+    collections = {
+        key: data[key] for key in (
+            "cards", "tagCodes", "tagIds", "tagNames", "rite", "event",
+            "over", "loot", "riteTemplate", "riteTemplateMappings",
+        )
+    }
+    if any(not isinstance(value, list) for value in collections.values()):
+        raise ValueError("catalog 集合字段必须是数组")
+    if not any(collections.values()):
+        raise ValueError("catalog 为空，禁止合并")
     return ({
-        "cards": set(data.get("cards", [])),
-        "tag": set(data.get("tagCodes", [])),
-        "tag_id": {str(value) for value in data.get("tagIds", [])},
-        "rite": set(data.get("rite", [])),
-        "event": set(data.get("event", [])),
-        "over": set(data.get("over", [])),
-        "loot": set(data.get("loot", [])),
-        "rite_template": set(data.get("riteTemplate", [])),
-        "rite_template_mappings": set(data.get("riteTemplateMappings", [])),
-    }, set(data.get("tagNames", [])))
+        "cards": set(data["cards"]),
+        "tag": set(data["tagCodes"]),
+        "tag_id": {str(value) for value in data["tagIds"]},
+        "rite": set(data["rite"]),
+        "event": set(data["event"]),
+        "over": set(data["over"]),
+        "loot": set(data["loot"]),
+        "rite_template": set(data["riteTemplate"]),
+        "rite_template_mappings": set(data["riteTemplateMappings"]),
+    }, set(data["tagNames"]))
 
 
 def _table_json(table: RemapTable) -> dict[str, Any]:
@@ -149,24 +202,49 @@ def _remap_resources(store: DirectoryStore, mod_id: str, table: RemapTable) -> N
             store.rename_resource(mod_id, relative, mapped)
 
 
+def _is_ancestor(parent: Path, child: Path) -> bool:
+    try:
+        child.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
+def _reject_unsafe_remap(
+    conflicts: dict[str, dict[str, list[int]]],
+    tag_conflicts: dict[str, list[tuple[int, str]]],
+) -> None:
+    unsafe = sorted(set(conflicts) | ({"tag_name"} if tag_conflicts else set()))
+    if unsafe:
+        kinds = ", ".join(unsafe)
+        raise ValueError(
+            f"检测到无法安全自动重映射的冲突（{kinds}）；"
+            "为避免改写普通数值或错误引用，已拒绝合并"
+        )
+
+
 def run(input_roots: list[str], catalog_path: str, output_root: str) -> dict[str, Any]:
     if len(input_roots) < 2:
         raise ValueError("at least two Mod inputs are required")
     source_roots = [Path(value).resolve() for value in input_roots]
     if any(not root.is_dir() or root.is_symlink() for root in source_roots):
         raise ValueError("Mod input must be a real directory")
+    for root in source_roots:
+        _validate_tree(root)
     output = Path(output_root).resolve()
-    if output in source_roots or output == Path(output_root).resolve().parent:
-        raise ValueError("invalid worker output root")
+    if any(_is_ancestor(output, root) or _is_ancestor(root, output) for root in source_roots):
+        raise ValueError("invalid worker output root: it overlaps an input directory")
     if output.exists():
-        shutil.rmtree(output)
-    output.mkdir(parents=True, exist_ok=False)
+        raise ValueError("worker output root already exists")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=f".{output.name}-", dir=str(output.parent)))
     roots: list[Path] = []
     previous = DataManager._instance
     try:
         for index, source in enumerate(source_roots):
-            target = output / f"input-{index}"
+            target = staging / f"input-{index}"
             shutil.copytree(source, target, symlinks=False)
+            _validate_tree(target)
             roots.append(target)
         base_ids, base_tag_names = _load_catalog(Path(catalog_path).resolve())
         store = DirectoryStore(roots)
@@ -174,6 +252,7 @@ def run(input_roots: list[str], catalog_path: str, output_root: str) -> dict[str
         configs = [(str(i), source_roots[i].name, roots[i]) for i in range(len(roots))]
         infos = [collect_mod_ids(str(i)) for i in range(len(roots))]
         conflicts, tag_conflicts = detect_conflicts(base_ids, base_tag_names, infos)
+        _reject_unsafe_remap(conflicts, tag_conflicts)
         tag_remap = _allocate_tag_name_remaps(tag_conflicts, base_tag_names, configs)
         remap = allocate_new_ids(conflicts, _collect_all_used_ids(base_ids, infos), len(roots))
         tables: dict[str, dict[str, Any]] = {}
@@ -189,14 +268,18 @@ def run(input_roots: list[str], catalog_path: str, output_root: str) -> dict[str
                 apply_remap_to_store(str(index), table)
                 _remap_resources(store, str(index), table)
                 tables[str(index)] = _table_json(table)
-        return {
+        result = {
+            "status": "ok",
             "conflicts": {kind: dict(values) for kind, values in conflicts.items()},
             "tag_name_conflicts": {name: [[i, code] for i, code in entries] for name, entries in tag_conflicts.items()},
             "remap_tables": tables,
             "roots": [f"input-{i}" for i in range(len(roots))],
         }
+        DataManager._instance = previous
+        os.replace(staging, output)
+        return result
     except Exception:
-        shutil.rmtree(output, ignore_errors=True)
+        shutil.rmtree(staging, ignore_errors=True)
         raise
     finally:
         DataManager._instance = previous
