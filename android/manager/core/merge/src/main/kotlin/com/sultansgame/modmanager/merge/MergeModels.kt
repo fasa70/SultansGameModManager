@@ -22,14 +22,28 @@ data class BaseIdCatalog(
 data class CatalogSelection(
     val catalog: BaseIdCatalog,
     val exactVersion: Boolean,
-) {
-    val warning: String? = null
-}
+    val warning: String? = null,
+)
 
 class BaseIdCatalogSelector(private val catalogs: List<BaseIdCatalog>) {
     fun select(profileId: String, versionCode: Long): CatalogSelection? =
         catalogs.firstOrNull { it.profileId == profileId && it.versionCode == versionCode }
             ?.let { CatalogSelection(it, exactVersion = true) }
+            ?: catalogs.firstOrNull { it.profileId == profileId }
+                ?.let {
+                    CatalogSelection(
+                        it,
+                        exactVersion = false,
+                        warning = "游戏版本与 ID Catalog 不匹配，将使用可用 Catalog 继续尝试。",
+                    )
+                }
+            ?: catalogs.singleOrNull()?.let {
+                CatalogSelection(
+                    it,
+                    exactVersion = false,
+                    warning = "无法确认游戏版本对应的 ID Catalog，将使用可用 Catalog 继续尝试。",
+                )
+            }
 }
 
 @Serializable
@@ -48,10 +62,19 @@ data class MergeIdConflict(
     val modIndexes: List<Int>,
 )
 
+data class MergeWarning(
+    val code: String,
+    val message: String,
+    val entityType: String? = null,
+    val count: Int? = null,
+)
+
 data class MergePreflight(
     val conflicts: List<MergeIdConflict>,
+    val warnings: List<MergeWarning>,
     val remappedEntries: Int,
     val catalogWarning: String?,
+    val bestEffort: Boolean,
 )
 
 data class MergeRequest(

@@ -207,15 +207,35 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
 
     fun openMerge() {
         val catalog = mergeCatalog
+        val runtimeVersion = (mutableState.value.gameProbeResult as? GameProbeResult.Found)
+            ?.snapshot
+            ?.versionCode
+        val catalogSelection = catalog?.let {
+            when (runtimeVersion) {
+                it.versionCode -> com.sultansgame.modmanager.merge.CatalogSelection(
+                    it,
+                    exactVersion = true,
+                )
+                null -> com.sultansgame.modmanager.merge.CatalogSelection(
+                    it,
+                    exactVersion = false,
+                    warning = "无法确认当前游戏版本，将使用可用 ID Catalog 继续尝试。",
+                )
+                else -> com.sultansgame.modmanager.merge.CatalogSelection(
+                    it,
+                    exactVersion = false,
+                    warning = "当前游戏版本与 ID Catalog 不匹配，将使用可用 Catalog 继续尝试。",
+                )
+            }
+        }
         mutableState.value = mutableState.value.copy(
             merge = mutableState.value.merge.copy(
                 isOpen = true,
                 selectedCacheKeys = emptyList(),
-                catalogSelection = catalog?.let {
-                    com.sultansgame.modmanager.merge.CatalogSelection(it, exactVersion = true)
-                },
-                catalogError = catalog?.let { null } ?: "无法读取当前游戏版本的 ID Catalog；为避免错误重映射，合并已禁用。",
+                catalogSelection = catalogSelection,
+                catalogError = catalog?.let { null } ?: "无法读取 ID Catalog；合并已禁用。",
                 conflicts = emptyList(),
+                warnings = emptyList(),
                 preflight = MergePreflightState.Idle,
                 progress = null,
                 resultCacheKey = null,
@@ -274,8 +294,22 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                                     conflict.entityType, conflict.id, conflict.modIndexes,
                                 )
                             },
+                            warnings = result.warnings.map { warning ->
+                                com.sultansgame.modmanager.merge.MergeWarning(
+                                    warning.code,
+                                    warning.message,
+                                    warning.entityType,
+                                    warning.count,
+                                )
+                            } + listOfNotNull(merge.catalogSelection.warning?.let { warning ->
+                                com.sultansgame.modmanager.merge.MergeWarning(
+                                    code = "catalog_mismatch",
+                                    message = warning,
+                                )
+                            }),
                             remappedEntries = result.remappedEntries,
                             catalogWarning = merge.catalogSelection.warning,
+                            bestEffort = result.bestEffort || !merge.catalogSelection.exactVersion,
                         )
                     }
                 }
@@ -283,6 +317,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                     mutableState.value = mutableState.value.copy(
                         merge = mutableState.value.merge.copy(
                             conflicts = preflight.conflicts,
+                            warnings = preflight.warnings,
                             preflight = MergePreflightState.Ready(selection, preflight),
                         ),
                     )

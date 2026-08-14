@@ -21,6 +21,8 @@ class MergeBridgeException(message: String, cause: Throwable? = null) : Exceptio
 
 data class PythonRemapResult(
     val conflicts: List<PythonRemapConflict>,
+    val warnings: List<PythonRemapWarning>,
+    val bestEffort: Boolean,
     val remappedEntries: Int,
     val roots: List<File>,
 )
@@ -29,6 +31,13 @@ data class PythonRemapConflict(
     val entityType: String,
     val id: String,
     val modIndexes: List<Int>,
+)
+
+data class PythonRemapWarning(
+    val code: String,
+    val message: String,
+    val entityType: String? = null,
+    val count: Int? = null,
 )
 
 /** Serializes Chaquopy access because the upstream adapter uses global DataManager state. */
@@ -85,8 +94,8 @@ class ChaquopyMergeBridge(private val context: Context) {
         val status = root["status"]?.jsonPrimitive?.contentOrNull
             ?: throw MergeBridgeException("Python 返回缺少 status")
         if (status != "ok") {
-            val reason = root["error"]?.jsonPrimitive?.contentOrNull ?: "输入无法安全重映射"
-            throw MergeBridgeException("Python 拒绝合并：$reason")
+            val reason = root["error"]?.jsonPrimitive?.contentOrNull ?: "输入无法完成重映射"
+            throw MergeBridgeException("Python 合并失败：$reason")
         }
         val rootNames = root["roots"]?.jsonArray?.map { value ->
             value.jsonPrimitive.contentOrNull ?: throw MergeBridgeException("Python 返回了无效工作目录")
@@ -116,10 +125,25 @@ class ChaquopyMergeBridge(private val context: Context) {
                 PythonRemapConflict(entity, id, modIndexes)
             }
         }
+        val warnings = root["warnings"]?.jsonArray?.map { value ->
+            val warning = value.jsonObject
+            val code = warning["code"]?.jsonPrimitive?.contentOrNull
+                ?: throw MergeBridgeException("Python 返回了无效 warning code")
+            val severity = warning["severity"]?.jsonPrimitive?.contentOrNull
+                ?: throw MergeBridgeException("Python 返回了无效 warning severity")
+            if (severity != "warning") throw MergeBridgeException("Python 返回了不支持的 warning severity")
+            val message = warning["message"]?.jsonPrimitive?.contentOrNull
+                ?: throw MergeBridgeException("Python 返回了无效 warning message")
+            val entityType = warning["entity_type"]?.jsonPrimitive?.contentOrNull
+            val count = warning["count"]?.jsonPrimitive?.int
+            if (count != null && count < 0) throw MergeBridgeException("Python 返回了无效 warning count")
+            PythonRemapWarning(code, message, entityType, count)
+        }.orEmpty()
+        val bestEffort = root["best_effort"]?.jsonPrimitive?.content == "true"
         val remappedEntries = root["remap_tables"]?.jsonObject?.values?.sumOf { table ->
             table.jsonObject.values.sumOf { value -> value.jsonObject.size }
         } ?: 0
-        return PythonRemapResult(conflicts, remappedEntries, roots)
+        return PythonRemapResult(conflicts, warnings, bestEffort, remappedEntries, roots)
     }
 }
 
@@ -130,4 +154,4 @@ private val JsonObject.values: Collection<kotlinx.serialization.json.JsonElement
     get() = entries.map { it.value }
 
 private val JsonPrimitive.int: Int
-    get() = content.toIntOrNull() ?: throw MergeBridgeException("Python 返回了无效 Mod 索引")
+    get() = content.toIntOrNull() ?: throw MergeBridgeException("Python 返回了无效整数")

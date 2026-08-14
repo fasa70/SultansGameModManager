@@ -4,7 +4,7 @@
 
 Sultan's Game Mod Manager adds official Windows mod support to the Android version of *Sultan's Game*. The game uses Unity with IL2CPP scripting backend, and while the Windows build has built-in mod loading (directory scanning, JSON config merging, resource overrides), the Android build has this functionality present in the native library but disabled or inaccessible due to code paths that differ from Windows.
 
-The currently frozen official Android profile targets package `com.gametree.sultan.pd`, version code `10005` (`1.0.5`), and `arm64-v8a`. The release loader combines the official Mod UI reveal, resource URI compatibility, and TMP glyph-field compatibility gates.
+The currently frozen official Android profile targets package `com.gametree.sultan.pd`, version code `10005` (`1.0.5`), and `arm64-v8a`. The release loader combines the official Mod UI reveal, resource URI compatibility, and TMP glyph-field compatibility gates. Unknown profiles fail closed rather than receiving a best-effort patch.
 
 The solution has three layers:
 
@@ -64,7 +64,7 @@ Analysis of the official APK shows it uses v1+v2 (not v3). We match this to avoi
 │                │    │  │ to code_cache │ │
 │                │    │  └──────┬───────┘ │
 │                │    │         │         │
-│                │    │  System.load()    │
+│                │    │    System.load()    │
 │                │    │         │         │
 │                │    │  ┌──────┴───────┐ │
 │                │    │  │libmodloader  │ │
@@ -92,7 +92,11 @@ The Manager provides a local Mod merge workflow based on the MIT-licensed upstre
 
 Users select at least two cached Mods and order them from low priority at the top to high priority at the bottom. The Manager imports the generated result as an ordinary cached Mod; the native loader does not merge Mods at game runtime, and the merge order does not change ordinary or in-game Mod ordering.
 
-Because the game base JSON cannot be extracted, Android uses a no-base-JSON overlay workflow and does not distribute game-original JSON.
+Because the game base JSON cannot be extracted, Android uses a no-base-JSON overlay workflow and does not distribute game-original JSON. Game/catalog version differences and ID conflicts are handled as best-effort warnings, so the user may continue. The Manager displays: **因Android版本限制，无法提取游戏Info，合并结果可能与上游项目有出入**. Invalid input or failed output operations still stop the merge, and partial results are not imported.
+
+This policy only applies to Mod merging. APK patch/install and native loader compatibility checks remain fail-closed.
+
+## Mod Format
 
 Mods follow the official Windows mod structure:
 
@@ -101,23 +105,23 @@ Mod/<mod-name>/
 ├── info.json          # Required: name, description, tags, version
 ├── preview.jpg        # Optional: preview image (≤1MB)
 ├── config/            # Optional: configuration files
-│   ├── cards.json     # Card definitions
-│   ├── upgrade.json   # Upgrade shop items
-│   ├── over.json      # Endings
-│   ├── quest.json     # 1001 Nights
-│   ├── tag.json       # Tag definitions
-│   ├── ui.json        # UI strings
-│   ├── variable.json  # Game variables
-│   ├── credits.json   # Credits data
+│   ├── cards.json      # Card definitions
+│   ├── upgrade.json    # Upgrade shop items
+│   ├── over.json       # Endings
+│   ├── quest.json      # 1001 Nights
+│   ├── tag.json        # Tag definitions
+│   ├── ui.json         # UI strings
+│   ├── variable.json   # Game variables
+│   ├── credits.json    # Credits data
 │   ├── sfx_config.json # Sound effect configuration
-│   ├── event/         # Event definitions (one JSON per event ID)
-│   ├── rite/          # Rite definitions (one JSON per rite ID)
-│   ├── loot/          # Loot tables
-│   ├── after_story/   # After-story character configs
-│   ├── init/          # Initialization configs
-│   ├── dt/            # Dialog tree configs
-│   ├── wizard/        # Wizard configs
-│   └── rite_template/ # Rite template configs
+│   ├── event/          # Event definitions (one JSON per event ID)
+│   ├── rite/           # Rite definitions (one JSON per rite ID)
+│   ├── loot/           # Loot tables
+│   ├── after_story/    # After-story character configs
+│   ├── init/           # Initialization configs
+│   ├── dt/             # Dialog tree configs
+│   ├── wizard/         # Wizard configs
+│   └── rite_template/  # Rite template configs
 ├── bgm/               # Optional: background music replacement (.wav)
 └── image/             # Optional: image replacement (.png)
     ├── cards/
@@ -132,3 +136,5 @@ Mod/<mod-name>/
 - **Single-object merge**: `variable.json`, `credits.json`, `sfx_config.json` use field-level merge
 - **sfx_config**: Only allows overwriting existing keys; the sole exception is `armageddon_music_loop` which can be added
 - **Official panel order**: When multiple Mods define the same key, the game’s official Mod panel determines the effective load order; Manager directory names do not encode or control it
+- **Best-effort ID remapping**: ID and tag conflicts continue through the upstream remapper and are reported as warnings
+- **No-base-JSON limitation**: Android cannot extract the game's original JSON, so omitted fields do not mean deletion from the unavailable game base

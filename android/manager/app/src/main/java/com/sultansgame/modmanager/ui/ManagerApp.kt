@@ -1027,7 +1027,16 @@ private fun MergeModsScreen(state: ManagerUiState, actions: ManagerActions, wide
                 "合并器只处理所选 Mod 的覆盖内容；缺失字段不会删除游戏本体内容。",
             )
         }
+        item {
+            NoticeStrip(
+                "Android 合并限制",
+                "因Android版本限制，无法提取游戏Info，合并结果可能与上游项目有出入",
+            )
+        }
         merge.catalogError?.let { error -> item { NoticeStrip("无法合并", error) } }
+        merge.catalogSelection?.warning?.let { warning ->
+            item { NoticeStrip("Catalog 警告", warning) }
+        }
         item { SectionLabel("选择参与合并的 Mod", "${selected.size} 个") }
         items(state.cachedMods, key = { "merge-source-${it.cacheKey}" }) { mod ->
             Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(14.dp)) {
@@ -1057,8 +1066,20 @@ private fun MergeModsScreen(state: ManagerUiState, actions: ManagerActions, wide
             MergePreflightState.Idle -> Unit
             is MergePreflightState.Running -> item { LoadingPanel("正在检查 Mod 冲突…") }
             is MergePreflightState.Failed -> item { NoticeStrip("预检失败", preflight.reason) }
-            is MergePreflightState.Ready -> if (preflight.result.conflicts.isNotEmpty()) {
-                item { NoticeStrip("检测到 ID 冲突", "${preflight.result.conflicts.size} 个冲突无法安全自动重映射，合并已阻止。") }
+            is MergePreflightState.Ready -> {
+                preflight.result.warnings.forEach { warning ->
+                    item { NoticeStrip("合并警告", warning.message) }
+                }
+                if (preflight.result.conflicts.isNotEmpty() &&
+                    preflight.result.warnings.none { it.code == "id_conflict" }
+                ) {
+                    item {
+                        NoticeStrip(
+                            "检测到 ID 冲突",
+                            "${preflight.result.conflicts.size} 个冲突已继续尝试重映射；部分引用可能无法完全对应。",
+                        )
+                    }
+                }
             }
         }
         merge.progress?.let { progress -> item { LoadingPanel(progress) } }

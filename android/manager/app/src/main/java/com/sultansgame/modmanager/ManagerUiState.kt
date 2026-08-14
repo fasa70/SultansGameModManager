@@ -23,6 +23,7 @@ data class MergeUiState(
     val catalogSelection: CatalogSelection? = null,
     val catalogError: String? = null,
     val conflicts: List<MergeIdConflict> = emptyList(),
+    val warnings: List<com.sultansgame.modmanager.merge.MergeWarning> = emptyList(),
     val preflight: MergePreflightState = MergePreflightState.Idle,
     val isRunning: Boolean = false,
     val progress: String? = null,
