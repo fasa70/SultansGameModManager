@@ -55,7 +55,7 @@ private fun hasDuplicateObjectKeys(text: String): Boolean {
                 }
             }
             '[' -> { index++; skipWhitespace(); if (text.getOrNull(index) == ']') { index++; return }; while (true) { value(); skipWhitespace(); when (text.getOrNull(index++)) { ']' -> return; ',' -> Unit; else -> error("catalog array") } } }
-            '"' -> { index--; string() }
+            '"' -> { string() }
             else -> while (index < text.length && text[index] !in ",]}" && !text[index].isWhitespace()) index++
         }
     }

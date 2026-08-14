@@ -25,6 +25,44 @@ class ModMergeEngineTest {
     private val selection = CatalogSelection(catalog, exactVersion = true)
 
     @Test
+    fun catalogCodecAcceptsNumericArrays() {
+        val decoded = BaseIdCatalogJsonCodec().decode(
+            """
+            {
+              "profileId": "test",
+              "versionCode": 1,
+              "catalogVersion": "test",
+              "cards": ["2000001"],
+              "tagCodes": ["physique"],
+              "tagIds": [3000001],
+              "tagNames": ["体魄"],
+              "over": ["0"],
+              "rite": ["5000001"],
+              "event": ["5300000"],
+              "loot": ["6000004"],
+              "riteTemplate": ["8000001"],
+              "riteTemplateMappings": ["0"]
+            }
+            """.trimIndent(),
+        )
+
+        assertEquals(setOf(3000001), decoded.tagIds)
+        assertEquals(setOf("体魄"), decoded.tagNames)
+    }
+
+    @Test
+    fun catalogCodecDecodesCheckedInCatalog() {
+        val catalogFile = Path.of("../../app/src/main/assets/merge/base-id-catalog-10005.json")
+        val decoded = BaseIdCatalogJsonCodec().decode(catalogFile.readText())
+
+        assertEquals("official-android-2026-07-27", decoded.profileId)
+        assertEquals(10005L, decoded.versionCode)
+        assertEquals(1292, decoded.cards.size)
+        assertEquals(442, decoded.tagCodes.size)
+        assertEquals(427, decoded.tagIds.size)
+        assertEquals(442, decoded.tagNames.size)
+    }
+    @Test
     fun catalogSelectorFallsBackWithWarningOnVersionMismatch() {
         val selected = BaseIdCatalogSelector(listOf(catalog)).select("test", 2)
         assertEquals(catalog, selected?.catalog)
