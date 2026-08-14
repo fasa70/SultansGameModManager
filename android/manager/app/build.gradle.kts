@@ -1,3 +1,5 @@
+import java.util.zip.ZipFile
+
 import org.gradle.api.GradleException
 import org.gradle.api.tasks.Sync
 
@@ -34,6 +36,36 @@ val syncReleaseTemplate = tasks.register<Sync>("syncReleaseTemplate") {
     rename { "modloader-template-10005.apk" }
 }
 
+val wheelDirectory = file("../tools/sultan-core-wheel/dist")
+val wheelCandidates = wheelDirectory.listFiles()
+    ?.filter {
+        it.isFile && it.name.matches(
+            Regex("^sultan_core_android-[^-]+-cp311-cp311-android_24_arm64_v8a\\.whl$"),
+        )
+    }
+    .orEmpty()
+
+fun validateAndroidWheel(wheel: java.io.File) {
+    val expectedNative = "sultan_core/_native.cpython-311.so"
+    ZipFile(wheel).use { archive ->
+        val nativeEntries = archive.entries().asSequence()
+            .filter {
+                !it.isDirectory &&
+                    it.name.startsWith("sultan_core/_native") &&
+                    it.name.endsWith(".so")
+            }
+            .map { it.name }
+            .toList()
+        if (nativeEntries != listOf(expectedNative)) {
+            throw GradleException(
+                "Android wheel contains unexpected native extension: " +
+                    "expected $expectedNative, found " +
+                    nativeEntries.joinToString().ifEmpty { "none" } +
+                    "; run scripts/build-sultan-core-wheel.sh",
+            )
+        }
+    }
+}
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
     dependsOn(syncReleaseTemplate)
 }
@@ -101,10 +133,6 @@ kotlin {
 chaquopy {
     defaultConfig {
         version = "3.11"
-        val wheelDirectory = file("../tools/sultan-core-wheel/dist")
-        val wheelCandidates = wheelDirectory.listFiles()
-            ?.filter { it.isFile && it.name.matches(Regex("^sultan_core_android-[^-]+-cp311-cp311-android_24_arm64_v8a\\.whl$")) }
-            .orEmpty()
         if (appPackagingRequested) {
             if (wheelCandidates.size != 1) {
                 throw GradleException(
@@ -113,6 +141,7 @@ chaquopy {
                         "(found ${wheelCandidates.size}); run scripts/build-sultan-core-wheel.sh",
                 )
             }
+            validateAndroidWheel(wheelCandidates.single())
             pip {
                 install(wheelCandidates.single().absolutePath)
             }

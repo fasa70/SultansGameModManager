@@ -22,6 +22,7 @@ must not be committed; release/build automation should generate it before
 Gradle runs the Chaquopy pip task.
 
 The CMake option `SULTAN_CHAQUOPY_ANDROID=ON` enables the imported Chaquopy
-Python target and Android suffix. A normal host build leaves that option off.
+Python target and the `.cpython-311.so` suffix used by Chaquopy 17's Android
+Python importer. A normal host build leaves that option off.
 The project metadata uses a PEP 440 version (`1.4.4.post1`), because pip rejects
 `1.4.4.android1` even though the Android wheel platform tag remains explicit.

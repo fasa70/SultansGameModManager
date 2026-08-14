@@ -2,6 +2,7 @@ package com.sultansgame.modmanager
 
 import android.app.Application
 import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.sultansgame.modmanager.bridge.LoaderBridge
@@ -122,13 +123,31 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     )
     private val mergeBridge = com.sultansgame.modmanager.platform.merge.ChaquopyMergeBridge(application)
     private val mergeRoot = File(application.cacheDir, "mod-merge")
-    private val mergeCatalog = loadMergeCatalog()
+    private val mergeCatalogLoad = loadMergeCatalog()
+    private val mergeCatalog = mergeCatalogLoad.catalog
 
-    private fun loadMergeCatalog(): com.sultansgame.modmanager.merge.BaseIdCatalog? = runCatching {
+    private data class MergeCatalogLoad(
+        val catalog: com.sultansgame.modmanager.merge.BaseIdCatalog?,
+        val error: String?,
+    )
+
+    private fun loadMergeCatalog(): MergeCatalogLoad = try {
         getApplication<Application>().assets.open("merge/base-id-catalog-10005.json").use { input ->
-            com.sultansgame.modmanager.merge.BaseIdCatalogJsonCodec().decode(input.readBytes().toString(Charsets.UTF_8))
+            MergeCatalogLoad(
+                catalog = com.sultansgame.modmanager.merge.BaseIdCatalogJsonCodec().decode(
+                    input.readBytes().toString(Charsets.UTF_8),
+                ),
+                error = null,
+            )
         }
-    }.getOrNull()
+    } catch (error: Throwable) {
+        val reason = error.message?.takeIf { it.isNotBlank() } ?: error::class.java.simpleName
+        Log.e(LOG_TAG, "无法读取内置 ID Catalog: ${error::class.java.name}: $reason", error)
+        MergeCatalogLoad(
+            catalog = null,
+            error = "无法读取内置 ID Catalog（${error::class.java.simpleName}: $reason）",
+        )
+    }
 
     private val mutableState = MutableStateFlow(ManagerUiState())
     val state: StateFlow<ManagerUiState> = mutableState.asStateFlow()
@@ -233,7 +252,10 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                 isOpen = true,
                 selectedCacheKeys = emptyList(),
                 catalogSelection = catalogSelection,
-                catalogError = catalog?.let { null } ?: "无法读取 ID Catalog；合并已禁用。",
+                catalogError = catalog?.let { null } ?: listOfNotNull(
+                    mergeCatalogLoad.error,
+                    "合并已禁用。",
+                ).joinToString("；"),
                 conflicts = emptyList(),
                 warnings = emptyList(),
                 preflight = MergePreflightState.Idle,
@@ -1492,6 +1514,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             DownloadStage.Downloading,
             DownloadStage.Verifying,
         )
+        private const val LOG_TAG = "ManagerViewModel"
     }
 
     private fun handleAuthResult(result: com.sultansgame.modmanager.platform.auth.SteamAuthResult) {

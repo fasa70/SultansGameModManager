@@ -43,6 +43,14 @@ def main() -> None:
         raise SystemExit(f"staged package is empty: {package_root}")
     if any(path.is_symlink() for path in files):
         raise SystemExit("staged package contains a symlink")
+    expected_native = package_root / "_native.cpython-311.so"
+    native_files = sorted(package_root.glob("_native*.so"))
+    if native_files != [expected_native]:
+        found = ", ".join(path.name for path in native_files) or "none"
+        raise SystemExit(
+            "staged package contains an unexpected Android native extension "
+            f"(expected {expected_native.name}, found {found})"
+        )
 
     wheel_name = (
         f"{distribution}-{version}-{args.python_tag}-{args.abi_tag}-"
