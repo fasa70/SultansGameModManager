@@ -10,6 +10,7 @@
 *.so
 *.dll
 *.exe
+**/.cxx/
 native/build-android/
 native/build-android-release/
 native/build-host/
