@@ -118,6 +118,7 @@ class DirectoryStore:
                 result.append(relative)
         return sorted(result)
 
+    def remove_mod_file(self, mod_id: str, rel_path: str) -> None:
         path = self._physical(mod_id, rel_path)
         if path.exists() and path.is_symlink():
             raise ValueError(f"unsafe mod file: {rel_path}")
@@ -147,7 +148,10 @@ class DirectoryStore:
 def _json_files(root: Path) -> list[Path]:
     if not root.is_dir():
         return []
-    return [path for path in root.rglob("*.json") if path.is_file()]
+    return [
+        path for path in root.rglob("*")
+        if path.is_file() and path.suffix.lower() == ".json"
+    ]
 
 
 def _validate_tree(root: Path) -> None:

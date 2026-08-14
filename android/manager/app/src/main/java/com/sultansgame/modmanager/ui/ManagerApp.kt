@@ -1040,7 +1040,7 @@ private fun MergeModsScreen(state: ManagerUiState, actions: ManagerActions, wide
         item { SectionLabel("选择参与合并的 Mod", "${selected.size} 个") }
         items(state.cachedMods, key = { "merge-source-${it.cacheKey}" }) { mod ->
             Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(14.dp)) {
-                ConfirmationCheckbox(mod.displayName, mod.cacheKey in selected) { actions.toggleMergeMod(mod.cacheKey) }
+                ConfirmationCheckbox(mod.displayName, mod.cacheKey in selected, enabled = !merge.isRunning) { actions.toggleMergeMod(mod.cacheKey) }
             }
         }
         if (merge.selectedCacheKeys.isNotEmpty()) {
@@ -1055,8 +1055,8 @@ private fun MergeModsScreen(state: ManagerUiState, actions: ManagerActions, wide
                     Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(14.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text("${index + 1}. ${it.displayName}", Modifier.weight(1f))
-                            SmallAction("上移", index > 0) { actions.moveMergeMod(index, index - 1) }
-                            SmallAction("下移", index < merge.selectedCacheKeys.lastIndex) { actions.moveMergeMod(index, index + 1) }
+                            SmallAction("上移", index > 0 && !merge.isRunning) { actions.moveMergeMod(index, index - 1) }
+                            SmallAction("下移", index < merge.selectedCacheKeys.lastIndex && !merge.isRunning) { actions.moveMergeMod(index, index + 1) }
                         }
                     }
                 }
@@ -1083,9 +1083,15 @@ private fun MergeModsScreen(state: ManagerUiState, actions: ManagerActions, wide
             }
         }
         merge.progress?.let { progress -> item { LoadingPanel(progress) } }
+        item {
+            LabeledTextField(
+                merge.resultDisplayName,
+                actions.setMergeDisplayName,
+                "Manager 中的显示名称",
+            )
+        }
         item { PrimaryButton(if (merge.isRunning) "正在合并…" else "开始合并", preflightReady && !merge.isRunning, actions.startMerge) }
         if (merge.resultCacheKey != null) {
-            item { LabeledTextField(merge.resultDisplayName, actions.setMergeDisplayName, "Manager 中的显示名称") }
             item { NoticeStrip("合并完成", "结果已加入 Manager 缓存。") }
         }
     }
