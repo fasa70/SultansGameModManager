@@ -41,7 +41,7 @@ def main() -> None:
     files = sorted(path for path in package_root.rglob("*") if path.is_file())
     if not package_root.is_dir() or not files:
         raise SystemExit(f"staged package is empty: {package_root}")
-    expected_native = package_root / "_native.cpython-311-aarch64-linux-android.so"
+    expected_native = package_root / "_native.cpython-311.so"
     native_files = sorted(package_root.glob("_native*.so"))
     if native_files != [expected_native]:
         found = ", ".join(path.name for path in native_files) or "none"

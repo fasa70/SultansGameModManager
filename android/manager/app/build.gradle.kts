@@ -46,22 +46,26 @@ val wheelCandidates = wheelDirectory.listFiles()
     .orEmpty()
 
 fun validateAndroidWheel(wheel: java.io.File) {
-    val expectedNative = "sultan_core/_native.cpython-311-aarch64-linux-android.so"
+    val expectedNative = "sultan_core/_native.cpython-311.so"
     ZipFile(wheel).use { archive ->
         val nativeEntries = archive.entries().asSequence()
-            .filter { !it.isDirectory && it.name.startsWith("sultan_core/_native") && it.name.endsWith(".so") }
+            .filter {
+                !it.isDirectory &&
+                    it.name.startsWith("sultan_core/_native") &&
+                    it.name.endsWith(".so")
+            }
             .map { it.name }
             .toList()
         if (nativeEntries != listOf(expectedNative)) {
             throw GradleException(
                 "Android wheel contains unexpected native extension: " +
-                    "expected $expectedNative, found ${nativeEntries.joinToString().ifEmpty { "none" }}; " +
-                    "run scripts/build-sultan-core-wheel.sh",
+                    "expected $expectedNative, found " +
+                    nativeEntries.joinToString().ifEmpty { "none" } +
+                    "; run scripts/build-sultan-core-wheel.sh",
             )
         }
     }
 }
-
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
     dependsOn(syncReleaseTemplate)
 }
