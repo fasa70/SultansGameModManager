@@ -51,7 +51,11 @@ NB_MODULE(_native, m) {
                  nb::arg("doc"), nb::arg("mapping"));
     json_ops.def("classify_json", &classify_json, nb::arg("doc"));
 
-    m.def("overlay_json", &overlay_json_documents,
-          nb::arg("documents"),
-          "Merge ordered Mod JSON texts without a game base.");
+    m.def(
+        "overlay_json",
+        [](const std::vector<std::string>& documents) {
+            return overlay_json_documents(documents).to_string();
+        },
+        nb::arg("documents"),
+        "Merge ordered Mod JSON texts without a game base.");
 }

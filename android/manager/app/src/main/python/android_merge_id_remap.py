@@ -26,6 +26,19 @@ from upstream_sultan.core.mod.id_remap import (
 )
 
 
+def _overlay_text(texts: list[str]) -> str:
+    """Return native overlay output as text across wheel API revisions."""
+    result = overlay_json(texts)
+    if isinstance(result, str):
+        return result
+    serializer = getattr(result, "to_string", None)
+    if callable(serializer):
+        serialized = serializer()
+        if isinstance(serialized, str):
+            return serialized
+    raise TypeError(f"native overlay returned unexpected type: {type(result).__name__}")
+
+
 class DirectoryStore:
     """DataManager-shaped store with one explicit config layout per Mod."""
 
@@ -307,14 +320,14 @@ def _merge_output(
             valid_texts: list[str] = []
             for text in texts:
                 try:
-                    overlay_json([text])
+                    _overlay_text([text])
                     valid_texts.append(text)
                 except Exception as error:
                     store.record_invalid_json("overlay", relative, error)
             if not valid_texts:
                 continue
             try:
-                merged = overlay_json(
+                merged = _overlay_text(
                     [valid_texts[-1]]
                     if relative.rsplit("/", 1)[-1].lower() == "sfx_config.json"
                     else valid_texts,
