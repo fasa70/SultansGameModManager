@@ -10,7 +10,8 @@ class MergeWorkspace(private val root: File) : AutoCloseable {
 
     fun copyInputs(orderedRoots: List<File>): List<File> {
         require(orderedRoots.size >= 2) { "至少选择两个 Mod" }
-        require(directory.mkdirs() || directory.isDirectory) { "无法创建合并工作目录" }
+        ensureDirectory(root, "合并根目录")
+        ensureDirectory(directory, "合并工作目录")
         return orderedRoots.mapIndexed { index, source ->
             require(source.isDirectory && !Files.isSymbolicLink(source.toPath())) {
                 "Mod 缓存目录不可读：${source.name}"
@@ -22,15 +23,15 @@ class MergeWorkspace(private val root: File) : AutoCloseable {
     }
 
     fun outputDirectory(): File {
-        require(directory.mkdirs() || directory.isDirectory) { "无法创建合并工作目录" }
+        ensureDirectory(directory, "合并工作目录")
         val output = File(directory, "output")
         if (output.exists()) output.deleteRecursively()
-        require(output.mkdirs() || output.isDirectory) { "无法创建合并输出目录" }
+        ensureDirectory(output, "合并输出目录")
         return output
     }
 
     fun pythonOutputDirectory(): File {
-        require(directory.mkdirs() || directory.isDirectory) { "无法创建合并工作目录" }
+        ensureDirectory(directory, "合并工作目录")
         return File(directory, "python-remap")
     }
 
@@ -39,16 +40,36 @@ class MergeWorkspace(private val root: File) : AutoCloseable {
     }
 
     private fun copyTreeWithoutLinks(source: File, destination: File) {
-        require(destination.mkdirs() || destination.isDirectory) { "无法创建合并输入目录" }
+        ensureDirectory(destination, "合并输入目录")
         source.listFiles()?.sortedBy(File::getName)?.forEach { child ->
             require(!Files.isSymbolicLink(child.toPath())) { "Mod 包含不安全符号链接：${child.name}" }
             val target = File(destination, child.name)
             if (child.isDirectory) copyTreeWithoutLinks(child, target)
             else if (child.isFile) {
-                require(target.parentFile.mkdirs() || target.parentFile.isDirectory) { "无法创建临时目录" }
+                ensureDirectory(target.parentFile, "合并临时目录")
                 Files.copy(child.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
             } else error("Mod 包含非普通文件：${child.name}")
         } ?: error("无法读取 Mod 目录：${source.absolutePath}")
+    }
+
+    private fun ensureDirectory(path: File, label: String) {
+        val nioPath = path.toPath()
+        try {
+            require(!Files.isSymbolicLink(nioPath)) {
+                "${label}不可安全访问（符号链接）：${path.absolutePath}"
+            }
+            Files.createDirectories(nioPath)
+            require(Files.isDirectory(nioPath)) {
+                "${label}不是目录：${path.absolutePath}"
+            }
+        } catch (error: Exception) {
+            if (error is IllegalArgumentException) throw error
+            throw IllegalStateException(
+                "${label}不可用：${path.absolutePath}（${error::class.java.simpleName}: " +
+                    "${error.message ?: "未知文件系统错误"}）",
+                error,
+            )
+        }
     }
 }
 

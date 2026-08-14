@@ -1,6 +1,7 @@
 """Catalog-backed Android adapter for the upstream ID remapper."""
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -37,6 +38,43 @@ def _overlay_text(texts: list[str]) -> str:
         if isinstance(serialized, str):
             return serialized
     raise TypeError(f"native overlay returned unexpected type: {type(result).__name__}")
+
+
+def _raise_path_error(operation: str, path: Path, error: OSError) -> None:
+    detail = f"{operation} 失败：{path}"
+    if error.errno is not None:
+        detail += f"（errno={error.errno}: {error.strerror or '未知文件系统错误'}）"
+    raise OSError(error.errno, detail, str(path)) from error
+
+
+def _copy_file_contents(source: Path, target: Path) -> None:
+    """Copy bytes without chmod/utime metadata operations unsupported on Android."""
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with source.open("rb") as source_stream, target.open("wb") as target_stream:
+            shutil.copyfileobj(source_stream, target_stream)
+    except OSError as error:
+        _raise_path_error("复制文件", target, error)
+
+
+def _copy_tree_without_metadata(source: Path, target: Path) -> None:
+    if source.is_symlink() or not source.is_dir():
+        raise ValueError(f"Mod input must be a real directory: {source}")
+    try:
+        target.mkdir(parents=True, exist_ok=False)
+        children = sorted(source.iterdir(), key=lambda path: path.name)
+    except OSError as error:
+        _raise_path_error("创建或读取合并临时目录", target, error)
+    for child in children:
+        if child.is_symlink():
+            raise ValueError(f"Mod 包含不安全符号链接：{child.name}")
+        destination = target / child.name
+        if child.is_dir():
+            _copy_tree_without_metadata(child, destination)
+        elif child.is_file():
+            _copy_file_contents(child, destination)
+        else:
+            raise ValueError(f"Mod 包含非普通文件：{child.name}")
 
 
 class DirectoryStore:
@@ -309,13 +347,15 @@ def _merge_output(
     final = output.parent / f".{output.name}-final-{os.getpid()}"
     if final.exists():
         shutil.rmtree(final)
-    final.mkdir(parents=True, exist_ok=False)
+    try:
+        final.mkdir(parents=True, exist_ok=False)
+    except OSError as error:
+        raise _path_error("创建合并输出临时目录", final, error) from error
     merged_count = 0
     try:
         for relative, source in resources.items():
             target = final / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, target)
+            _copy_file_contents(source, target)
         for relative, texts in sorted(json_inputs.items()):
             valid_texts: list[str] = []
             for text in texts:
@@ -373,14 +413,17 @@ def run(input_roots: list[str], catalog_path: str, output_root: str) -> dict[str
         raise ValueError("invalid worker output root: it overlaps an input directory")
     if output.exists():
         raise ValueError("worker output root already exists")
-    output.parent.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=f".{output.name}-", dir=str(output.parent)))
+    try:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(prefix=f".{output.name}-", dir=str(output.parent)))
+    except OSError as error:
+        raise _path_error("创建合并工作临时目录", output.parent, error) from error
     roots: list[Path] = []
     previous = DataManager._instance
     try:
         for index, source in enumerate(source_roots):
             target = staging / f"input-{index}"
-            shutil.copytree(source, target, symlinks=False)
+            _copy_tree_without_metadata(source, target)
             _validate_tree(target)
             roots.append(target)
         base_ids, base_tag_names = _load_catalog(Path(catalog_path).resolve())
