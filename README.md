@@ -58,9 +58,15 @@ Windows 版《苏丹的游戏》提供官方 Mod 支持，而 Android 版没有�
 
 删除 Manager 中的 Mod 会同时安排删除游戏目录中的对应 Manager 管理项；清理缓存也遵循此规则。直接放入游戏 `Mod` 目录的 Mod 会在 Manager 中显示为“游戏中的其他 Mod”，但不会被 Manager 修改或删除。
 
-### Mod ZIP 基本要求
+#### 4. 合并 Mod
 
-- 从文件选择器导入 `.zip` 文件。
+在管理 Mod 页面进入“合并 Mod”，选择至少两个已导入并缓存的 Mod。列表顶部为低优先级，底部为高优先级；合并时后者覆盖前者。合并顺序只影响生成的 Mod，不改变普通 Mod 列表顺序或游戏内官方 Mod 顺序。
+
+合并完成后，生成的 Mod 会作为普通缓存项重新导入同步系统，可以同步、加载、删除或再次参与合并。Manager 会单独保存其显示名称，并询问是否停止原始 Mod 的同步。
+
+合并功能基于 MIT 许可的上游项目 [`sutan-game`](https://github.com/fentender/sutan-game)。由于无法提取游戏本体 JSON，Android 使用无本体 JSON overlay；合并在 Manager 端完成，不由 native loader 在游戏运行时执行。
+
+### Mod ZIP 基本要求
 - Mod 根目录需要包含有效的 `info.json`；一个 ZIP 可以包含多个顶层 Mod 目录。
 - 导入前会检查目录结构和路径安全性；不安全、重复或不符合 Mod 格式的内容会被拒绝。
 - Mod 格式、配置目录和合并规则详见 [架构文档](docs/architecture.md#mod-format)。
@@ -157,6 +163,7 @@ cmake --build native/build-android
 - [Dobby](https://github.com/jmpews/Dobby) — ARM64 动态二进制插桩框架
 - [apksig](https://android.googlesource.com/platform/tools/apksig) — Android APK 签名库
 - [Workshop-Native](https://github.com/cjtestuse/Workshop-Native) — 创意工坊适配来源
+- [sutan-game](https://github.com/fentender/sutan-game) — Mod 合并器
 
 ---
 
@@ -209,6 +216,13 @@ Some Workshop downloads require Steam sign-in. Steam Guard is handled in the app
 Newly imported Mods are synchronized to the game's `Mod` directory by default. The Manager's **Sync to game** setting controls only whether files are present in that directory; the in-game official Mod panel refreshes the list and controls hot loading, enabling, disabling, and ordering.
 
 Removing a Mod from the Manager also schedules removal of the corresponding Manager-owned game directory. Clearing the cache follows the same rule. Mods placed directly in the game's `Mod` directory appear as **Other Mods in game** in the Manager, but are not modified or deleted.
+
+#### 4. Merge Mods
+
+Open **Merge Mods** from the Mod-management page and select at least two imported, cached Mods. The top of the list is lower priority and the bottom is higher priority; later Mods override earlier ones. The generated Mod returns to the ordinary cache and synchronization system, and does not change ordinary or in-game Mod ordering.
+
+The local workflow is based on the MIT-licensed upstream [`sutan-game`](https://github.com/fentender/sutan-game) project. Merging runs in the Manager rather than in the native loader at game runtime. Because the game's original JSON cannot be extracted, Android uses a no-base-JSON overlay and does not distribute game-original JSON.
+
 
 ### Mod ZIP requirements
 
@@ -322,3 +336,4 @@ This application is an independent community tool and is not affiliated with or 
 - [Dobby](https://github.com/jmpews/Dobby) — ARM64 dynamic binary instrumentation framework
 - [apksig](https://android.googlesource.com/platform/tools/apksig) — Android APK signing library
 - [Workshop-Native](https://github.com/cjtestuse/Workshop-Native) — Workshop adaptation source
+- [sutan-game](https://github.com/fentender/sutan-game) — Mod merger

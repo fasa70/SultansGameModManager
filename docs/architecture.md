@@ -4,7 +4,7 @@
 
 Sultan's Game Mod Manager adds official Windows mod support to the Android version of *Sultan's Game*. The game uses Unity with IL2CPP scripting backend, and while the Windows build has built-in mod loading (directory scanning, JSON config merging, resource overrides), the Android build has this functionality present in the native library but disabled or inaccessible due to code paths that differ from Windows.
 
-The currently frozen official Android profile targets package `com.gametree.sultan.pd`, version code `10005` (`1.0.5`), and `arm64-v8a`. The release loader combines the official Mod UI reveal, resource URI compatibility, and TMP glyph-field compatibility gates. Unknown profiles fail closed rather than receiving a best-effort patch.
+The currently frozen official Android profile targets package `com.gametree.sultan.pd`, version code `10005` (`1.0.5`), and `arm64-v8a`. The release loader combines the official Mod UI reveal, resource URI compatibility, and TMP glyph-field compatibility gates.
 
 The solution has three layers:
 
@@ -86,7 +86,13 @@ When the game process starts and `libmodloader.so` is loaded:
 
 The complete release combination and its device evidence are recorded in [official Android compatibility validation](official-android-compatibility-validation.md). The Manager's unsigned frozen template is the artifact used by future patch operations; the Manager does not compile a new native library at patch time.
 
-## Mod Format
+## Manager-side Mod Merge
+
+The Manager provides a local Mod merge workflow based on the MIT-licensed upstream `sutan-game-master` project. The reused source, pinned revision, and license terms are documented in [`android/manager/core/merge/SOURCE_NOTICE.md`](../android/manager/core/merge/SOURCE_NOTICE.md).
+
+Users select at least two cached Mods and order them from low priority at the top to high priority at the bottom. The Manager imports the generated result as an ordinary cached Mod; the native loader does not merge Mods at game runtime, and the merge order does not change ordinary or in-game Mod ordering.
+
+Because the game base JSON cannot be extracted, Android uses a no-base-JSON overlay workflow and does not distribute game-original JSON.
 
 Mods follow the official Windows mod structure:
 
