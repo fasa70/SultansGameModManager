@@ -25,6 +25,21 @@ class ModMergeEngineTest {
     private val selection = CatalogSelection(catalog, exactVersion = true)
 
     @Test
+    fun catalogSelectorFallsBackWithWarningOnVersionMismatch() {
+        val selected = BaseIdCatalogSelector(listOf(catalog)).select("test", 2)
+        assertEquals(catalog, selected?.catalog)
+        assertFalse(selected?.exactVersion ?: true)
+        assertTrue(selected?.warning?.contains("不匹配") == true)
+    }
+
+    @Test
+    fun catalogSelectorUsesSoleCatalogWhenProfileIsUnknown() {
+        val selected = BaseIdCatalogSelector(listOf(catalog)).select("other", 2)
+        assertEquals(catalog, selected?.catalog)
+        assertFalse(selected?.exactVersion ?: true)
+    }
+
+    @Test
     fun overlayKeepsMissingFieldsAndReplacesNormalArrays() = withTempDirectory { root ->
         val low = root.resolve("low").createDirectories()
         val high = root.resolve("high").createDirectories()

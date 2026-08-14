@@ -26,6 +26,7 @@ Windows 版《苏丹的游戏》提供官方 Mod 支持，而 Android 版没有�
 - 导入 ZIP Mod；一个 ZIP 可包含一个或多个 Mod。
 - 浏览 Steam 创意工坊公开内容、查看详情并管理下载队列；需要时可登录 Steam 并完成 Steam Guard 验证。
 - 将校验通过的 Mod 同步到已修补游戏的 Mod 目录；加载、热开关和排序由游戏内官方 Mod 面板负责。
+- 管理器提供基于 MIT 许可上游 Mod 合并器的入口。由于 Android 版本限制无法提取游戏 Info，合并结果可能与上游项目有出入。
 - 当前只会继续处理通过应用内兼容性检测的游戏版本；不匹配的安装包会被拒绝，而不会尝试修补。
 - 本项目不提供或分发游戏 APK、游戏资源或 Mod 内容，也不绕过 DRM、付费、账号、地区或平台限制。
 
@@ -178,6 +179,7 @@ The Windows version of *Sultan's Game* has official Mod support, while the Andro
 - Import ZIP Mods; one ZIP may contain one or more Mods.
 - Browse public Steam Workshop content, view details, and manage download tasks. Steam sign-in and Steam Guard are available when required.
 - Synchronize validated Mods to the patched game's Mod directory; the in-game official Mod panel controls loading, hot toggles, and order.
+- The Manager provides a simple entry point for the MIT-licensed upstream Mod merger. Android cannot extract the game's original JSON, so the result may differ from the upstream project。
 - The app proceeds only with game versions that pass its in-app compatibility check. Mismatched packages are rejected rather than patched.
 - This project does not provide or distribute game APKs, game assets, or Mod content, and does not bypass DRM, payment, account, regional, or platform restrictions.
 

@@ -97,10 +97,18 @@ PYTHONPATH=scripts python -X utf8 scripts/verify-loader-template.py \
   --stage android/manager/app/build/release-stage/publish
 
 cd android/manager
+bash ./gradlew --no-configuration-cache :core:merge:test
+python -m py_compile app/src/main/python/android_merge_id_remap.py \
+  app/src/main/python/android_merge_worker.py
 bash ./gradlew :core:model:test :core:storage:test :core:apk:test \
   :core:workshop:test :core:steam-protocol:test \
   :core:workshop-download:test :app:testDebugUnitTest
 ```
+
+The Mod merge reuses the upstream merger and reports catalog/version
+mismatches and ID conflicts as best-effort warnings. Operational errors still
+fail the merge and do not import partial output. APK patch/install checks are
+independent and remain fail-closed.
 
 Build native host tests with `-DMODLOADER_BUILD_HOST_TESTS=ON
 -DMODLOADER_BACKEND_MODE=1`; run `ctest --test-dir native/build-host

@@ -86,6 +86,14 @@ When the game process starts and `libmodloader.so` is loaded:
 
 The complete release combination and its device evidence are recorded in [official Android compatibility validation](official-android-compatibility-validation.md). The Manager's unsigned frozen template is the artifact used by future patch operations; the Manager does not compile a new native library at patch time.
 
+## Manager-side Mod Merge
+
+The Manager reuses the MIT-licensed upstream Mod merger and runs it locally through the Chaquopy bridge. Android uses a no-base-JSON overlay because the game's original JSON cannot be extracted; the native loader does not merge Mods at runtime.
+
+Game/catalog version differences and ID conflicts are handled as best-effort warnings, so the user may continue. The Manager displays: **因Android版本限制，无法提取游戏Info，合并结果可能与上游项目有出入**. Invalid input or failed output operations still stop the merge, and partial results are not imported.
+
+This policy only applies to Mod merging. APK patch/install and native loader compatibility checks remain fail-closed.
+
 ## Mod Format
 
 Mods follow the official Windows mod structure:
@@ -126,3 +134,5 @@ Mod/<mod-name>/
 - **Single-object merge**: `variable.json`, `credits.json`, `sfx_config.json` use field-level merge
 - **sfx_config**: Only allows overwriting existing keys; the sole exception is `armageddon_music_loop` which can be added
 - **Official panel order**: When multiple Mods define the same key, the game’s official Mod panel determines the effective load order; Manager directory names do not encode or control it
+- **Best-effort ID remapping**: ID and tag conflicts continue through the upstream remapper and are reported as warnings
+- **No-base-JSON limitation**: Android cannot extract the game's original JSON, so omitted fields do not mean deletion from the unavailable game base

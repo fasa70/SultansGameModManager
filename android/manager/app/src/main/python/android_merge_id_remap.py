@@ -138,6 +138,7 @@ def _validate_tree(root: Path) -> None:
         if not path.is_file() and not path.is_dir():
             raise ValueError(f"Mod 包含非普通文件：{path.name}")
 
+
 def _load_catalog(path: Path) -> tuple[dict[str, set[str]], set[str]]:
     data = json.loads(path.read_text(encoding="utf-8"))
     required = {
@@ -210,17 +211,31 @@ def _is_ancestor(parent: Path, child: Path) -> bool:
         return False
 
 
-def _reject_unsafe_remap(
+def _warnings(
     conflicts: dict[str, dict[str, list[int]]],
     tag_conflicts: dict[str, list[tuple[int, str]]],
-) -> None:
-    unsafe = sorted(set(conflicts) | ({"tag_name"} if tag_conflicts else set()))
-    if unsafe:
-        kinds = ", ".join(unsafe)
-        raise ValueError(
-            f"检测到无法安全自动重映射的冲突（{kinds}）；"
-            "为避免改写普通数值或错误引用，已拒绝合并"
-        )
+) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    for entity_type, values in sorted(conflicts.items()):
+        warnings.append({
+            "code": "id_conflict",
+            "severity": "warning",
+            "message": (
+                f"检测到 {entity_type} ID 冲突，已继续尝试重映射；"
+                "部分引用可能无法完全对应。"
+            ),
+            "entity_type": entity_type,
+            "count": len(values),
+        })
+    if tag_conflicts:
+        warnings.append({
+            "code": "tag_name_conflict",
+            "severity": "warning",
+            "message": "检测到 tag name 冲突，已继续尝试重映射；部分引用可能无法完全对应。",
+            "entity_type": "tag_name",
+            "count": len(tag_conflicts),
+        })
+    return warnings
 
 
 def run(input_roots: list[str], catalog_path: str, output_root: str) -> dict[str, Any]:
@@ -252,7 +267,6 @@ def run(input_roots: list[str], catalog_path: str, output_root: str) -> dict[str
         configs = [(str(i), source_roots[i].name, roots[i]) for i in range(len(roots))]
         infos = [collect_mod_ids(str(i)) for i in range(len(roots))]
         conflicts, tag_conflicts = detect_conflicts(base_ids, base_tag_names, infos)
-        _reject_unsafe_remap(conflicts, tag_conflicts)
         tag_remap = _allocate_tag_name_remaps(tag_conflicts, base_tag_names, configs)
         remap = allocate_new_ids(conflicts, _collect_all_used_ids(base_ids, infos), len(roots))
         tables: dict[str, dict[str, Any]] = {}
@@ -270,6 +284,8 @@ def run(input_roots: list[str], catalog_path: str, output_root: str) -> dict[str
                 tables[str(index)] = _table_json(table)
         result = {
             "status": "ok",
+            "best_effort": bool(conflicts or tag_conflicts),
+            "warnings": _warnings(conflicts, tag_conflicts),
             "conflicts": {kind: dict(values) for kind, values in conflicts.items()},
             "tag_name_conflicts": {name: [[i, code] for i, code in entries] for name, entries in tag_conflicts.items()},
             "remap_tables": tables,

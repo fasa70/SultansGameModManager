@@ -59,7 +59,13 @@ class ModMergeEngine(
             source.copyTo(destination, overwrite = true)
         }
         writeInfo(outputRoot, modNames)
-        return MergePreflight(emptyList(), 0, null)
+        return MergePreflight(
+            conflicts = emptyList(),
+            warnings = emptyList(),
+            remappedEntries = 0,
+            catalogWarning = null,
+            bestEffort = false,
+        )
     }
 
     /** Compatibility entry point for callers which already performed remapping. */
