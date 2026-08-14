@@ -5,6 +5,7 @@
 
 #include "json_doc.h"
 #include "json_ops.h"
+#include "overlay.h"
 
 namespace nb = nanobind;
 using namespace sultan;
@@ -49,4 +50,8 @@ NB_MODULE(_native, m) {
     json_ops.def("remap_all_str_ids", &remap_all_str_ids,
                  nb::arg("doc"), nb::arg("mapping"));
     json_ops.def("classify_json", &classify_json, nb::arg("doc"));
+
+    m.def("overlay_json", &overlay_json_documents,
+          nb::arg("documents"),
+          "Merge ordered Mod JSON texts without a game base.");
 }

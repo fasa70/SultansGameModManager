@@ -32,9 +32,21 @@ add_library(sultan_core_json STATIC
     mut_doc.cpp
     mut_val.cpp
     json_ops.cpp
+    overlay.cpp
+    state/json_state.cpp
+    state/state_formatter.cpp
+    state/state_node.cpp
+    delta/apply_delta.cpp
+    delta/array_match.cpp
+    delta/compute_delta.cpp
+    delta/delta_node.cpp
+    delta/delta_rules.cpp
+    delta/similarity.cpp
 )
 target_include_directories(sultan_core_json PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/state
+    ${CMAKE_CURRENT_SOURCE_DIR}/delta
     ${CMAKE_CURRENT_SOURCE_DIR}/rapidfuzz
 )
 target_link_libraries(sultan_core_json PUBLIC yyjson)

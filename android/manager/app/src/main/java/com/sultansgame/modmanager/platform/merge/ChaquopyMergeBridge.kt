@@ -25,6 +25,7 @@ data class PythonRemapResult(
     val bestEffort: Boolean,
     val remappedEntries: Int,
     val roots: List<File>,
+    val mergedOutput: File,
 )
 
 data class PythonRemapConflict(
@@ -109,12 +110,19 @@ class ChaquopyMergeBridge(private val context: Context) {
         val outputCanonical = outputRoot.canonicalFile
         val roots = rootNames.map { name ->
             val candidate = File(outputRoot, name).canonicalFile
-            if (candidate.parentFile != outputCanonical ||
-                !candidate.isDirectory || candidate.isSymbolicLink
-            ) {
+            if (candidate.parentFile != outputCanonical || !candidate.isDirectory || candidate.isSymbolicLink) {
                 throw MergeBridgeException("Python 返回的工作目录越界：$name")
             }
             candidate
+        }
+        val mergedName = root["merged_output"]?.jsonPrimitive?.contentOrNull
+            ?: throw MergeBridgeException("Python 返回缺少 merged_output")
+        if (mergedName.isBlank() || mergedName.contains('/') || mergedName.contains('\\') || mergedName == "." || mergedName == "..") {
+            throw MergeBridgeException("Python 返回了无效合并输出目录")
+        }
+        val mergedOutput = File(outputRoot, mergedName).canonicalFile
+        if (mergedOutput.parentFile != outputCanonical || !mergedOutput.isDirectory || mergedOutput.isSymbolicLink) {
+            throw MergeBridgeException("Python 返回的合并输出目录越界：$mergedName")
         }
         val conflicts = root["conflicts"]?.jsonObject.orEmpty().flatMap { (entity, values) ->
             values.jsonObject.map { (id, indexes) ->
@@ -143,15 +151,12 @@ class ChaquopyMergeBridge(private val context: Context) {
         val remappedEntries = root["remap_tables"]?.jsonObject?.values?.sumOf { table ->
             table.jsonObject.values.sumOf { value -> value.jsonObject.size }
         } ?: 0
-        return PythonRemapResult(conflicts, warnings, bestEffort, remappedEntries, roots)
+        return PythonRemapResult(conflicts, warnings, bestEffort, remappedEntries, roots, mergedOutput)
     }
 }
 
 private val File.isSymbolicLink: Boolean
     get() = java.nio.file.Files.isSymbolicLink(toPath())
-
-private val JsonObject.values: Collection<kotlinx.serialization.json.JsonElement>
-    get() = entries.map { it.value }
 
 private val JsonPrimitive.int: Int
     get() = content.toIntOrNull() ?: throw MergeBridgeException("Python 返回了无效整数")

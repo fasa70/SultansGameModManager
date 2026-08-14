@@ -1,12 +1,16 @@
 """Catalog-backed Android adapter for the upstream ID remapper."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
+
+from sultan_core import overlay_json
+from sultan_core.json import JsonDoc
 
 from upstream_sultan.core.data_manager import DataManager
 from upstream_sultan.core.mod.id_remap import (
@@ -28,6 +32,8 @@ class DirectoryStore:
     def __init__(self, roots: list[Path]):
         self.roots = [root.resolve() for root in roots]
         self._config_layout: list[bool] = []
+        self.invalid_json: list[dict[str, Any]] = []
+        self.layout_warnings: list[dict[str, Any]] = []
         for root in self.roots:
             config = root / "config"
             config_json = _json_files(config) if config.is_dir() else []
@@ -42,10 +48,25 @@ class DirectoryStore:
                 if path.name.lower() != "info.json"
             ]
             if config_json and legacy_config:
-                raise ValueError(
-                    f"Mod 同时包含 config/ 和 legacy 配置布局：{root.name}"
-                )
+                self.layout_warnings.append({
+                    "code": "mixed_layout",
+                    "severity": "warning",
+                    "message": (
+                        f"Mod {root.name} 同时包含 config/ 和 legacy 配置布局；"
+                        "已优先使用 config/，legacy JSON 将被跳过。"
+                    ),
+                    "count": 1,
+                })
             self._config_layout.append(bool(config_json))
+
+    def record_invalid_json(self, mod_id: str, rel_path: str, error: Exception) -> None:
+        self.invalid_json.append({
+            "code": "invalid_json",
+            "severity": "warning",
+            "message": f"Mod {mod_id} 的 {rel_path} 无法解析，已跳过：{error}",
+            "entity_type": "json",
+            "count": 1,
+        })
 
     def _root(self, mod_id: str) -> Path:
         index = int(mod_id)
@@ -80,7 +101,6 @@ class DirectoryStore:
         return path.is_file() and not path.is_symlink()
 
     def get_mod(self, mod_id: str, rel_path: str):
-        from sultan_core.json import JsonDoc
         path = self._physical(mod_id, rel_path)
         if not path.is_file() or path.is_symlink():
             raise FileNotFoundError(rel_path)
@@ -98,7 +118,6 @@ class DirectoryStore:
                 result.append(relative)
         return sorted(result)
 
-    def remove_mod_file(self, mod_id: str, rel_path: str) -> None:
         path = self._physical(mod_id, rel_path)
         if path.exists() and path.is_symlink():
             raise ValueError(f"unsafe mod file: {rel_path}")
@@ -238,6 +257,92 @@ def _warnings(
     return warnings
 
 
+def _merge_output(
+    store: DirectoryStore,
+    roots: list[Path],
+    output: Path,
+    display_name: str,
+) -> tuple[list[dict[str, Any]], int]:
+    warnings: list[dict[str, Any]] = [
+        *store.layout_warnings,
+        *store.invalid_json,
+    ]
+    json_inputs: dict[str, list[str]] = {}
+    resources: dict[str, Path] = {}
+    for index, root in enumerate(roots):
+        mod_id = str(index)
+        uses_config = store._uses_config(mod_id)
+        for logical in store.mod_files(mod_id):
+            source = store._physical(mod_id, logical)
+            relative = f"config/{logical}" if uses_config else logical
+            try:
+                text = source.read_text(encoding="utf-8")
+                json_inputs.setdefault(relative, []).append(text)
+            except Exception as error:
+                store.record_invalid_json(mod_id, logical, error)
+        for path in root.rglob("*"):
+            if not path.is_file() or path.is_symlink():
+                continue
+            relative = path.relative_to(root).as_posix()
+            if path.suffix.lower() == ".json":
+                continue
+            resources[relative] = path
+
+    warnings = [*store.layout_warnings, *store.invalid_json]
+    final = output.parent / f".{output.name}-final-{os.getpid()}"
+    if final.exists():
+        shutil.rmtree(final)
+    final.mkdir(parents=True, exist_ok=False)
+    merged_count = 0
+    try:
+        for relative, source in resources.items():
+            target = final / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+        for relative, texts in sorted(json_inputs.items()):
+            valid_texts: list[str] = []
+            for text in texts:
+                try:
+                    overlay_json([text])
+                    valid_texts.append(text)
+                except Exception as error:
+                    store.record_invalid_json("overlay", relative, error)
+            if not valid_texts:
+                continue
+            try:
+                merged = overlay_json(
+                    [valid_texts[-1]]
+                    if relative.rsplit("/", 1)[-1].lower() == "sfx_config.json"
+                    else valid_texts,
+                )
+            except Exception as error:
+                store.record_invalid_json("overlay", relative, error)
+                continue
+            target = final / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(merged, encoding="utf-8")
+            merged_count += 1
+        info = {
+            "name": display_name.strip() or "合并Mod - 自动生成",
+            "description": "由 Mod 合并管理器自动生成（无本体 JSON 模式）。",
+            "tags": ["Merged"],
+            "version": hashlib.sha256(
+                "\n".join(json_inputs).encode("utf-8")
+            ).hexdigest()[:16],
+            "synthetic": True,
+            "merge_mode": "no-base-json-overlay",
+        }
+        (final / "Info.json").write_text(
+            json.dumps(info, ensure_ascii=False, indent=4) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(final, output)
+    except Exception:
+        shutil.rmtree(final, ignore_errors=True)
+        raise
+    return warnings, merged_count
+
+
 def run(input_roots: list[str], catalog_path: str, output_root: str) -> dict[str, Any]:
     if len(input_roots) < 2:
         raise ValueError("at least two Mod inputs are required")
@@ -282,14 +387,25 @@ def run(input_roots: list[str], catalog_path: str, output_root: str) -> dict[str
                 apply_remap_to_store(str(index), table)
                 _remap_resources(store, str(index), table)
                 tables[str(index)] = _table_json(table)
+        overlay_warnings, merged_count = _merge_output(
+            store, roots, staging / "merged-output", "",
+        )
         result = {
             "status": "ok",
             "best_effort": bool(conflicts or tag_conflicts),
-            "warnings": _warnings(conflicts, tag_conflicts),
+            "warnings": [
+                *_warnings(conflicts, tag_conflicts),
+                *overlay_warnings,
+            ],
             "conflicts": {kind: dict(values) for kind, values in conflicts.items()},
-            "tag_name_conflicts": {name: [[i, code] for i, code in entries] for name, entries in tag_conflicts.items()},
+            "tag_name_conflicts": {
+                name: [[i, code] for i, code in entries]
+                for name, entries in tag_conflicts.items()
+            },
             "remap_tables": tables,
             "roots": [f"input-{i}" for i in range(len(roots))],
+            "merged_output": "merged-output",
+            "merged_entries": merged_count,
         }
         DataManager._instance = previous
         os.replace(staging, output)

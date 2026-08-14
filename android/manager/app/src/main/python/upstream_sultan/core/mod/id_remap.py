@@ -108,6 +108,16 @@ class RemapTable:
         return lookup
 
 
+def _safe_get_mod(store, mod_id: str, rel_path: str) -> JsonDoc | None:
+    try:
+        return store.get_mod(mod_id, rel_path)
+    except Exception as error:
+        recorder = getattr(store, "record_invalid_json", None)
+        if recorder is not None:
+            recorder(mod_id, rel_path, error)
+        return None
+
+
 # ==================== ID 收集 ====================
 
 def collect_base_ids() -> tuple[dict[str, set[str]], set[str]]:
@@ -177,23 +187,29 @@ def collect_mod_ids(mod_id: str) -> ModIdInfo:
 
     # dictionary 类型
     if store.has_mod(mod_id, "cards.json"):
-        doc = store.get_mod(mod_id, "cards.json")
-        info.cards_keys = extract_root_keys(doc)
-        info.cards_names = extract_root_field_strs(doc, "name")
+        doc = _safe_get_mod(store, mod_id, "cards.json")
+        if doc is None:
+            doc = None
+        else:
+            info.cards_keys = extract_root_keys(doc)
+            info.cards_names = extract_root_field_strs(doc, "name")
 
     if store.has_mod(mod_id, "tag.json"):
-        doc = store.get_mod(mod_id, "tag.json")
-        info.tag_keys = extract_root_keys(doc)
-        info.tag_ids = extract_root_field_ints(doc, "id")
-        info.tag_names = extract_root_field_strs(doc, "name")
+        doc = _safe_get_mod(store, mod_id, "tag.json")
+        if doc is not None:
+            info.tag_keys = extract_root_keys(doc)
+            info.tag_ids = extract_root_field_ints(doc, "id")
+            info.tag_names = extract_root_field_strs(doc, "name")
 
     if store.has_mod(mod_id, "over.json"):
-        info.over_keys = extract_root_keys(store.get_mod(mod_id, "over.json"))
+        doc = _safe_get_mod(store, mod_id, "over.json")
+        if doc is not None:
+            info.over_keys = extract_root_keys(doc)
 
     if store.has_mod(mod_id, "rite_template_mappings.json"):
-        info.rite_template_mappings_keys = extract_root_keys(
-            store.get_mod(mod_id, "rite_template_mappings.json")
-        )
+        doc = _safe_get_mod(store, mod_id, "rite_template_mappings.json")
+        if doc is not None:
+            info.rite_template_mappings_keys = extract_root_keys(doc)
 
     # 文件类型：从 store 的文件列表中过滤
     for entity_type, dirname in FILE_BASED_TYPES.items():
@@ -537,7 +553,9 @@ def apply_remap_to_store(mod_id: str, remap: RemapTable) -> None:
     str_lookup = remap.build_str_lookup()
 
     for rel_path in list(store.mod_files(mod_id)):
-        doc = store.get_mod(mod_id, rel_path)
+        doc = _safe_get_mod(store, mod_id, rel_path)
+        if doc is None:
+            continue
 
         new_rel = _compute_new_rel_path(rel_path, remap)
 
