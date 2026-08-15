@@ -72,6 +72,8 @@ class MainActivity : ComponentActivity() {
                                 )
                             } catch (_: android.content.ActivityNotFoundException) {
                                 viewModel.onExternalUrlOpenFailed()
+                            } catch (_: SecurityException) {
+                                viewModel.onExternalUrlOpenFailed()
                             }
                         }
                     }
@@ -129,6 +131,8 @@ class MainActivity : ComponentActivity() {
                         stopOriginalSync = viewModel::stopOriginalSync,
                         acceptNotice = viewModel::acceptLegalNotice,
                         setAutoUpdateCheckEnabled = viewModel::setAutoUpdateCheckEnabled,
+                        setWorkshopEnabled = viewModel::setWorkshopEnabled,
+                        openWorkshopNative = viewModel::openWorkshopNative,
                         dismissAvailableUpdate = viewModel::dismissAvailableUpdate,
                         openAvailableUpdate = viewModel::openAvailableUpdate,
                         clearFeedback = viewModel::clearFeedback,

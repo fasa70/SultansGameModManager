@@ -116,6 +116,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     private val loaderBridge: LoaderBridge = AndroidModStorageLoaderBridge(application, File(application.filesDir, "mod-cache"))
     private val legalNotice = LegalNoticeRepository(application)
     private val updateCheckSettings = UpdateCheckSettingsRepository(application)
+    private val workshopVisibilitySettings = WorkshopVisibilitySettingsRepository(application)
     private val updateChecker: UpdateChecker = GitHubReleaseUpdateChecker()
     private val mergeBridge = com.sultansgame.modmanager.platform.merge.ChaquopyMergeBridge(application)
     private val mergeRoot = File(application.cacheDir, "mod-merge")
@@ -212,6 +213,10 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             updateCheckEnabled = enabled
             mutableState.value = mutableState.value.copy(autoUpdateCheckEnabled = enabled)
             if (enabled) checkForUpdateAtStartup()
+        }
+        viewModelScope.launch {
+            val enabled = workshopVisibilitySettings.isWorkshopEnabled.first()
+            mutableState.value = mutableState.value.copy(showWorkshop = enabled)
         }
         viewModelScope.launch {
             PatchInstallResults.results.collect { intent ->
@@ -596,6 +601,17 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             mutableState.value = mutableState.value.copy(autoUpdateCheckEnabled = true)
         }
         viewModelScope.launch { updateCheckSettings.setAutoCheckEnabled(enabled) }
+    }
+
+    fun setWorkshopEnabled(enabled: Boolean) {
+        mutableState.value = mutableState.value.copy(showWorkshop = enabled)
+        viewModelScope.launch { workshopVisibilitySettings.setWorkshopEnabled(enabled) }
+    }
+
+    fun openWorkshopNative() {
+        if (isAllowedWorkshopNativeUrl(WORKSHOP_NATIVE_URL)) {
+            uiEventChannel.trySend(ManagerUiEvent.OpenExternalUrl(WORKSHOP_NATIVE_URL))
+        }
     }
 
     fun dismissAvailableUpdate() {
