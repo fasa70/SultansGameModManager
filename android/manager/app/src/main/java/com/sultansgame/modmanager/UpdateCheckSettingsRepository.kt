@@ -19,4 +19,8 @@ class UpdateCheckSettingsRepository(private val context: Context) {
     suspend fun setAutoCheckEnabled(enabled: Boolean) {
         context.updateCheckSettingsDataStore.edit { it[autoCheckEnabled] = enabled }
     }
+
+    suspend fun reset() {
+        context.updateCheckSettingsDataStore.edit { it.clear() }
+    }
 }

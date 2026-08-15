@@ -134,6 +134,7 @@ class MainActivity : ComponentActivity() {
                         deleteCachedMod = viewModel::deleteCachedMod,
                         renameCachedMod = viewModel::renameCachedMod,
                         clearModCache = viewModel::clearModCache,
+                        resetManagerState = viewModel::resetManagerState,
                         openMerge = viewModel::openMerge,
                         closeMerge = viewModel::closeMerge,
                         toggleMergeMod = viewModel::toggleMergeMod,

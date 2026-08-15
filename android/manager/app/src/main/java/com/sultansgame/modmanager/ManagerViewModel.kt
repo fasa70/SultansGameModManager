@@ -845,6 +845,73 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         mutableState.value = mutableState.value.copy(feedback = FeedbackMessage(reason, isError = true))
     }
 
+    fun resetManagerState() {
+        if (mutableState.value.cachedModDeletionInProgress || mutableState.value.zipImportInProgress || mutableState.value.merge.isRunning) {
+            mutableState.value = mutableState.value.copy(
+                feedback = FeedbackMessage("当前操作正在进行，请稍后再试。", isError = true),
+            )
+            return
+        }
+        mutableState.value = mutableState.value.copy(feedback = FeedbackMessage("正在重置管理器状态…"))
+        workshopBrowseJob?.cancel()
+        steamGuardSubmissionJob?.cancel()
+        gameModSyncJob?.cancel()
+        mergePreflightJob?.cancel()
+        updateCheckJob?.cancel()
+        viewModelScope.launch {
+            val failures = mutableListOf<String>()
+            try {
+                withContext(Dispatchers.IO) {
+                    taskStore.tasks.value.forEach { downloadScheduler.cancel(it.id) }
+                    val importing = taskStore.reset()
+                    importing.forEach { failures += "Workshop 任务 ${it.id} 正在导入" }
+                    artifactImporter.clearStagingExcept(importing.mapTo(mutableSetOf(), DownloadTask::id))
+                    externalZipInbox.clear()
+                    privateModCache.resetPreservingMods().forEach { failures += "Mod 缓存 $it" }
+                    deploymentPlan.reset()
+                    transactions.deleteCleanupWorkspaces(emptySet())
+                    mergeRoot.listFiles()?.forEach { it.deleteRecursively() }
+                    getApplication<Application>().cacheDir.listFiles()
+                        ?.filter { it.name.startsWith(".zip-import-") }
+                        ?.forEach { it.delete() }
+                    legalNotice.reset()
+                    updateCheckSettings.reset()
+                    steamAuthProvider.logout()
+                }
+            } catch (error: Exception) {
+                failures += error.message ?: error::class.java.simpleName
+            }
+            val cachedMods = withContext(Dispatchers.IO) { privateModCache.listCached() }
+            val current = mutableState.value
+            mutableState.value = current.copy(
+                cachedMods = cachedMods,
+                gameModSyncItems = deploymentPlan.entries(cachedMods),
+                pendingGameModSyncOperations = deploymentPlan.pendingOperations(),
+                downloadTasks = taskStore.tasks.value,
+                steamAuthState = com.sultansgame.modmanager.model.SteamAuthState.SignedOut,
+                noticeAccepted = false,
+                autoUpdateCheckEnabled = true,
+                availableUpdate = null,
+                pendingExternalZip = null,
+                pendingZipPassword = false,
+                zipImportInProgress = false,
+                workshop = WorkshopUiState.Idle,
+                workshopBrowse = WorkshopBrowseUiState(),
+                merge = MergeUiState(),
+                patchCleanup = null,
+                patchCleanupConfirmation = null,
+                apksExport = ApksExportUiState.Idle,
+                feedback = if (failures.isEmpty()) {
+                    FeedbackMessage("已重置管理器状态，保留 ${cachedMods.size} 个 Mod 和设备签名密钥。")
+                } else {
+                    FeedbackMessage("管理器状态已部分重置：${failures.joinToString("、")}", isError = true)
+                },
+            )
+            refreshGame()
+            refreshGameModSync()
+        }
+    }
+
     fun clearModCache() {
         if (mutableState.value.cachedModDeletionInProgress) return
         val cachedMods = mutableState.value.cachedMods

@@ -144,6 +144,7 @@ data class ManagerActions(
     val deleteCachedMod: (String) -> Unit,
     val renameCachedMod: (String, String) -> Unit,
     val clearModCache: () -> Unit,
+    val resetManagerState: () -> Unit = {},
     val openMerge: () -> Unit = {},
     val closeMerge: () -> Unit = {},
     val openModExport: () -> Unit = {},
@@ -177,6 +178,7 @@ private sealed interface DialogKind {
     data object Privacy : DialogKind
     data object License : DialogKind
     data object ClearCache : DialogKind
+    data object ResetManagerState : DialogKind
     data class DeleteCachedMod(val cacheKey: String) : DialogKind
     data class RenameCachedMod(val cacheKey: String) : DialogKind
     data object PatchCleanup : DialogKind
@@ -895,6 +897,7 @@ private fun SettingsScreen(state: ManagerUiState, actions: ManagerActions, wide:
             ConfirmationCheckbox("开启创意工坊", enabled == true, enabled != null) { actions.setWorkshopEnabled(it) }
             Text(if (enabled == null) "正在读取创意工坊显示设置…" else "开启后，创意工坊会显示在导航栏中；默认关闭。", fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
         }
+        item { ListPanel("重置管理器状态", "导入或修补出现异常时可尝试；保留已缓存的 Mod 和设备签名密钥", "重置") { onShowDialog(DialogKind.ResetManagerState) } }
         item { SectionLabel("应用更新", "GitHub") }
         item {
             val enabled = state.autoUpdateCheckEnabled
@@ -977,6 +980,13 @@ private fun DialogHost(state: ManagerUiState, actions: ManagerActions, dialog: D
         DialogKind.Privacy -> TextDialog("隐私与数据流", "你选择导入的 Mod、下载暂存和修补工件保存在应用私有目录。浏览创意工坊时只会连接 Steam 公开服务和经过校验的下载地址。密码和 Steam Guard 验证码只用于认证；选择记住登录状态时，刷新令牌会由 Android Keystore 加密保存。", onDismiss)
         DialogKind.License -> TextDialog("开源许可", "本项目以 GNU GPLv3 开源", onDismiss)
         DialogKind.ClearCache -> ConfirmDialog("清理本地 Mod？", "这会删除管理器所有已添加的 Mod，并安排从游戏 Mod 目录中移除对应内容。", "确认清理", { actions.clearModCache(); onDismiss() }, onDismiss)
+        DialogKind.ResetManagerState -> ConfirmDialog(
+            "重置管理器状态？",
+            "这会清除导入记录、临时文件、下载任务、登录信息和管理器设置，但会保留已缓存的 Mod 与设备签名密钥；不会卸载、还原或修改已安装的游戏及游戏侧已有 Mod。",
+            "确认重置",
+            { actions.resetManagerState(); onDismiss() },
+            onDismiss,
+        )
         is DialogKind.DeleteCachedMod -> {
             val item = state.gameModSyncItems.firstOrNull { it.cacheKey == dialog.cacheKey }
             if (item != null) ConfirmDialog("删除 ${item.displayName}？", "这会从管理器和游戏 Mod 目录移除对应Mod。", "删除 Mod", { actions.deleteCachedMod(item.cacheKey); onDismiss() }, onDismiss)
