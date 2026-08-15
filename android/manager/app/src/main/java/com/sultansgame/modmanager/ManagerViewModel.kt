@@ -42,6 +42,7 @@ import com.sultansgame.modmanager.platform.saf.ZipModImporter
 import com.sultansgame.modmanager.platform.storage.AndroidPrivateModCache
 import com.sultansgame.modmanager.platform.storage.AndroidStorageSpaceProbe
 import com.sultansgame.modmanager.platform.storage.CachedModDeletionResult
+import com.sultansgame.modmanager.platform.storage.CachedModRenameResult
 import com.sultansgame.modmanager.platform.storage.DeploymentPlanStore
 import com.sultansgame.modmanager.storage.StorageBudget
 import com.sultansgame.modmanager.platform.workshop.SteamPublicMetadataTransport
@@ -439,6 +440,35 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         processPendingGameModSyncOperations()
     }
 
+    fun renameCachedMod(cacheKey: String, rawName: String) {
+        if (mutableState.value.cachedModDeletionInProgress || mutableState.value.gameModSyncInProgress) return
+        val target = mutableState.value.cachedMods.firstOrNull { it.cacheKey == cacheKey } ?: return
+        viewModelScope.launch {
+            when (val result = withContext(Dispatchers.IO) {
+                privateModCache.renameDisplayName(target.cacheKey, rawName)
+            }) {
+                is CachedModRenameResult.Renamed -> {
+                    val updated = mutableState.value.cachedMods.map { cached ->
+                        if (cached.cacheKey == target.cacheKey) cached.copy(displayName = result.displayName) else cached
+                    }
+                    mutableState.value = mutableState.value.copy(
+                        cachedMods = updated,
+                        feedback = FeedbackMessage("已更新 ${result.displayName} 的 Manager 显示名称。"),
+                    )
+                    refreshGameModSyncItems()
+                }
+                CachedModRenameResult.NotFound -> mutableState.value = mutableState.value.copy(
+                    feedback = FeedbackMessage("重命名失败：${target.displayName} 已不存在。", isError = true),
+                )
+                is CachedModRenameResult.Rejected -> mutableState.value = mutableState.value.copy(
+                    feedback = FeedbackMessage("重命名失败：${result.reason}", isError = true),
+                )
+                is CachedModRenameResult.Failed -> mutableState.value = mutableState.value.copy(
+                    feedback = FeedbackMessage("重命名失败：${result.reason}", isError = true),
+                )
+            }
+        }
+    }
     fun deleteCachedMod(cacheKey: String) {
         if (mutableState.value.cachedModDeletionInProgress) return
         val cachedModsBeforeDeletion = mutableState.value.cachedMods

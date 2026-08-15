@@ -141,6 +141,7 @@ data class ManagerActions(
     val launchGameForModSync: () -> Unit,
     val setModSyncedToGame: (String, Boolean) -> Unit,
     val deleteCachedMod: (String) -> Unit,
+    val renameCachedMod: (String, String) -> Unit,
     val clearModCache: () -> Unit,
     val openMerge: () -> Unit = {},
     val closeMerge: () -> Unit = {},
@@ -173,6 +174,7 @@ private sealed interface DialogKind {
     data object License : DialogKind
     data object ClearCache : DialogKind
     data class DeleteCachedMod(val cacheKey: String) : DialogKind
+    data class RenameCachedMod(val cacheKey: String) : DialogKind
     data object PatchCleanup : DialogKind
     data class DeviceInstallRisk(val warning: DeviceInstallWarning) : DialogKind
     data object UpdateAvailable : DialogKind
@@ -865,6 +867,7 @@ private fun MyModsScreen(state: ManagerUiState, actions: ManagerActions, wide: B
                         SmallAction(if (item.syncedToGame) "从游戏中移除" else "同步给游戏", enabled) {
                             actions.setModSyncedToGame(item.cacheKey, !item.syncedToGame)
                         }
+                        SmallAction("重命名", enabled) { onShowDialog(DialogKind.RenameCachedMod(item.cacheKey)) }
                         SmallAction("删除 Mod", enabled) { onShowDialog(DialogKind.DeleteCachedMod(item.cacheKey)) }
                     }
                 }
@@ -933,6 +936,10 @@ private fun DialogHost(state: ManagerUiState, actions: ManagerActions, dialog: D
         is DialogKind.DeleteCachedMod -> {
             val item = state.gameModSyncItems.firstOrNull { it.cacheKey == dialog.cacheKey }
             if (item != null) ConfirmDialog("删除 ${item.displayName}？", "这会从管理器和游戏 Mod 目录移除对应Mod。", "删除 Mod", { actions.deleteCachedMod(item.cacheKey); onDismiss() }, onDismiss)
+        }
+        is DialogKind.RenameCachedMod -> {
+            val item = state.gameModSyncItems.firstOrNull { it.cacheKey == dialog.cacheKey }
+            if (item != null) RenameCachedModDialog(item.displayName, actions.renameCachedMod, item.cacheKey, onDismiss)
         }
         is DialogKind.DeviceInstallRisk -> DeviceInstallRiskDialog(dialog.warning, onDismiss)
         DialogKind.UpdateAvailable -> {
@@ -1093,6 +1100,38 @@ private fun MergeModsScreen(state: ManagerUiState, actions: ManagerActions, wide
         item { PrimaryButton(if (merge.isRunning) "正在合并…" else "开始合并", preflightReady && !merge.isRunning, actions.startMerge) }
         if (merge.resultCacheKey != null) {
             item { NoticeStrip("合并完成", "结果已加入 Manager 缓存。") }
+        }
+    }
+}
+
+@Composable
+private fun RenameCachedModDialog(
+    initialName: String,
+    onRename: (String, String) -> Unit,
+    cacheKey: String,
+    onDismiss: () -> Unit,
+) {
+    var name by remember(initialName) { mutableStateOf(initialName) }
+    val normalizedName = com.sultansgame.modmanager.storage.ModDisplayNamePolicy.normalize(name)
+    Dialog(onDismissRequest = onDismiss) {
+        Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(22.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text("重命名 Mod", fontSize = 21.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    "只修改 Mod 在管理器中的显示名称，不会改变 Mod 文件、缓存目录或游戏中的名称。",
+                    fontSize = 14.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+                LabeledTextField(name, { name = it }, "Manager 中的显示名称")
+                if (name.isNotEmpty() && normalizedName == null) {
+                    Text("名称不能为空。", fontSize = 12.sp, color = MiuixTheme.colorScheme.error)
+                }
+                PrimaryButton("保存", normalizedName != null) {
+                    onRename(cacheKey, requireNotNull(normalizedName))
+                    onDismiss()
+                }
+                SecondaryButton("取消", onClick = onDismiss)
+            }
         }
     }
 }
