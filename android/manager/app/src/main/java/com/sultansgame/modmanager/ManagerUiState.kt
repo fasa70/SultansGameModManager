@@ -17,6 +17,39 @@ import com.sultansgame.modmanager.merge.CatalogSelection
 import com.sultansgame.modmanager.merge.MergeIdConflict
 import com.sultansgame.modmanager.merge.MergePreflight
 
+data class ModExportUiState(
+    val isOpen: Boolean = false,
+    val selectedCacheKeys: List<String> = emptyList(),
+    val settingsAction: ModExportAction? = null,
+    val suggestedFileName: String = "sultans-game-mods.zip",
+    val operation: ModExportOperation = ModExportOperation.Idle,
+)
+
+enum class ModExportAction {
+    Share,
+    SaveToLocal,
+}
+
+sealed interface ModExportOperation {
+    data object Idle : ModExportOperation
+    data class Compressing(
+        val action: ModExportAction,
+        val fileName: String,
+        val completedFiles: Int,
+        val totalFiles: Int,
+        val writtenBytes: Long,
+        val totalBytes: Long,
+    ) : ModExportOperation
+    data class SelectingDestination(val artifactId: String, val fileName: String) : ModExportOperation
+    data class Writing(
+        val artifactId: String,
+        val fileName: String,
+        val writtenBytes: Long,
+        val totalBytes: Long,
+    ) : ModExportOperation
+    data class Sharing(val artifactId: String, val fileName: String) : ModExportOperation
+}
+
 data class MergeUiState(
     val isOpen: Boolean = false,
     val selectedCacheKeys: List<String> = emptyList(),
@@ -49,6 +82,7 @@ data class ManagerUiState(
     val cachedModDeletionInProgress: Boolean = false,
     val cachedMods: List<CachedMod> = emptyList(),
     val merge: MergeUiState = MergeUiState(),
+    val modExport: ModExportUiState = ModExportUiState(),
     val workshop: WorkshopUiState = WorkshopUiState.Idle,
     val workshopBrowse: WorkshopBrowseUiState = WorkshopBrowseUiState(),
     val downloadTasks: List<DownloadTask> = emptyList(),

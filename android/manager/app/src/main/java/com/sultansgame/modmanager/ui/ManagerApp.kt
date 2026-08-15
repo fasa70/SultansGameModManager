@@ -144,6 +144,14 @@ data class ManagerActions(
     val clearModCache: () -> Unit,
     val openMerge: () -> Unit = {},
     val closeMerge: () -> Unit = {},
+    val openModExport: () -> Unit = {},
+    val closeModExport: () -> Unit = {},
+    val toggleModExport: (String) -> Unit = {},
+    val setModExportSelection: (List<String>) -> Unit = {},
+    val selectAllModExport: () -> Unit = {},
+    val requestModExport: (com.sultansgame.modmanager.ModExportAction) -> Unit = {},
+    val submitModExport: (String, CharArray) -> Unit = { _, password -> password.fill('\u0000') },
+    val cancelModExportSettings: () -> Unit = {},
     val toggleMergeMod: (String) -> Unit = {},
     val moveMergeMod: (Int, Int) -> Unit = { _, _ -> },
     val startMerge: () -> Unit = {},
@@ -183,6 +191,7 @@ private sealed interface DialogKind {
     data object ExternalZipImport : DialogKind
     data object ZipPasswordImport : DialogKind
     data object MergeSyncConfirmation : DialogKind
+    data class ModExportSettings(val action: com.sultansgame.modmanager.ModExportAction) : DialogKind
 }
 
 @Composable
@@ -226,6 +235,10 @@ fun ManagerApp(state: ManagerUiState, actions: ManagerActions) {
 
     LaunchedEffect(state.pendingZipPassword) {
         if (state.pendingZipPassword) dialog = DialogKind.ZipPasswordImport
+    }
+
+    LaunchedEffect(state.modExport.settingsAction) {
+        dialog = state.modExport.settingsAction?.let(DialogKind::ModExportSettings)
     }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)) {
@@ -350,6 +363,7 @@ private fun MainContent(
     Column(modifier) {
         if (wide) ContentHeader(destination)
         if (state.merge.isOpen) MergeModsScreen(state, actions, wide)
+        else if (state.modExport.isOpen) ModExportScreen(state, actions, wide)
         else when (destination) {
             Destination.Start -> StartScreen(state, actions, wide, onSelectDestination)
             Destination.Acquire -> AcquireNavigation(state, actions, wide)
@@ -809,6 +823,16 @@ private fun MyModsScreen(state: ManagerUiState, actions: ManagerActions, wide: B
                 onClick = actions.openMerge,
             )
         }
+        item {
+            PrimaryButton(
+                "导出或分享 Mod",
+                enabled = state.cachedMods.isNotEmpty() &&
+                    !state.gameModSyncInProgress &&
+                    !state.cachedModDeletionInProgress &&
+                    state.modExport.operation is com.sultansgame.modmanager.ModExportOperation.Idle,
+                onClick = actions.openModExport,
+            )
+        }
         item { NoticeStrip("请在游戏内管理Mod", "管理器只负责游戏 Mod 目录；请在游戏内官方 Mod 面板(主界面左边从上往下第五个按钮)刷新、启用Mod。") }
         item { SectionLabel("Manager 管理的 Mod", "${state.gameModSyncItems.size} 个") }
         if (state.gameModSyncItems.isEmpty()) {
@@ -898,6 +922,59 @@ private fun SettingsScreen(state: ManagerUiState, actions: ManagerActions, wide:
     }
 }
 
+
+@Composable
+private fun ModExportScreen(state: ManagerUiState, actions: ManagerActions, wide: Boolean) {
+    val export = state.modExport
+    val selected = export.selectedCacheKeys.toSet()
+    val allSelected = state.cachedMods.isNotEmpty() && selected.size == state.cachedMods.size && selected.containsAll(state.cachedMods.map { it.cacheKey })
+    val busy = export.operation !is com.sultansgame.modmanager.ModExportOperation.Idle
+    LaunchedEffect(state.cachedMods, export.isOpen) {
+        val valid = state.cachedMods.map { it.cacheKey }.toSet()
+        val filtered = export.selectedCacheKeys.filter(valid::contains)
+        if (filtered != export.selectedCacheKeys) actions.setModExportSelection(filtered)
+    }
+    ScreenList(wide) {
+        item { HeroPanel("导出或分享", "选择 Mod", "选择一个或多个 Mod，ZIP 中每个 Mod 会保留独立的顶层目录。", "返回管理 Mod", !busy, actions.closeModExport) }
+        item { SectionLabel("已选择 Mod", "${selected.size} / ${state.cachedMods.size}") }
+        item { SecondaryButton(if (allSelected) "取消全选" else "一键全选", !busy && state.cachedMods.isNotEmpty(), actions.selectAllModExport) }
+        items(state.cachedMods, key = { "export-${it.cacheKey}" }) { mod ->
+            Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(14.dp)) { ConfirmationCheckbox(mod.displayName, mod.cacheKey in selected, !busy) { actions.toggleModExport(mod.cacheKey) } }
+        }
+        when (val operation = export.operation) {
+            is com.sultansgame.modmanager.ModExportOperation.Compressing -> item { NoticeStrip("正在生成 ZIP", "${operation.completedFiles} / ${operation.totalFiles} 个文件 · ${formatBytes(operation.writtenBytes)} / ${formatBytes(operation.totalBytes)}") }
+            is com.sultansgame.modmanager.ModExportOperation.SelectingDestination -> item { LoadingPanel("正在选择导出位置…") }
+            is com.sultansgame.modmanager.ModExportOperation.Writing -> item { NoticeStrip("正在保存 ZIP", "${formatBytes(operation.writtenBytes)} / ${formatBytes(operation.totalBytes)}") }
+            is com.sultansgame.modmanager.ModExportOperation.Sharing -> item { LoadingPanel("正在打开分享面板…") }
+            com.sultansgame.modmanager.ModExportOperation.Idle -> Unit
+        }
+        item { PrimaryButton("分享到其他应用", selected.isNotEmpty() && !busy) { actions.requestModExport(com.sultansgame.modmanager.ModExportAction.Share) } }
+        item { SecondaryButton("导出到本地", selected.isNotEmpty() && !busy) { actions.requestModExport(com.sultansgame.modmanager.ModExportAction.SaveToLocal) } }
+    }
+}
+
+@Composable
+private fun ModExportSettingsDialog(suggestedFileName: String, action: com.sultansgame.modmanager.ModExportAction, onSubmit: (String, CharArray) -> Unit, onCancel: () -> Unit) {
+    var fileName by remember(suggestedFileName) { mutableStateOf(suggestedFileName) }
+    var password by remember { mutableStateOf("") }
+    Dialog(onDismissRequest = { password = ""; onCancel() }) {
+        Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(22.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("导出 Mod ZIP", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                LabeledTextField(fileName, { fileName = it }, "ZIP 文件名")
+                LabeledTextField(password, { password = it }, "压缩包密码（可留空）", password = true)
+                PrimaryButton(if (action == com.sultansgame.modmanager.ModExportAction.Share) "分享到其他应用" else "导出到本地", fileName.isNotBlank()) {
+                    val supplied = password.toCharArray()
+                    password = ""
+                    onSubmit(fileName, supplied)
+                }
+                SecondaryButton("取消") { password = ""; onCancel() }
+            }
+        }
+    }
+}
+
+
 @Composable
 private fun DialogHost(state: ManagerUiState, actions: ManagerActions, dialog: DialogKind?, onDismiss: () -> Unit) {
     when (dialog) {
@@ -974,6 +1051,12 @@ private fun DialogHost(state: ManagerUiState, actions: ManagerActions, dialog: D
             )
         }
         DialogKind.MergeSyncConfirmation -> MergeSyncConfirmationDialog(actions, onDismiss)
+        is DialogKind.ModExportSettings -> ModExportSettingsDialog(
+            state.modExport.suggestedFileName,
+            dialog.action,
+            { fileName, password -> actions.submitModExport(fileName, password); onDismiss() },
+            { actions.cancelModExportSettings(); onDismiss() },
+        )
         null -> Unit
     }
 }
