@@ -1095,7 +1095,6 @@ private fun MergeModsScreen(state: ManagerUiState, actions: ManagerActions, wide
 }
 
 @Composable
-<<<<<<< HEAD
 private fun MergeHeroPanel(onBack: () -> Unit) {
     val context = LocalContext.current
     Card(
@@ -1107,7 +1106,8 @@ private fun MergeHeroPanel(onBack: () -> Unit) {
             Text("合并 Mod", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
             Text("生成合成 Mod", fontSize = 24.sp, fontWeight = FontWeight.Bold)
             Text(
-                "选择并排序 Mod。列表底部优先级最高；结果会作为普通 Mod 加入 Manager。\n" +
+                "选择并排序 Mod。列表底部优先级最高；结果会作为普通 Mod 加入 Manager。
+" +
                     "合并mod功能参考复用了 @fentender 老师开发的mod合并管理器，但因安卓版无法提取游戏JSON，实际合并结果可能与上游工具有出入。如果有能力，请点击链接去给这位老师的仓库点亮颗star！",
                 fontSize = 14.sp,
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
@@ -1116,20 +1116,23 @@ private fun MergeHeroPanel(onBack: () -> Unit) {
                 MERGE_REFERENCE_URL,
                 fontSize = 13.sp,
                 color = MiuixTheme.colorScheme.primary,
-                modifier = Modifier
-                    .clickable {
-                        try {
-                            context.startActivity(
-                                Intent(Intent.ACTION_VIEW, Uri.parse(MERGE_REFERENCE_URL))
-                                    .addCategory(Intent.CATEGORY_BROWSABLE),
-                            )
-                        } catch (_: android.content.ActivityNotFoundException) {
-                            // No browser is available; keep the page usable.
-                        }
-                    },
+                modifier = Modifier.clickable {
+                    try {
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse(MERGE_REFERENCE_URL))
+                                .addCategory(Intent.CATEGORY_BROWSABLE),
+                        )
+                    } catch (_: android.content.ActivityNotFoundException) {
+                        // No browser is available; keep the page usable.
+                    }
+                },
             )
             PrimaryButton("返回管理 Mod", onClick = onBack)
-=======
+        }
+    }
+}
+
+@Composable
 private fun RenameCachedModDialog(
     initialName: String,
     onRename: (String, String) -> Unit,
@@ -1157,16 +1160,12 @@ private fun RenameCachedModDialog(
                 }
                 SecondaryButton("取消", onClick = onDismiss)
             }
->>>>>>> worktree-add-mod-rename-button
         }
     }
 }
 
-<<<<<<< HEAD
 private const val MERGE_REFERENCE_URL = "https://github.com/fentender/sutan-game"
 
-=======
->>>>>>> worktree-add-mod-rename-button
 @Composable
 private fun ZipPasswordDialog(
     displayName: String,
