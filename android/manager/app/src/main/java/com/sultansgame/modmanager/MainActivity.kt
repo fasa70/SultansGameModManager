@@ -75,7 +75,7 @@ class MainActivity : ComponentActivity() {
                             pendingModExportArtifactId = event.artifactId
                             createModExportDocument.launch(event.suggestedName)
                         }
-                        is ManagerUiEvent.ShareModExport -> shareModExport(event.artifactId)
+                        is ManagerUiEvent.ShareModExport -> shareModExport(event.artifactId, event.fileName)
                         is ManagerUiEvent.OpenExternalUrl -> {
                             try {
                                 startActivity(
@@ -190,14 +190,18 @@ class MainActivity : ComponentActivity() {
         viewModel.refreshGameModSync()
     }
 
-    private fun shareModExport(artifactId: String) {
-        val file = File(cacheDir, "mod-export/$artifactId.zip")
-        if (!file.isFile) {
+    private fun shareModExport(artifactId: String, fileName: String) {
+        val artifact = File(cacheDir, "mod-export/$artifactId.zip")
+        if (!artifact.isFile) {
             viewModel.failModExportShare(artifactId, "找不到待分享的 Mod ZIP。")
             return
         }
+        val shareFile = File(artifact.parentFile, fileName)
         try {
-            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+            if (shareFile.absoluteFile.normalize() != artifact.absoluteFile.normalize() && !artifact.renameTo(shareFile)) {
+                error("无法准备分享文件名")
+            }
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", shareFile)
             val send = Intent(Intent.ACTION_SEND).apply {
                 type = "application/zip"
                 putExtra(Intent.EXTRA_STREAM, uri)
@@ -208,7 +212,10 @@ class MainActivity : ComponentActivity() {
             viewModel.finishModExportShare(artifactId)
         } catch (_: android.content.ActivityNotFoundException) {
             viewModel.failModExportShare(artifactId, "没有可用的分享应用。")
-        } catch (error: IllegalArgumentException) {
+        } catch (error: Throwable) {
+            if (shareFile.absoluteFile.normalize() != artifact.absoluteFile.normalize() && shareFile.isFile) {
+                shareFile.renameTo(artifact)
+            }
             viewModel.failModExportShare(artifactId, "无法安全分享 Mod ZIP：${error.message ?: "路径无效"}")
         }
     }

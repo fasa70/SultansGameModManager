@@ -1,6 +1,5 @@
 package com.sultansgame.modmanager.platform.export
 
-import com.sultansgame.modmanager.platform.storage.AndroidModExportFile
 import com.sultansgame.modmanager.platform.storage.AndroidModExportSnapshot
 import com.sultansgame.modmanager.platform.storage.AndroidPrivateModCache
 import java.io.File
@@ -31,7 +30,7 @@ class ModZipExporter(
     )
 
     fun cleanupInterrupted() {
-        exportRoot.listFiles()?.filter { it.name.endsWith(".partial") }?.forEach(File::delete)
+        exportRoot.listFiles()?.filter { it.name.endsWith(".partial") }?.forEach(File::deleteRecursively)
     }
 
     fun export(
@@ -49,11 +48,16 @@ class ModZipExporter(
         val totalFiles = snapshots.sumOf { it.files.size }
         val totalBytes = snapshots.sumOf(AndroidModExportSnapshot::sizeBytes)
         val id = UUID.randomUUID().toString()
-        val partial = File(exportRoot, "$id.partial")
-        val target = File(exportRoot, "$id.zip")
+        val partialDirectory = File(exportRoot, "$id.partial")
+        val partial = File(partialDirectory, outputName)
+        val targetDirectory = File(exportRoot, id)
+        val target = File(targetDirectory, outputName)
         var completedFiles = 0
         var writtenBytes = 0L
         try {
+            if (!partialDirectory.mkdirs() && !partialDirectory.isDirectory) {
+                throw IllegalStateException("无法创建 Mod 导出暂存目录。")
+            }
             ZipOutputStream(partial.outputStream(), password.takeIf { it.isNotEmpty() }).use { output ->
                 snapshots.forEachIndexed { snapshotIndex, snapshot ->
                     snapshot.files.forEach { entry ->
@@ -86,11 +90,13 @@ class ModZipExporter(
                     }
                 }
             }
-            if (!partial.renameTo(target)) throw IllegalStateException("无法提交 Mod 导出文件。")
+            if (!partialDirectory.renameTo(targetDirectory)) {
+                throw IllegalStateException("无法提交 Mod 导出文件。")
+            }
             return Artifact(id, target, outputName)
         } catch (error: Throwable) {
-            partial.delete()
-            target.delete()
+            partialDirectory.deleteRecursively()
+            targetDirectory.deleteRecursively()
             throw error
         }
     }
