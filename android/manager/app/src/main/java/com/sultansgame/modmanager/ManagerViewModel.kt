@@ -248,10 +248,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                 isOpen = true,
                 selectedCacheKeys = emptyList(),
                 catalogSelection = catalogSelection,
-                catalogError = catalog?.let { null } ?: listOfNotNull(
-                    mergeCatalogLoad.error,
-                    "合并已禁用。",
-                ).joinToString("；"),
+                catalogError = catalog?.let { null } ?: mergeCatalogLoad.error,
                 conflicts = emptyList(),
                 warnings = emptyList(),
                 preflight = MergePreflightState.Idle,

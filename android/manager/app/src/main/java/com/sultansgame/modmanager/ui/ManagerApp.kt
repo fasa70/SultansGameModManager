@@ -1020,20 +1020,10 @@ private fun MergeModsScreen(state: ManagerUiState, actions: ManagerActions, wide
     val selected = merge.selectedCacheKeys.toSet()
     val preflightReady = merge.preflight is MergePreflightState.Ready
     ScreenList(wide) {
-        item { HeroPanel("合并 Mod", "生成合成 Mod", "选择并排序 Mod。列表底部优先级最高；结果会作为普通 Mod 加入 Manager。", "返回管理 Mod", onAction = actions.closeMerge) }
         item {
-            NoticeStrip(
-                merge.modeLabel,
-                "合并器只处理所选 Mod 的覆盖内容；缺失字段不会删除游戏本体内容。",
-            )
+            MergeHeroPanel(onBack = actions.closeMerge)
         }
-        item {
-            NoticeStrip(
-                "Android 合并限制",
-                "因Android版本限制，无法提取游戏Info，合并结果可能与上游项目有出入",
-            )
-        }
-        merge.catalogError?.let { error -> item { NoticeStrip("无法合并", error) } }
+        merge.catalogError?.let { error -> item { NoticeStrip("无法读取合并 Catalog", error) } }
         merge.catalogSelection?.warning?.let { warning ->
             item { NoticeStrip("Catalog 警告", warning) }
         }
@@ -1096,6 +1086,46 @@ private fun MergeModsScreen(state: ManagerUiState, actions: ManagerActions, wide
         }
     }
 }
+
+@Composable
+private fun MergeHeroPanel(onBack: () -> Unit) {
+    val context = LocalContext.current
+    Card(
+        Modifier.fillMaxWidth(),
+        colors = CardDefaults.defaultColors(color = MiuixTheme.colorScheme.primaryContainer),
+        insideMargin = PaddingValues(22.dp),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            Text("合并 Mod", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+            Text("生成合成 Mod", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            Text(
+                "选择并排序 Mod。列表底部优先级最高；结果会作为普通 Mod 加入 Manager。\n" +
+                    "合并mod功能参考复用了 @fentender 老师开发的mod合并管理器，但因安卓版无法提取游戏JSON，实际合并结果可能与上游工具有出入。如果有能力，请点击链接去给这位老师的仓库点亮颗star！",
+                fontSize = 14.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            )
+            Text(
+                MERGE_REFERENCE_URL,
+                fontSize = 13.sp,
+                color = MiuixTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clickable {
+                        try {
+                            context.startActivity(
+                                Intent(Intent.ACTION_VIEW, Uri.parse(MERGE_REFERENCE_URL))
+                                    .addCategory(Intent.CATEGORY_BROWSABLE),
+                            )
+                        } catch (_: android.content.ActivityNotFoundException) {
+                            // No browser is available; keep the page usable.
+                        }
+                    },
+            )
+            PrimaryButton("返回管理 Mod", onClick = onBack)
+        }
+    }
+}
+
+private const val MERGE_REFERENCE_URL = "https://github.com/fentender/sutan-game"
 
 @Composable
 private fun ZipPasswordDialog(
