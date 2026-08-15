@@ -76,7 +76,7 @@ sealed interface ManagerUiEvent {
     data class ConfirmPackageInstall(val intent: android.content.Intent) : ManagerUiEvent
     data class CreateApksExport(val transactionId: String, val suggestedName: String) : ManagerUiEvent
     data class CreateModExportDocument(val artifactId: String, val suggestedName: String) : ManagerUiEvent
-    data class ShareModExport(val artifactId: String) : ManagerUiEvent
+    data class ShareModExport(val artifactId: String, val fileName: String) : ManagerUiEvent
     data class OpenExternalUrl(val url: String) : ManagerUiEvent
 }
 
@@ -326,7 +326,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                     }
                     ModExportAction.Share -> {
                         mutableState.value = mutableState.value.copy(modExport = mutableState.value.modExport.copy(operation = ModExportOperation.Sharing(artifact.id, safeName)))
-                        if (uiEventChannel.trySend(ManagerUiEvent.ShareModExport(artifact.id)).isFailure) {
+                        if (uiEventChannel.trySend(ManagerUiEvent.ShareModExport(artifact.id, safeName)).isFailure) {
                             artifact.file.delete()
                             mutableState.value = mutableState.value.copy(modExport = mutableState.value.modExport.copy(operation = ModExportOperation.Idle), feedback = FeedbackMessage("无法打开分享面板。", true))
                         }
