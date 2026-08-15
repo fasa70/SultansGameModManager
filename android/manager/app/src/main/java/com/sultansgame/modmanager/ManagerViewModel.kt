@@ -342,12 +342,17 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    private fun modExportArtifactFile(artifactId: String): File =
+        File(modExportRoot, artifactId).listFiles()?.singleOrNull { it.isFile && it.name.endsWith(".zip", ignoreCase = true) }
+            ?: File(modExportRoot, "$artifactId.zip")
+
     fun writeModExport(artifactId: String, uri: Uri?) {
         val operation = mutableState.value.modExport.operation
         if (operation !is ModExportOperation.SelectingDestination || operation.artifactId != artifactId) return
-        val artifact = File(modExportRoot, "$artifactId.zip")
+        val artifact = modExportArtifactFile(artifactId)
         if (uri == null) {
             artifact.delete()
+            artifact.parentFile?.takeIf { it.name == artifactId }?.deleteRecursively()
             mutableState.value = mutableState.value.copy(modExport = mutableState.value.modExport.copy(operation = ModExportOperation.Idle))
             return
         }
@@ -371,10 +376,10 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                         }
                     } ?: error("无法打开目标文件。")
                 }
-                artifact.delete()
+                artifact.parentFile?.takeIf { it.name == artifactId }?.deleteRecursively() ?: artifact.delete()
                 mutableState.value = mutableState.value.copy(modExport = mutableState.value.modExport.copy(operation = ModExportOperation.Idle), feedback = FeedbackMessage("已导出 Mod ZIP。"))
             } catch (error: Throwable) {
-                artifact.delete()
+                artifact.parentFile?.takeIf { it.name == artifactId }?.deleteRecursively() ?: artifact.delete()
                 mutableState.value = mutableState.value.copy(modExport = mutableState.value.modExport.copy(operation = ModExportOperation.Idle), feedback = FeedbackMessage("保存 Mod ZIP 失败：${error.message ?: "目标文件可能不完整"}", true))
             }
         }
@@ -388,7 +393,8 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun failModExportShare(artifactId: String, reason: String) {
-        File(modExportRoot, "$artifactId.zip").delete()
+        modExportArtifactFile(artifactId).delete()
+        File(modExportRoot, artifactId).deleteRecursively()
         val operation = mutableState.value.modExport.operation
         if (operation is ModExportOperation.Sharing && operation.artifactId == artifactId) {
             mutableState.value = mutableState.value.copy(modExport = mutableState.value.modExport.copy(operation = ModExportOperation.Idle), feedback = FeedbackMessage(reason, true))
