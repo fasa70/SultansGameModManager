@@ -30,6 +30,13 @@ sealed interface CachedModDeletionResult {
     data class Failed(val reason: String) : CachedModDeletionResult
 }
 
+sealed interface CachedModRenameResult {
+    data class Renamed(val displayName: String) : CachedModRenameResult
+    data object NotFound : CachedModRenameResult
+    data class Rejected(val reason: String) : CachedModRenameResult
+    data class Failed(val reason: String) : CachedModRenameResult
+}
+
 class AndroidPrivateModCache(
     private val cacheRoot: File,
     private val budget: StorageBudget = StorageBudget.UNBOUNDED,
@@ -95,6 +102,28 @@ class AndroidPrivateModCache(
         }
     }
 
+    fun renameDisplayName(cacheKey: String, rawName: String): CachedModRenameResult {
+        if (!cacheKey.matches(CACHE_KEY_REGEX)) return CachedModRenameResult.Rejected("Mod 缓存标识无效。")
+        val displayName = ModDisplayNamePolicy.normalize(rawName)
+            ?: return CachedModRenameResult.Rejected("Mod 显示名称不能为空。")
+        if (cacheRoot.exists() && isSymbolicLink(cacheRoot)) {
+            return CachedModRenameResult.Rejected("私有缓存目录不可安全访问。")
+        }
+        val target = File(cacheRoot, cacheKey)
+        if (!target.exists()) return CachedModRenameResult.NotFound
+        if (!target.isDirectory || isSymbolicLink(target)) {
+            return CachedModRenameResult.Rejected("Mod 缓存目录不可安全访问。")
+        }
+        if (containsSymbolicLink(target)) return CachedModRenameResult.Rejected("Mod 缓存包含不安全链接。")
+        return try {
+            saveDisplayName(cacheKey, displayName)
+            CachedModRenameResult.Renamed(displayName)
+        } catch (_: SecurityException) {
+            CachedModRenameResult.Failed("没有保存 Mod 显示名称的权限。")
+        } catch (error: Exception) {
+            CachedModRenameResult.Failed(error.message ?: "无法保存 Mod 显示名称。")
+        }
+    }
     fun recoverInterruptedImports() {
         cacheRoot.listFiles()?.filter { it.name.startsWith('.') && it.name.endsWith(".partial") }?.forEach(File::deleteRecursively)
     }

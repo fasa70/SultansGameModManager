@@ -118,6 +118,7 @@ class MainActivity : ComponentActivity() {
                         launchGameForModSync = viewModel::launchGameForModSync,
                         setModSyncedToGame = viewModel::setModSyncedToGame,
                         deleteCachedMod = viewModel::deleteCachedMod,
+                        renameCachedMod = viewModel::renameCachedMod,
                         clearModCache = viewModel::clearModCache,
                         openMerge = viewModel::openMerge,
                         closeMerge = viewModel::closeMerge,

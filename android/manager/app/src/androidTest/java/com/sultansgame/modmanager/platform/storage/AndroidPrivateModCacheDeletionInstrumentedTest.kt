@@ -18,6 +18,53 @@ class AndroidPrivateModCacheDeletionInstrumentedTest {
     private val context = ApplicationProvider.getApplicationContext<Context>()
 
     @Test
+    fun renamesDisplayNameWithoutChangingCachedDirectory() {
+        val cacheRoot = File(context.filesDir, "mod-rename-cache-${UUID.randomUUID()}")
+        val cacheKey = "c".repeat(64)
+        val target = File(cacheRoot, cacheKey)
+        try {
+            assertTrue(target.mkdirs())
+            val content = "{\"name\":\"Original\"}"
+            File(target, "info.json").writeText(content)
+            val beforePath = target.absolutePath
+            val beforeContent = File(target, "info.json").readBytes()
+
+            val result = AndroidPrivateModCache(cacheRoot, context)
+                .renameDisplayName(cacheKey, "  Renamed   Mod  ")
+
+            assertEquals(CachedModRenameResult.Renamed("Renamed Mod"), result)
+            assertEquals(beforePath, target.absolutePath)
+            assertEquals(beforeContent.toList(), File(target, "info.json").readBytes().toList())
+            assertEquals("Renamed Mod", AndroidPrivateModCache(cacheRoot, context).listCached().single().displayName)
+        } finally {
+            AndroidPrivateModCache(cacheRoot, context).deleteCached(cacheKey)
+            cacheRoot.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun rejectsBlankDisplayNameAndMissingCachedMod() {
+        val cacheRoot = File(context.filesDir, "mod-rename-cache-${UUID.randomUUID()}")
+        val cacheKey = "d".repeat(64)
+        try {
+            assertEquals(
+                CachedModRenameResult.Rejected("Mod 显示名称不能为空。"),
+                AndroidPrivateModCache(cacheRoot, context).renameDisplayName(cacheKey, "   "),
+            )
+            assertFalse(cacheRoot.exists())
+
+            assertTrue(File(cacheRoot, cacheKey).mkdirs())
+            File(File(cacheRoot, cacheKey), "info.json").writeText("{\"name\":\"Original\"}")
+            val missing = "e".repeat(64)
+            assertEquals(
+                CachedModRenameResult.NotFound,
+                AndroidPrivateModCache(cacheRoot, context).renameDisplayName(missing, "New name"),
+            )
+        } finally {
+            cacheRoot.deleteRecursively()
+        }
+    }
+    @Test
     fun deletesOnlyRequestedCachedMod() {
         val cacheRoot = File(context.filesDir, "mod-delete-cache-${UUID.randomUUID()}")
         val cache = AndroidPrivateModCache(cacheRoot, context)

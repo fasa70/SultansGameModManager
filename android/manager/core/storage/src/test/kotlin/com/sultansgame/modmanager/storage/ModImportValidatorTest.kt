@@ -70,6 +70,14 @@ class ModImportValidatorTest {
     }
 
     @Test
+    fun `normalizes display names for manager labels`() {
+        assertEquals("Renamed Mod", ModDisplayNamePolicy.normalize("  Renamed   Mod  "))
+        assertEquals("Name", ModDisplayNamePolicy.normalize("N" + 0.toChar() + "a" + 0.toChar() + "m" + 0.toChar() + "e"))
+        assertEquals("a".repeat(128), ModDisplayNamePolicy.normalize("a".repeat(129)))
+        assertEquals(null, ModDisplayNamePolicy.normalize(" " + 0.toChar() + " \t"))
+    }
+
+    @Test
     fun `cache deduplicates identical validated content`() {
         val source = temporaryFolder.newFolder("source").toPath()
         source.resolve("info.json").writeText("invalid")
