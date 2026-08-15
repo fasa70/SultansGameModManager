@@ -192,17 +192,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun shareModExport(artifactId: String, fileName: String) {
-        val artifact = File(cacheDir, "mod-export/$artifactId.zip")
+        val artifact = File(cacheDir, "mod-export/$artifactId/$fileName").takeIf { it.isFile }
+            ?: File(cacheDir, "mod-export/$artifactId.zip")
         if (!artifact.isFile) {
             viewModel.failModExportShare(artifactId, "找不到待分享的 Mod ZIP。")
             return
         }
-        val shareFile = File(artifact.parentFile, fileName)
         try {
-            if (shareFile.absoluteFile.normalize() != artifact.absoluteFile.normalize() && !artifact.renameTo(shareFile)) {
-                error("无法准备分享文件名")
-            }
-            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", shareFile)
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", artifact)
             val send = Intent(Intent.ACTION_SEND).apply {
                 type = "application/zip"
                 putExtra(Intent.EXTRA_STREAM, uri)
@@ -214,9 +211,6 @@ class MainActivity : ComponentActivity() {
         } catch (_: android.content.ActivityNotFoundException) {
             viewModel.failModExportShare(artifactId, "没有可用的分享应用。")
         } catch (error: Throwable) {
-            if (shareFile.absoluteFile.normalize() != artifact.absoluteFile.normalize() && shareFile.isFile) {
-                shareFile.renameTo(artifact)
-            }
             viewModel.failModExportShare(artifactId, "无法安全分享 Mod ZIP：${error.message ?: "路径无效"}")
         }
     }
