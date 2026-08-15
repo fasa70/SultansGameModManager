@@ -157,6 +157,17 @@ class WorkshopTaskStore(context: Context) {
         return dao.failImport(id, DownloadFailureCode.ImportFailed.name, now()) == 1
     }
 
+    suspend fun reset(): List<DownloadTask> {
+        initialization.await()
+        val tasks = dao.getAllForReset().mapNotNull(WorkshopDownloadTaskEntity::toModel)
+        dao.removeAllUnlessImporting()
+        applicationContext.getSharedPreferences(LEGACY_PREFERENCES_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .clear()
+            .commit()
+        return tasks.filter { it.stage == DownloadStage.Importing }
+    }
+
     /** Resets only safely resumable task states after process death. */
     suspend fun recoverInterruptedTasks(): List<DownloadTask> {
         initialization.await()

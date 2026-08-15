@@ -50,6 +50,13 @@ class WorkshopArtifactImporter(
         stagingDirectory(task.id)?.deleteRecursively()
     }
 
+    fun clearStagingExcept(preservedTaskIds: Set<String>) {
+        val root = File(context.filesDir, "workshop-staging").canonicalFile
+        root.listFiles().orEmpty().forEach { entry ->
+            if (entry.name.matches(UUID_REGEX) && entry.name !in preservedTaskIds) entry.deleteRecursively()
+        }
+    }
+
     private fun stagingDirectory(taskId: String): File? = runCatching {
         UUID.fromString(taskId)
         val root = File(context.filesDir, "workshop-staging").canonicalFile
@@ -58,11 +65,13 @@ class WorkshopArtifactImporter(
     }.getOrNull()
 
     private fun isZip(file: File): Boolean = runCatching {
-        file.inputStream().use { input ->
-            input.read() == 'P'.code && input.read() == 'K'.code
-        }
+        file.inputStream().use { input -> input.read() == 'P'.code && input.read() == 'K'.code }
     }.getOrDefault(false)
 
     private fun hasManifest(directory: File): Boolean = directory.listFiles()
         ?.count { it.isFile && it.name.equals("info.json", ignoreCase = true) } == 1
+
+    private companion object {
+        val UUID_REGEX = Regex("[0-9a-fA-F-]{36}")
+    }
 }

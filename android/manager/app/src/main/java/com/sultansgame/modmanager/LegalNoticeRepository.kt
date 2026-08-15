@@ -21,4 +21,8 @@ class LegalNoticeRepository(private val context: Context) {
         context.legalNoticeDataStore.edit { it[acceptedVersion] = LEGAL_NOTICE_VERSION }
     }
 
+    suspend fun reset() {
+        context.legalNoticeDataStore.edit { it.clear() }
+    }
+
 }

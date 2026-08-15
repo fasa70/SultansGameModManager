@@ -236,8 +236,15 @@ interface WorkshopDownloadTaskDao {
     """)
     suspend fun invalidateArtifact(id: String, updatedAtEpochMillis: Long): Int
 
+    @Query("SELECT * FROM workshop_download_tasks")
+    suspend fun getAllForReset(): List<WorkshopDownloadTaskEntity>
+
+    @Query("DELETE FROM workshop_download_tasks WHERE stage != 'Importing'")
+    suspend fun removeAllUnlessImporting(): Int
+
     @Query("DELETE FROM workshop_download_tasks WHERE id = :id AND stage != 'Importing'")
     suspend fun removeUnlessImporting(id: String): Int
+
 
     @Transaction
     suspend fun takeAndRemoveUnlessImporting(id: String): WorkshopDownloadTaskEntity? {

@@ -65,6 +65,16 @@ class ExternalZipInbox(
         fileFor(request).delete()
     }
 
+    fun clear() {
+        val root = inboxRoot()
+        root.listFiles().orEmpty().forEach { entry ->
+            if (entry.name.matches(REQUEST_FILE_REGEX) || entry.name.matches(PARTIAL_FILE_REGEX)) {
+                entry.delete()
+            }
+        }
+    }
+
+
     fun recoverInterruptedReceipts() {
         inboxRoot().listFiles()
             ?.filter { it.name.startsWith('.') && it.name.endsWith(".partial") }
@@ -113,5 +123,7 @@ class ExternalZipInbox(
     private companion object {
         const val INBOX_DIRECTORY = "external-zip-inbox"
         val REQUEST_ID_REGEX = Regex("[0-9a-f-]{36}")
+        val REQUEST_FILE_REGEX = Regex("[0-9a-f-]{36}\\.zip")
+        val PARTIAL_FILE_REGEX = Regex("\\.[0-9a-f-]{36}\\.partial")
     }
 }

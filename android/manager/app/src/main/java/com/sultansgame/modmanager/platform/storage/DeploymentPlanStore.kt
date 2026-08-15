@@ -49,6 +49,11 @@ class DeploymentPlanStore(context: Context) {
         enqueue(PendingGameModSyncOperation(cacheKey, GameModSyncOperationType.Remove))
     }
 
+    fun reset() {
+        preferences.edit().clear().commit()
+        legacyPreferences.edit().clear().commit()
+    }
+
     fun pendingOperations(): List<PendingGameModSyncOperation> = preferences
         .getString(KEY_PENDING, "")
         .orEmpty()

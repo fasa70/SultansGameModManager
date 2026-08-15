@@ -69,6 +69,40 @@ class AndroidPrivateModCache(
         }
     }
 
+    fun resetPreservingMods(): List<String> {
+        if (cacheRoot.exists() && isSymbolicLink(cacheRoot)) return listOf("mod-cache")
+        if (!cacheRoot.isDirectory) {
+            namePreferences?.edit()?.clear()?.commit()
+            return emptyList()
+        }
+        val failures = mutableListOf<String>()
+        val retainedKeys = mutableSetOf<String>()
+        cacheRoot.listFiles().orEmpty().forEach { entry ->
+            val isValidMod = entry.isDirectory &&
+                !isSymbolicLink(entry) &&
+                entry.name.matches(CACHE_KEY_REGEX) &&
+                runCatching { validate(entry, entry.name).digest == entry.name }.getOrDefault(false)
+            if (isValidMod) {
+                retainedKeys += entry.name
+            } else {
+                val deleted = runCatching {
+                    if (entry.isDirectory && !isSymbolicLink(entry)) {
+                        deleteRecursivelyWithoutLinks(entry)
+                    } else {
+                        !entry.exists() || entry.delete()
+                    }
+                }.getOrDefault(false)
+                if (!deleted || entry.exists()) failures += entry.name
+            }
+        }
+        namePreferences?.let { preferences ->
+            val editor = preferences.edit()
+            preferences.all.keys.filterNot(retainedKeys::contains).forEach(editor::remove)
+            if (!editor.commit()) failures += NAME_PREFERENCES
+        }
+        return failures
+    }
+
     fun clear() {
         cacheRoot.deleteRecursively()
         namePreferences?.edit()?.clear()?.apply()
