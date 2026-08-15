@@ -1,5 +1,7 @@
 package com.sultansgame.modmanager.ui
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
@@ -169,13 +171,6 @@ data class ManagerActions(
     val submitZipPassword: (CharArray) -> Unit,
     val cancelExternalZipImport: () -> Unit,
 )
-
-private enum class Destination(val title: String, val caption: String) {
-    Start("开始", "准备游戏"),
-    Acquire("创意工坊", "浏览与添加"),
-    Library("管理Mod", "同步mod列表"),
-    Settings("设置", "帮助与存储"),
-}
 
 private sealed interface DialogKind {
     data object Notice : DialogKind
@@ -825,7 +820,7 @@ private fun MyModsScreen(state: ManagerUiState, actions: ManagerActions, wide: B
         }
         item {
             PrimaryButton(
-                "导出或分享 Mod",
+                "导出/分享 Mod",
                 enabled = state.cachedMods.isNotEmpty() &&
                     !state.gameModSyncInProgress &&
                     !state.cachedModDeletionInProgress &&
@@ -935,7 +930,7 @@ private fun ModExportScreen(state: ManagerUiState, actions: ManagerActions, wide
         if (filtered != export.selectedCacheKeys) actions.setModExportSelection(filtered)
     }
     ScreenList(wide) {
-        item { HeroPanel("导出或分享", "选择 Mod", "选择一个或多个 Mod，ZIP 中每个 Mod 会保留独立的顶层目录。", "返回管理 Mod", !busy, actions.closeModExport) }
+        item { HeroPanel("导出/分享", "选择 Mod", "选择一个或多个 Mod，ZIP 中每个 Mod 会保留独立的顶层目录。", "返回管理 Mod", !busy, actions.closeModExport) }
         item { SectionLabel("已选择 Mod", "${selected.size} / ${state.cachedMods.size}") }
         item { SecondaryButton(if (allSelected) "取消全选" else "一键全选", !busy && state.cachedMods.isNotEmpty(), actions.selectAllModExport) }
         items(state.cachedMods, key = { "export-${it.cacheKey}" }) { mod ->
@@ -1161,8 +1156,7 @@ private fun MergeHeroPanel(onBack: () -> Unit) {
             Text("合并 Mod", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
             Text("生成合成 Mod", fontSize = 24.sp, fontWeight = FontWeight.Bold)
             Text(
-                "选择并排序 Mod。列表底部优先级最高；结果会作为普通 Mod 加入 Manager。
-" +
+                "选择并排序 Mod。列表底部优先级最高；结果会作为普通 Mod 加入 Manager。\n" +
                     "合并mod功能参考复用了 @fentender 老师开发的mod合并管理器，但因安卓版无法提取游戏JSON，实际合并结果可能与上游工具有出入。如果有能力，请点击链接去给这位老师的仓库点亮颗star！",
                 fontSize = 14.sp,
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
