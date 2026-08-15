@@ -62,6 +62,7 @@ data class ManagerUiState(
     val apksExport: ApksExportUiState = ApksExportUiState.Idle,
     val noticeAccepted: Boolean? = null,
     val autoUpdateCheckEnabled: Boolean? = null,
+    val showWorkshop: Boolean? = null,
     val availableUpdate: AvailableUpdate? = null,
     val pendingExternalZip: ExternalZipImportRequest? = null,
     val pendingZipPassword: Boolean = false,

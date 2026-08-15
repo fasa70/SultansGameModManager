@@ -1,7 +1,5 @@
 package com.sultansgame.modmanager.ui
 
-import android.content.Intent
-import android.net.Uri
 import android.os.Build
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
@@ -83,6 +81,7 @@ import com.sultansgame.modmanager.ManagerUiState
 import com.sultansgame.modmanager.MergePreflightState
 import com.sultansgame.modmanager.PatchUiState
 import com.sultansgame.modmanager.PreparedPatchRecovery
+import com.sultansgame.modmanager.WORKSHOP_NATIVE_URL
 import com.sultansgame.modmanager.WorkshopUiState
 import com.sultansgame.modmanager.model.Compatibility
 import com.sultansgame.modmanager.model.DeviceSigningKeyState
@@ -153,6 +152,8 @@ data class ManagerActions(
     val stopOriginalSync: () -> Unit = {},
     val acceptNotice: () -> Unit,
     val setAutoUpdateCheckEnabled: (Boolean) -> Unit,
+    val setWorkshopEnabled: (Boolean) -> Unit,
+    val openWorkshopNative: () -> Unit,
     val dismissAvailableUpdate: () -> Unit,
     val openAvailableUpdate: () -> Unit,
     val clearFeedback: () -> Unit,
@@ -186,10 +187,13 @@ private sealed interface DialogKind {
 
 @Composable
 fun ManagerApp(state: ManagerUiState, actions: ManagerActions) {
-    var destinationIndex by rememberSaveable { mutableIntStateOf(Destination.Start.ordinal) }
+    var selectedRoute by rememberSaveable { mutableStateOf(Destination.Start.name) }
     var dialog by remember { mutableStateOf<DialogKind?>(null) }
     var promptedDeviceInstallTransaction by remember { mutableStateOf<String?>(null) }
-    val destination = Destination.entries[destinationIndex]
+    val showWorkshop = state.showWorkshop == true
+    val destinations = remember(showWorkshop) { visibleDestinations(showWorkshop) }
+    val destination = effectiveDestination(destinationFromRoute(selectedRoute), showWorkshop)
+    LaunchedEffect(destination) { if (selectedRoute != destination.name) selectedRoute = destination.name }
 
     val readyToInstall = state.patch as? PatchUiState.ReadyToInstall
     val deviceInstallWarning = remember {
@@ -228,14 +232,14 @@ fun ManagerApp(state: ManagerUiState, actions: ManagerActions) {
         val wide = maxWidth >= 700.dp
         if (wide) {
             Row(Modifier.fillMaxSize()) {
-                SideRail(destinationIndex) { destinationIndex = it }
+                SideRail(destinations, destination) { selectedRoute = it.name }
                 MainContent(
                     modifier = Modifier.weight(1f),
                     destination = destination,
                     state = state,
                     actions = actions,
                     wide = true,
-                    onSelectDestination = { destinationIndex = it },
+                    onSelectDestination = { selectedRoute = it.name },
                     onShowDialog = { dialog = it },
                 )
             }
@@ -248,10 +252,10 @@ fun ManagerApp(state: ManagerUiState, actions: ManagerActions) {
                     state = state,
                     actions = actions,
                     wide = false,
-                    onSelectDestination = { destinationIndex = it },
+                    onSelectDestination = { selectedRoute = it.name },
                     onShowDialog = { dialog = it },
                 )
-                BottomNavigation(destinationIndex) { destinationIndex = it }
+                BottomNavigation(destinations, destination) { selectedRoute = it.name }
             }
         }
         state.feedback?.let { FeedbackBanner(it, actions.clearFeedback, wide) }
@@ -277,26 +281,11 @@ fun ManagerApp(state: ManagerUiState, actions: ManagerActions) {
 }
 
 @Composable
-private fun SideRail(selectedIndex: Int, onSelect: (Int) -> Unit) {
-    Column(
-        Modifier.fillMaxHeight().width(276.dp).background(MiuixTheme.colorScheme.surfaceContainer)
-            .padding(horizontal = 18.dp, vertical = 24.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            BrandMark(44.dp)
-            Spacer(Modifier.width(12.dp))
-            Column {
-                Text("苏丹的游戏", fontSize = 17.sp, fontWeight = FontWeight.Bold)
-                Text("MOD MANAGER", fontSize = 10.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
-            }
-        }
-        Spacer(Modifier.height(28.dp))
-        Text("开始使用", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
-        Spacer(Modifier.height(8.dp))
-        Destination.entries.forEachIndexed { index, item ->
-            DestinationItem(item, selectedIndex == index) { onSelect(index) }
-            Spacer(Modifier.height(4.dp))
-        }
+private fun SideRail(destinations: List<Destination>, selected: Destination, onSelect: (Destination) -> Unit) {
+    Column(Modifier.fillMaxHeight().width(276.dp).background(MiuixTheme.colorScheme.surfaceContainer).padding(horizontal = 18.dp, vertical = 24.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) { BrandMark(44.dp); Spacer(Modifier.width(12.dp)); Column { Text("苏丹的游戏", fontSize = 17.sp, fontWeight = FontWeight.Bold); Text("MOD MANAGER", fontSize = 10.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary) } }
+        Spacer(Modifier.height(28.dp)); Text("开始使用", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MiuixTheme.colorScheme.onSurfaceVariantSummary); Spacer(Modifier.height(8.dp))
+        destinations.forEach { destination -> DestinationItem(destination, selected == destination) { onSelect(destination) }; Spacer(Modifier.height(4.dp)) }
         Spacer(Modifier.weight(1f))
     }
 }
@@ -339,21 +328,11 @@ private fun BrandMark(size: androidx.compose.ui.unit.Dp) {
 }
 
 @Composable
-private fun BottomNavigation(selectedIndex: Int, onSelect: (Int) -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 8.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Destination.entries.forEachIndexed { index, destination ->
-            val selected = selectedIndex == index
-            Column(
-                Modifier.weight(1f).clip(RoundedCornerShape(14.dp))
-                    .background(if (selected) MiuixTheme.colorScheme.primaryVariant else Color.Transparent)
-                    .clickable { onSelect(index) }.padding(vertical = 8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(destination.title, fontSize = 11.sp)
-            }
+private fun BottomNavigation(destinations: List<Destination>, selected: Destination, onSelect: (Destination) -> Unit) {
+    Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 8.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        destinations.forEach { destination ->
+            val isSelected = selected == destination
+            Column(Modifier.weight(1f).clip(RoundedCornerShape(14.dp)).background(if (isSelected) MiuixTheme.colorScheme.primaryVariant else Color.Transparent).clickable { onSelect(destination) }.padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) { Text(destination.title, fontSize = 11.sp) }
         }
     }
 }
@@ -365,7 +344,7 @@ private fun MainContent(
     state: ManagerUiState,
     actions: ManagerActions,
     wide: Boolean,
-    onSelectDestination: (Int) -> Unit,
+    onSelectDestination: (Destination) -> Unit,
     onShowDialog: (DialogKind) -> Unit,
 ) {
     Column(modifier) {
@@ -391,7 +370,7 @@ private fun ContentHeader(destination: Destination) {
 }
 
 @Composable
-private fun StartScreen(state: ManagerUiState, actions: ManagerActions, wide: Boolean, onSelectDestination: (Int) -> Unit) {
+private fun StartScreen(state: ManagerUiState, actions: ManagerActions, wide: Boolean, onSelectDestination: (Destination) -> Unit) {
     val presentation = startPresentation(state)
     ScreenList(wide) {
         item {
@@ -402,7 +381,7 @@ private fun StartScreen(state: ManagerUiState, actions: ManagerActions, wide: Bo
                 action = presentation.primaryLabel,
                 actionEnabled = presentation.primaryEnabled,
                 onAction = if (state.patch is PatchUiState.Completed) {
-                    { onSelectDestination(Destination.Acquire.ordinal) }
+                    { onSelectDestination(Destination.Library) }
                 } else {
                     presentation.primaryAction(actions)
                 },
@@ -456,25 +435,14 @@ private fun StartScreen(state: ManagerUiState, actions: ManagerActions, wide: Bo
             )
         }
         item { DiagnosticPanel("诊断信息", presentation.diagnostics) }
-        item { GitHubStarLink() }
+        item { GitHubStarLink(actions.openWorkshopNative) }
     }
 }
 
 @Composable
-private fun GitHubStarLink() {
-    val context = LocalContext.current
-    Text(
-        "如果喜欢，记得点这里给我的仓库点亮一颗 ⭐～",
-        fontSize = 13.sp,
-        color = MiuixTheme.colorScheme.primary,
-        textAlign = TextAlign.Center,
-        modifier = Modifier.fillMaxWidth().clickable {
-            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(GITHUB_REPOSITORY_URL)))
-        }.padding(vertical = 8.dp),
-    )
+private fun GitHubStarLink(onClick: () -> Unit) {
+    Text("如果喜欢，记得点这里给我的仓库点亮一颗 ⭐～", fontSize = 13.sp, color = MiuixTheme.colorScheme.primary, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp))
 }
-
-private const val GITHUB_REPOSITORY_URL = "https://github.com/fasa70/SultansGameModManager"
 
 @Composable
 private fun StartOperationStatusPanel(patch: PatchUiState) {
@@ -618,9 +586,7 @@ private fun AcquireModsScreen(state: ManagerUiState, actions: ManagerActions, wi
     val submitSearch = { actions.browseWorkshop(state.workshopBrowse.query.copy(searchText = query, page = 1).normalized()) }
     ScreenList(wide) {
         item { NoticeStrip("创意工坊浏览模式", "因登录与下载功能不稳定，现已将相关功能隐藏，只开放浏览访问功能。") }
-        item {
-            HeroPanel("获取 Mod", "创意工坊", "浏览创意工坊；如需添加 Mod，请从本地导入。", action = "点这里也可以从本地添加 Mod", onAction = actions.importMod)
-        }
+        item { WorkshopIntroPanel(actions) }
         item {
             Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(18.dp)) {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -904,6 +870,12 @@ private fun SettingsScreen(state: ManagerUiState, actions: ManagerActions, wide:
         item { HeroPanel("", "设置", "") }
         item { SectionLabel("存储", "${state.cachedMods.size} 个 Mod") }
         item { ListPanel("清理本地 Mod ", "存储空间管理", "管理") { onShowDialog(DialogKind.ClearCache) } }
+        item { SectionLabel("创意工坊", "可选") }
+        item {
+            val enabled = state.showWorkshop
+            ConfirmationCheckbox("开启创意工坊", enabled == true, enabled != null) { actions.setWorkshopEnabled(it) }
+            Text(if (enabled == null) "正在读取创意工坊显示设置…" else "开启后，创意工坊会显示在导航栏中；默认关闭。", fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+        }
         item { SectionLabel("应用更新", "GitHub") }
         item {
             val enabled = state.autoUpdateCheckEnabled
@@ -1267,6 +1239,20 @@ private fun SectionLabel(title: String, trailing: String) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(title, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
         StatusPill(trailing)
+    }
+}
+
+@Composable
+private fun WorkshopIntroPanel(actions: ManagerActions) {
+    Card(Modifier.fillMaxWidth(), colors = CardDefaults.defaultColors(color = MiuixTheme.colorScheme.primaryContainer), insideMargin = PaddingValues(22.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            Text("获取 Mod", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+            Text("创意工坊", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            Text("浏览创意工坊；如需添加 Mod，请从本地导入。", fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+            Text("创意工坊功能主要参考借鉴了 @cjtestuse 老师的项目。如果有能力，请点击链接给这位老师的仓库点亮颗star！", fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+            Text(WORKSHOP_NATIVE_URL, fontSize = 14.sp, color = MiuixTheme.colorScheme.primary, modifier = Modifier.clickable(onClick = actions.openWorkshopNative))
+            PrimaryButton("点这里也可以从本地添加 Mod", onClick = actions.importMod)
+        }
     }
 }
 

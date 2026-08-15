@@ -24,7 +24,7 @@ Windows 版《苏丹的游戏》提供官方 Mod 支持，而 Android 版没有�
 
 - 从已安装游戏，或本地 APK / APKS 文件导入受支持的游戏安装包并准备修补。
 - 导入 ZIP Mod；一个 ZIP 可包含一个或多个 Mod。
-- 浏览 Steam 创意工坊公开内容、查看详情并管理下载队列；需要时可登录 Steam 并完成 Steam Guard 验证。
+- 从本地 ZIP 导入 Mod；按需在设置中开启创意工坊，浏览 Steam 公开内容、搜索/筛选条目并查看详情。
 - 将校验通过的 Mod 同步到已修补游戏的 Mod 目录；加载、热开关和排序由游戏内官方 Mod 面板负责。
 - 管理器提供基于 MIT 许可上游 Mod 合并器的入口。由于 Android 版本限制无法提取游戏 Info，合并结果可能与上游项目有出入。
 - 当前只会继续处理通过应用内兼容性检测的游戏版本；不匹配的安装包会被拒绝，而不会尝试修补。
@@ -49,9 +49,7 @@ Windows 版《苏丹的游戏》提供官方 Mod 支持，而 Android 版没有�
 
 #### 2. 获取 Mod
 
-你可以从本地选择 ZIP 导入 Mod，也可以在“创意工坊”中浏览公开内容、搜索和筛选条目、查看详情并加入下载队列。下载任务支持暂停、继续、重试和删除；下载完成后，按应用提示检查并添加到本地 Mod 列表。
-
-部分创意工坊内容的下载需要 Steam 登录。应用会在界面中处理 Steam Guard 验证；是否可下载仍取决于 Steam 和内容本身的访问条件。
+创意工坊默认不显示；如需使用，可在设置中开启。当前页面仅提供 Steam 创意工坊公开内容的浏览、搜索、筛选和详情查看；如需添加 Mod，请从本地选择 ZIP 文件导入。
 
 #### 3. 管理并同步 Mod
 
@@ -184,7 +182,7 @@ The Windows version of *Sultan's Game* has official Mod support, while the Andro
 
 - Import a supported game installation from the installed game, or from local APK / APKS files, then prepare it for patching.
 - Import ZIP Mods; one ZIP may contain one or more Mods.
-- Browse public Steam Workshop content, view details, and manage download tasks. Steam sign-in and Steam Guard are available when required.
+- Import Mods from local ZIP files. When enabled in Settings, browse, search, filter, and view public Steam Workshop content.
 - Synchronize validated Mods to the patched game's Mod directory; the in-game official Mod panel controls loading, hot toggles, and order.
 - The Manager provides a simple entry point for the MIT-licensed upstream Mod merger. Android cannot extract the game's original JSON, so the result may differ from the upstream project。
 - The app proceeds only with game versions that pass its in-app compatibility check. Mismatched packages are rejected rather than patched.
@@ -209,9 +207,7 @@ A prepared but unfinished installation can be resumed the next time the app open
 
 #### 2. Get Mods
 
-Import Mods from local ZIP files, or use the **Workshop** page to browse public content, search and filter items, view details, and add them to the download queue. Tasks can be paused, resumed, retried, or removed. After a download completes, follow the app prompt to inspect and add it to the local Mod list.
-
-Some Workshop downloads require Steam sign-in. Steam Guard is handled in the app; whether an item can be downloaded still depends on Steam and the content's own access conditions.
+The Workshop page is hidden by default. Enable it in Settings when needed. It currently only provides browsing, searching, filtering, and details for public Steam Workshop content; to add a Mod, import a local ZIP file.
 
 #### 3. Manage and synchronize Mods
 
