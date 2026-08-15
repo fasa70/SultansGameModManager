@@ -90,6 +90,21 @@ internal class PatchTransactionStore {
         return PatchWorkspaceCleanupResult.Deleted(deleted, releasedBytes)
     }
 
+    fun sessionIds(): List<Int> = root.listFiles()
+        .orEmpty()
+        .filter(File::isDirectory)
+        .mapNotNull { read(it.name)?.sessionId }
+
+    fun resetAll(): List<String> {
+        if (!root.exists()) return emptyList()
+        val failures = mutableListOf<String>()
+        root.listFiles().orEmpty().filter(File::isDirectory).forEach { directory ->
+            val deleted = runCatching { directory.deleteRecursively() }.getOrDefault(false)
+            if (!deleted || directory.exists()) failures += directory.name
+        }
+        return failures
+    }
+
     fun latestAwaitingGameUninstall(): PatchTransaction? = latestResumable()
         ?.takeIf { it.stage == PatchStage.AwaitingGameUninstall }
 

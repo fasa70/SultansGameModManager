@@ -935,7 +935,7 @@ private fun DialogHost(state: ManagerUiState, actions: ManagerActions, dialog: D
         DialogKind.ClearCache -> ConfirmDialog("清理本地 Mod？", "这会删除管理器所有已添加的 Mod，并安排从游戏 Mod 目录中移除对应内容。", "确认清理", { actions.clearModCache(); onDismiss() }, onDismiss)
         DialogKind.ResetManagerState -> ConfirmDialog(
             "重置管理器状态？",
-            "这会清除导入记录、临时文件、下载任务、登录信息和管理器设置，但会保留已缓存的 Mod 与设备签名密钥；不会卸载、还原或修改已安装的游戏及游戏侧已有 Mod。",
+            "这会清除导入记录、临时文件、下载任务、登录信息和管理器设置，并取消管理器记录的未完成安装事务；会保留已缓存的 Mod 与设备签名密钥。不会卸载或直接修改当前已安装的游戏，未完成的修补安装也不会继续由管理器恢复。",
             "确认重置",
             { actions.resetManagerState(); onDismiss() },
             onDismiss,
