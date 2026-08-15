@@ -23,6 +23,22 @@ data class AndroidValidatedMod(
     val sizeBytes: Long,
 )
 
+data class AndroidModExportFile(
+    val relativePath: String,
+    val file: File,
+    val sizeBytes: Long,
+    val sha256: String,
+)
+
+data class AndroidModExportSnapshot(
+    val cacheKey: String,
+    val displayName: String,
+    val root: File,
+    val files: List<AndroidModExportFile>,
+    val sizeBytes: Long,
+    val contentDigestSha256: String,
+)
+
 sealed interface CachedModDeletionResult {
     data object Deleted : CachedModDeletionResult
     data object NotFound : CachedModDeletionResult
@@ -143,7 +159,75 @@ class AndroidPrivateModCache(
 
     private data class PendingImport(val validated: AndroidValidatedMod, val staging: File?)
 
-    fun validateDirectory(sourceRoot: File): AndroidValidatedMod = validateDirectory(sourceRoot, sourceRoot.name)
+    fun exportSnapshots(cacheKeys: List<String>): List<AndroidModExportSnapshot> {
+        val uniqueKeys = cacheKeys.distinct()
+        if (uniqueKeys.isEmpty()) throw ImportValidationException("至少选择一个 Mod。")
+        if (cacheRoot.exists() && isSymbolicLink(cacheRoot)) {
+            throw ImportValidationException("私有缓存目录不可安全访问。")
+        }
+        return uniqueKeys.map { cacheKey ->
+            if (!cacheKey.matches(CACHE_KEY_REGEX)) throw ImportValidationException("Mod 缓存标识无效。")
+            val root = File(cacheRoot, cacheKey)
+            if (!root.isDirectory || isSymbolicLink(root) || containsSymbolicLink(root)) {
+                throw ImportValidationException("Mod 缓存不可安全导出。")
+            }
+            val displayName = namePreferences?.getString(cacheKey, null)
+                ?: migrateLegacyDisplayName(root, cacheKey)
+            val validated = validate(root, displayName)
+            if (validated.digest != cacheKey) throw ImportValidationException("Mod 缓存内容校验失败。")
+            val files = collectExportFiles(root)
+            AndroidModExportSnapshot(
+                cacheKey = cacheKey,
+                displayName = displayName,
+                root = root,
+                files = files,
+                sizeBytes = validated.sizeBytes,
+                contentDigestSha256 = validated.digest,
+            )
+        }
+    }
+
+    fun verifyExportFile(snapshot: AndroidModExportSnapshot, entry: AndroidModExportFile) {
+        val file = File(snapshot.root, entry.relativePath)
+        if (file.absoluteFile.normalize() != entry.file.absoluteFile.normalize() ||
+            !file.isFile || isSymbolicLink(file) || file.length() != entry.sizeBytes ||
+            sha256(file) != entry.sha256
+        ) {
+            throw ImportValidationException("Mod 内容在导出期间发生变化。")
+        }
+    }
+
+    private fun collectExportFiles(root: File): List<AndroidModExportFile> {
+        val files = mutableListOf<AndroidModExportFile>()
+        fun scan(directory: File, prefix: String, depth: Int) {
+            if (depth > com.sultansgame.modmanager.model.MAXIMUM_MOD_PATH_DEPTH) {
+                throw ImportValidationException("目录深度超出限制")
+            }
+            directory.listFiles()?.sortedBy { it.name }?.forEach { entry ->
+                if (isSymbolicLink(entry) || ModPathPolicy.isUnsafeComponent(entry.name)) {
+                    throw ImportValidationException("包含不安全路径")
+                }
+                val relative = if (prefix.isEmpty()) entry.name else "$prefix/${entry.name}"
+                when {
+                    entry.isDirectory -> scan(entry, relative, depth + 1)
+                    entry.isFile -> {
+                        val size = entry.length()
+                        if (!ModPathPolicy.isSupportedSize(size, relative)) {
+                            throw ImportValidationException("文件大小超出限制")
+                        }
+                        files += AndroidModExportFile(relative, entry, size, sha256(entry))
+                        if (files.size > MAXIMUM_MOD_ENTRY_COUNT) {
+                            throw ImportValidationException("文件数量超出限制")
+                        }
+                    }
+                    else -> throw ImportValidationException("包含非普通文件")
+                }
+            } ?: throw ImportValidationException("无法读取导入目录")
+        }
+        scan(root, "", 0)
+        return files.sortedBy(AndroidModExportFile::relativePath)
+    }
+
 
     private fun validateDirectory(sourceRoot: File, displayName: String): AndroidValidatedMod {
         if (!sourceRoot.isDirectory || isSymbolicLink(sourceRoot)) throw ImportValidationException("Mod 根目录不可读")

@@ -39,6 +39,7 @@ import com.sultansgame.modmanager.platform.game.GameProbeResult
 import com.sultansgame.modmanager.platform.game.PackageManagerGameProbe
 import com.sultansgame.modmanager.platform.saf.ExternalZipInbox
 import com.sultansgame.modmanager.platform.saf.ZipModImporter
+import com.sultansgame.modmanager.platform.export.ModZipExporter
 import com.sultansgame.modmanager.platform.storage.AndroidPrivateModCache
 import com.sultansgame.modmanager.platform.storage.AndroidStorageSpaceProbe
 import com.sultansgame.modmanager.platform.storage.CachedModDeletionResult
@@ -74,6 +75,8 @@ sealed interface ManagerUiEvent {
     data class OpenUnknownSourcesSettings(val intent: android.content.Intent) : ManagerUiEvent
     data class ConfirmPackageInstall(val intent: android.content.Intent) : ManagerUiEvent
     data class CreateApksExport(val transactionId: String, val suggestedName: String) : ManagerUiEvent
+    data class CreateModExportDocument(val artifactId: String, val suggestedName: String) : ManagerUiEvent
+    data class ShareModExport(val artifactId: String) : ManagerUiEvent
     data class OpenExternalUrl(val url: String) : ManagerUiEvent
 }
 
@@ -119,6 +122,8 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     private val updateChecker: UpdateChecker = GitHubReleaseUpdateChecker()
     private val mergeBridge = com.sultansgame.modmanager.platform.merge.ChaquopyMergeBridge(application)
     private val mergeRoot = File(application.cacheDir, "mod-merge")
+    private val modExportRoot = File(application.cacheDir, "mod-export")
+    private val modZipExporter = ModZipExporter(privateModCache, modExportRoot)
     private val mergeCatalogLoad = loadMergeCatalog()
     private val mergeCatalog = mergeCatalogLoad.catalog
 
@@ -163,11 +168,13 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     private var workshopBrowseGeneration = 0L
     private var gameModSyncJob: Job? = null
     private var mergePreflightJob: Job? = null
+    private var modExportJob: Job? = null
     private var updateCheckJob: Job? = null
     private var updateCheckEnabled = false
 
     init {
         privateModCache.recoverInterruptedImports()
+        modZipExporter.cleanupInterrupted()
         externalZipInbox.recoverInterruptedReceipts()
         val cachedMods = privateModCache.listCached()
         val pendingPatch = transactions.latestPreparedForRecovery()
@@ -220,6 +227,179 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun openModExport() {
+        val current = mutableState.value
+        if (current.cachedMods.isEmpty() || current.gameModSyncInProgress || current.cachedModDeletionInProgress) return
+        mutableState.value = current.copy(
+            modExport = current.modExport.copy(
+                isOpen = true,
+                selectedCacheKeys = emptyList(),
+                settingsAction = null,
+                operation = ModExportOperation.Idle,
+            ),
+        )
+    }
+
+    fun closeModExport() {
+        if (modExportJob?.isActive == true) return
+        mutableState.value = mutableState.value.copy(modExport = mutableState.value.modExport.copy(isOpen = false, settingsAction = null))
+    }
+
+    fun toggleModExport(cacheKey: String) {
+        if (modExportJob?.isActive == true || cacheKey !in mutableState.value.cachedMods.map { it.cacheKey }) return
+        val current = mutableState.value.modExport.selectedCacheKeys
+        val next = if (cacheKey in current) current - cacheKey else current + cacheKey
+        mutableState.value = mutableState.value.copy(modExport = mutableState.value.modExport.copy(selectedCacheKeys = next))
+    }
+
+    fun setModExportSelection(cacheKeys: List<String>) {
+        if (modExportJob?.isActive == true) return
+        val valid = mutableState.value.cachedMods.map { it.cacheKey }.toSet()
+        mutableState.value = mutableState.value.copy(
+            modExport = mutableState.value.modExport.copy(selectedCacheKeys = cacheKeys.filter(valid::contains).distinct()),
+        )
+    }
+
+    fun selectAllModExport() {
+        if (modExportJob?.isActive == true) return
+        val keys = mutableState.value.cachedMods.map { it.cacheKey }
+        val selected = mutableState.value.modExport.selectedCacheKeys
+        val next = if (selected.size == keys.size && selected.toSet() == keys.toSet()) emptyList() else keys
+        mutableState.value = mutableState.value.copy(modExport = mutableState.value.modExport.copy(selectedCacheKeys = next))
+    }
+
+    fun requestModExport(action: ModExportAction) {
+        val current = mutableState.value
+        if (!current.modExport.isOpen || current.modExport.selectedCacheKeys.isEmpty() || modExportJob?.isActive == true) return
+        val suggested = if (current.modExport.selectedCacheKeys.size == 1) {
+            current.cachedMods.firstOrNull { it.cacheKey == current.modExport.selectedCacheKeys.single() }?.displayName
+                ?.let(::safeZipName) ?: "sultans-game-mods.zip"
+        } else "sultans-game-mods.zip"
+        mutableState.value = current.copy(modExport = current.modExport.copy(settingsAction = action, suggestedFileName = suggested))
+    }
+
+    fun cancelModExportSettings() {
+        mutableState.value = mutableState.value.copy(modExport = mutableState.value.modExport.copy(settingsAction = null))
+    }
+
+    fun submitModExport(fileName: String, password: CharArray) {
+        val current = mutableState.value
+        val action = current.modExport.settingsAction
+        if (action == null) {
+            password.fill('\u0000')
+            return
+        }
+        val safeName = safeZipName(fileName)
+        val keys = current.modExport.selectedCacheKeys
+        mutableState.value = current.copy(
+            modExport = current.modExport.copy(
+                settingsAction = null,
+                operation = ModExportOperation.Compressing(action, safeName, 0, 0, 0L, 0L),
+            ),
+        )
+        modExportJob?.cancel()
+        modExportJob = viewModelScope.launch {
+            try {
+                val artifact = withContext(Dispatchers.IO) {
+                    modZipExporter.export(keys, safeName, password) { progress ->
+                        mutableState.value = mutableState.value.copy(
+                            modExport = mutableState.value.modExport.copy(
+                                operation = ModExportOperation.Compressing(
+                                    action,
+                                    safeName,
+                                    progress.completedFiles,
+                                    progress.totalFiles,
+                                    progress.writtenBytes,
+                                    progress.totalBytes,
+                                ),
+                            ),
+                        )
+                    }
+                }
+                when (action) {
+                    ModExportAction.SaveToLocal -> {
+                        mutableState.value = mutableState.value.copy(modExport = mutableState.value.modExport.copy(operation = ModExportOperation.SelectingDestination(artifact.id, safeName)))
+                        if (uiEventChannel.trySend(ManagerUiEvent.CreateModExportDocument(artifact.id, safeName)).isFailure) {
+                            artifact.file.delete()
+                            mutableState.value = mutableState.value.copy(modExport = mutableState.value.modExport.copy(operation = ModExportOperation.Idle), feedback = FeedbackMessage("无法打开文件保存位置。", true))
+                        }
+                    }
+                    ModExportAction.Share -> {
+                        mutableState.value = mutableState.value.copy(modExport = mutableState.value.modExport.copy(operation = ModExportOperation.Sharing(artifact.id, safeName)))
+                        if (uiEventChannel.trySend(ManagerUiEvent.ShareModExport(artifact.id)).isFailure) {
+                            artifact.file.delete()
+                            mutableState.value = mutableState.value.copy(modExport = mutableState.value.modExport.copy(operation = ModExportOperation.Idle), feedback = FeedbackMessage("无法打开分享面板。", true))
+                        }
+                    }
+                }
+            } catch (_: CancellationException) {
+                mutableState.value = mutableState.value.copy(modExport = mutableState.value.modExport.copy(operation = ModExportOperation.Idle))
+            } catch (error: Throwable) {
+                mutableState.value = mutableState.value.copy(modExport = mutableState.value.modExport.copy(operation = ModExportOperation.Idle), feedback = FeedbackMessage("Mod 导出失败：${error.message ?: "无法生成 ZIP"}", true))
+            } finally {
+                password.fill('\u0000')
+            }
+        }
+    }
+
+    fun writeModExport(artifactId: String, uri: Uri?) {
+        val operation = mutableState.value.modExport.operation
+        if (operation !is ModExportOperation.SelectingDestination || operation.artifactId != artifactId) return
+        val artifact = File(modExportRoot, "$artifactId.zip")
+        if (uri == null) {
+            artifact.delete()
+            mutableState.value = mutableState.value.copy(modExport = mutableState.value.modExport.copy(operation = ModExportOperation.Idle))
+            return
+        }
+        val fileName = operation.fileName
+        val total = artifact.length()
+        mutableState.value = mutableState.value.copy(modExport = mutableState.value.modExport.copy(operation = ModExportOperation.Writing(artifactId, fileName, 0L, total)))
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    getApplication<Application>().contentResolver.openOutputStream(uri)?.use { output ->
+                        artifact.inputStream().use { input ->
+                            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                            var written = 0L
+                            while (true) {
+                                val count = input.read(buffer)
+                                if (count < 0) break
+                                output.write(buffer, 0, count)
+                                written += count
+                                mutableState.value = mutableState.value.copy(modExport = mutableState.value.modExport.copy(operation = ModExportOperation.Writing(artifactId, fileName, written, total)))
+                            }
+                        }
+                    } ?: error("无法打开目标文件。")
+                }
+                artifact.delete()
+                mutableState.value = mutableState.value.copy(modExport = mutableState.value.modExport.copy(operation = ModExportOperation.Idle), feedback = FeedbackMessage("已导出 Mod ZIP。"))
+            } catch (error: Throwable) {
+                artifact.delete()
+                mutableState.value = mutableState.value.copy(modExport = mutableState.value.modExport.copy(operation = ModExportOperation.Idle), feedback = FeedbackMessage("保存 Mod ZIP 失败：${error.message ?: "目标文件可能不完整"}", true))
+            }
+        }
+    }
+
+    fun finishModExportShare(artifactId: String) {
+        val operation = mutableState.value.modExport.operation
+        if (operation is ModExportOperation.Sharing && operation.artifactId == artifactId) {
+            mutableState.value = mutableState.value.copy(modExport = mutableState.value.modExport.copy(operation = ModExportOperation.Idle))
+        }
+    }
+
+    fun failModExportShare(artifactId: String, reason: String) {
+        File(modExportRoot, "$artifactId.zip").delete()
+        val operation = mutableState.value.modExport.operation
+        if (operation is ModExportOperation.Sharing && operation.artifactId == artifactId) {
+            mutableState.value = mutableState.value.copy(modExport = mutableState.value.modExport.copy(operation = ModExportOperation.Idle), feedback = FeedbackMessage(reason, true))
+        }
+    }
+
+    private fun safeZipName(value: String): String {
+        val cleaned = value.trim().filter { !it.isISOControl() && it != '/' && it != '\\' && it != '\u0000' }.trimEnd('.', ' ')
+        val base = cleaned.removeSuffix(".zip").removeSuffix(".ZIP").ifBlank { "sultans-game-mods" }
+        return "$base.zip"
+    }
     fun openMerge() {
         val catalog = mergeCatalog
         val runtimeVersion = (mutableState.value.gameProbeResult as? GameProbeResult.Found)

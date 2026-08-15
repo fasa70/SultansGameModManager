@@ -1,11 +1,14 @@
 package com.sultansgame.modmanager
 
+import android.content.ClipData
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import java.io.File
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -42,11 +45,15 @@ class MainActivity : ComponentActivity() {
     }
     private val confirmPackageInstall = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { }
     private var pendingApksExportTransactionId: String? = null
+    private var pendingModExportArtifactId: String? = null
     private val createApksDocument = registerForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
         pendingApksExportTransactionId?.let { transactionId -> viewModel.writePreparedApks(transactionId, uri) }
         pendingApksExportTransactionId = null
     }
-
+    private val createModExportDocument = registerForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        pendingModExportArtifactId?.let { artifactId -> viewModel.writeModExport(artifactId, uri) }
+        pendingModExportArtifactId = null
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         lifecycleScope.launch {
@@ -64,6 +71,11 @@ class MainActivity : ComponentActivity() {
                             pendingApksExportTransactionId = event.transactionId
                             createApksDocument.launch(event.suggestedName)
                         }
+                        is ManagerUiEvent.CreateModExportDocument -> {
+                            pendingModExportArtifactId = event.artifactId
+                            createModExportDocument.launch(event.suggestedName)
+                        }
+                        is ManagerUiEvent.ShareModExport -> shareModExport(event.artifactId)
                         is ManagerUiEvent.OpenExternalUrl -> {
                             try {
                                 startActivity(
@@ -127,6 +139,14 @@ class MainActivity : ComponentActivity() {
                         setMergeDisplayName = viewModel::setMergeDisplayName,
                         keepOriginalSync = viewModel::keepOriginalSync,
                         stopOriginalSync = viewModel::stopOriginalSync,
+                        openModExport = viewModel::openModExport,
+                        closeModExport = viewModel::closeModExport,
+                        toggleModExport = viewModel::toggleModExport,
+                        setModExportSelection = viewModel::setModExportSelection,
+                        selectAllModExport = viewModel::selectAllModExport,
+                        requestModExport = viewModel::requestModExport,
+                        submitModExport = viewModel::submitModExport,
+                        cancelModExportSettings = viewModel::cancelModExportSettings,
                         acceptNotice = viewModel::acceptLegalNotice,
                         setAutoUpdateCheckEnabled = viewModel::setAutoUpdateCheckEnabled,
                         dismissAvailableUpdate = viewModel::dismissAvailableUpdate,
@@ -163,6 +183,29 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         viewModel.refreshGameModSync()
+    }
+
+    private fun shareModExport(artifactId: String) {
+        val file = File(cacheDir, "mod-export/$artifactId.zip")
+        if (!file.isFile) {
+            viewModel.failModExportShare(artifactId, "找不到待分享的 Mod ZIP。")
+            return
+        }
+        try {
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "application/zip"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                clipData = ClipData.newRawUri("Mod ZIP", uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(send, "分享到其他应用"))
+            viewModel.finishModExportShare(artifactId)
+        } catch (_: android.content.ActivityNotFoundException) {
+            viewModel.failModExportShare(artifactId, "没有可用的分享应用。")
+        } catch (error: IllegalArgumentException) {
+            viewModel.failModExportShare(artifactId, "无法安全分享 Mod ZIP：${error.message ?: "路径无效"}")
+        }
     }
 
     private fun displayNameFor(uri: Uri): String = contentResolver.query(
