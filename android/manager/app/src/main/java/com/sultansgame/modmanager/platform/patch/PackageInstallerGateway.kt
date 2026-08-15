@@ -98,6 +98,11 @@ class PackageInstallerGateway(private val context: Context) {
         }
     }
 
+    fun abandonSession(sessionId: Int): Boolean = runCatching {
+        context.packageManager.packageInstaller.abandonSession(sessionId)
+        true
+    }.getOrDefault(false)
+
     fun sessionState(sessionId: Int): PackageInstallSessionState =
         if (context.packageManager.packageInstaller.getSessionInfo(sessionId) == null) {
             PackageInstallSessionState.Missing

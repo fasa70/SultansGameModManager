@@ -869,7 +869,10 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                     externalZipInbox.clear()
                     privateModCache.resetPreservingMods().forEach { failures += "Mod 缓存 $it" }
                     deploymentPlan.reset()
-                    transactions.deleteCleanupWorkspaces(emptySet())
+                    transactions.sessionIds().forEach { sessionId ->
+                        if (!packageInstaller.abandonSession(sessionId)) failures += "系统安装会话 $sessionId"
+                    }
+                    transactions.resetAll().forEach { failures += "修补事务 $it" }
                     mergeRoot.listFiles()?.forEach { it.deleteRecursively() }
                     getApplication<Application>().cacheDir.listFiles()
                         ?.filter { it.name.startsWith(".zip-import-") }
