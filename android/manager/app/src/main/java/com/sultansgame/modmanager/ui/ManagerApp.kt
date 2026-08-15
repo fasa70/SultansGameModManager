@@ -526,7 +526,7 @@ private fun startPresentation(state: ManagerUiState): StartPresentation = when (
         val confirmationReady = patch.confirmation.permits(patch.input.classification.mode)
         StartPresentation(
             title = if (unsupported) "此游戏版本暂不支持" else "导入完成",
-            body = if (unsupported) "此版本尚未加入安全支持列表，应用不会继续修改或安装。请选择其他游戏安装文件。" else "已完成基本检查。确认以下事项后，我们将会开始修补游戏安装包",
+            body = if (unsupported) "此版本尚未加入安全支持列表，应用不会继续修改或安装。请使用游戏1.0.5版本进行修补" else "已完成基本检查。确认以下事项后，我们将会开始修补游戏安装包",
             primaryLabel = if (unsupported) "选择其他安装包" else "开始修补",
             primaryEnabled = unsupported || confirmationReady,
             showConfirmations = !unsupported,
@@ -891,13 +891,13 @@ private fun SettingsScreen(state: ManagerUiState, actions: ManagerActions, wide:
         item { HeroPanel("", "设置", "") }
         item { SectionLabel("存储", "${state.cachedMods.size} 个 Mod") }
         item { ListPanel("清理本地 Mod ", "存储空间管理", "管理") { onShowDialog(DialogKind.ClearCache) } }
+        item { ListPanel("重置管理器状态", "导入或修补出现异常时可尝试；保留已缓存的 Mod 和设备签名密钥", "重置") { onShowDialog(DialogKind.ResetManagerState) } }
         item { SectionLabel("创意工坊", "可选") }
         item {
             val enabled = state.showWorkshop
             ConfirmationCheckbox("开启创意工坊", enabled == true, enabled != null) { actions.setWorkshopEnabled(it) }
             Text(if (enabled == null) "正在读取创意工坊显示设置…" else "开启后，创意工坊会显示在导航栏中；默认关闭。", fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
         }
-        item { ListPanel("重置管理器状态", "导入或修补出现异常时可尝试；保留已缓存的 Mod 和设备签名密钥", "重置") { onShowDialog(DialogKind.ResetManagerState) } }
         item { SectionLabel("应用更新", "GitHub") }
         item {
             val enabled = state.autoUpdateCheckEnabled
