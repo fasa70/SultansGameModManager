@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Vendored third-party asset: keep it byte-for-byte identical to upstream so its
+# checked-in SHA-256 stays verifiable against the pinned upstream commit.
+android/manager/app/src/main/assets/save-editor/index.html eol=lf
