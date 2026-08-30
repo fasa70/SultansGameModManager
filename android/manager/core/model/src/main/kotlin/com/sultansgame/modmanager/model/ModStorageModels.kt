@@ -18,6 +18,57 @@ object ModStorageCall {
     const val KEY_MOD_NAMES = "modNames"
 }
 
+object SaveStorageCall {
+    const val LIST_SAVE_USERS = "listSaveUsers"
+    const val LIST_SAVE_FILES = "listSaveFiles"
+    const val READ_SAVE = "readSave"
+    const val WRITE_SAVE = "writeSave"
+
+    const val KEY_SAVE_USER = "saveUser"
+    const val KEY_SAVE_FILE = "saveFile"
+    const val KEY_SAVE_CONTENT = "saveContent"
+    const val KEY_SAVE_USERS = "saveUsers"
+    const val KEY_SAVE_FILES = "saveFiles"
+}
+
+enum class GameSaveAvailability {
+    Available,
+    ProviderTooOld,
+    ProviderMissing,
+    Unauthorized,
+    Incompatible,
+    Unknown,
+}
+
+enum class GameSaveFailureCode {
+    None,
+    ProviderTooOld,
+    ProviderMissing,
+    ProviderAccessDenied,
+    Unauthorized,
+    ProtocolMismatch,
+    InvalidName,
+    NotFound,
+    TooLarge,
+    JsonInvalid,
+    CommitFailed,
+    InsufficientStorage,
+    InternalError,
+    Unknown,
+}
+
+data class GameSaveStatus(
+    val availability: GameSaveAvailability,
+    val users: List<String> = emptyList(),
+    val files: List<String> = emptyList(),
+    val content: String? = null,
+    val failureCode: GameSaveFailureCode = GameSaveFailureCode.None,
+    val reason: String? = null,
+) {
+    val isReady: Boolean
+        get() = availability == GameSaveAvailability.Available && failureCode == GameSaveFailureCode.None
+}
+
 enum class GameModSyncAvailability {
     Available,
     ActivationRequired,

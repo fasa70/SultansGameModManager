@@ -12,8 +12,12 @@ import com.sultansgame.modmanager.model.GameModSyncAvailability
 import com.sultansgame.modmanager.model.GameModSyncFailureCode
 import com.sultansgame.modmanager.model.GameModSyncItem
 import com.sultansgame.modmanager.model.GameModSyncStatus
+import com.sultansgame.modmanager.model.GameSaveAvailability
+import com.sultansgame.modmanager.model.GameSaveFailureCode
+import com.sultansgame.modmanager.model.GameSaveStatus
 import com.sultansgame.modmanager.model.MOD_STORAGE_PROTOCOL_VERSION
 import com.sultansgame.modmanager.model.ModStorageCall
+import com.sultansgame.modmanager.model.SaveStorageCall
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -77,7 +81,83 @@ class AndroidModStorageLoaderBridge(
         call(ModStorageCall.REMOVE_MANAGED_MOD, requestBundle().apply { putString(ModStorageCall.KEY_CACHE_KEY, cacheKey) })
     }
 
+    override suspend fun listSaveUsers(): GameSaveStatus = withContext(Dispatchers.IO) {
+        callSave(SaveStorageCall.LIST_SAVE_USERS, requestBundle())
+    }
+
+    override suspend fun listSaveFiles(uid: String): GameSaveStatus = withContext(Dispatchers.IO) {
+        callSave(SaveStorageCall.LIST_SAVE_FILES, requestBundle().apply { putString(SaveStorageCall.KEY_SAVE_USER, uid) })
+    }
+
+    override suspend fun readSave(uid: String, fileName: String): GameSaveStatus = withContext(Dispatchers.IO) {
+        callSave(SaveStorageCall.READ_SAVE, requestBundle().apply {
+            putString(SaveStorageCall.KEY_SAVE_USER, uid)
+            putString(SaveStorageCall.KEY_SAVE_FILE, fileName)
+        })
+    }
+
+    override suspend fun writeSave(uid: String, fileName: String, content: String): GameSaveStatus = withContext(Dispatchers.IO) {
+        callSave(SaveStorageCall.WRITE_SAVE, requestBundle().apply {
+            putString(SaveStorageCall.KEY_SAVE_USER, uid)
+            putString(SaveStorageCall.KEY_SAVE_FILE, fileName)
+            putString(SaveStorageCall.KEY_SAVE_CONTENT, content)
+        })
+    }
+
     private fun requestBundle() = Bundle().apply { putInt(ModStorageCall.KEY_PROTOCOL_VERSION, MOD_STORAGE_PROTOCOL_VERSION) }
+
+    private fun callSave(method: String, extras: Bundle): GameSaveStatus = try {
+        parseSaveResult(context.contentResolver.call(uri, method, null, extras), method)
+    } catch (error: CancellationException) {
+        throw error
+    } catch (_: SecurityException) {
+        saveUnavailable(GameSaveAvailability.Unauthorized, GameSaveFailureCode.ProviderAccessDenied, "Android 系统拒绝访问游戏存档服务；请重新修补并安装匹配的游戏版本。")
+    } catch (_: IllegalArgumentException) {
+        saveActivationRequiredStatus()
+    } catch (error: Exception) {
+        saveUnavailable(GameSaveAvailability.Unknown, GameSaveFailureCode.InternalError, error.message ?: "无法与游戏存档服务通信。")
+    }
+
+    private fun parseSaveResult(bundle: Bundle?, method: String): GameSaveStatus {
+        if (bundle == null) return saveActivationRequiredStatus()
+        val code = bundle.getString(ModStorageCall.KEY_RESULT_CODE).orEmpty()
+        val reason = bundle.getString(ModStorageCall.KEY_RESULT_REASON)
+        val availability = when (code) {
+            "ok" -> GameSaveAvailability.Available
+            "unauthorized" -> GameSaveAvailability.Unauthorized
+            "incompatible" -> GameSaveAvailability.Incompatible
+            "invalid" -> if (method == SaveStorageCall.LIST_SAVE_USERS) GameSaveAvailability.ProviderTooOld else GameSaveAvailability.Unknown
+            else -> GameSaveAvailability.Unknown
+        }
+        val failure = when (code) {
+            "ok" -> GameSaveFailureCode.None
+            "unauthorized" -> GameSaveFailureCode.Unauthorized
+            "incompatible" -> GameSaveFailureCode.ProtocolMismatch
+            "saveNotFound" -> GameSaveFailureCode.NotFound
+            "saveTooLarge" -> GameSaveFailureCode.TooLarge
+            "validationFailed" -> GameSaveFailureCode.JsonInvalid
+            "commitFailed" -> GameSaveFailureCode.CommitFailed
+            "insufficientStorage" -> GameSaveFailureCode.InsufficientStorage
+            "failed" -> GameSaveFailureCode.InternalError
+            "invalid" -> if (method == SaveStorageCall.LIST_SAVE_USERS) GameSaveFailureCode.ProviderTooOld else GameSaveFailureCode.InvalidName
+            else -> GameSaveFailureCode.Unknown
+        }
+        val users = bundle.getStringArrayList(SaveStorageCall.KEY_SAVE_USERS).orEmpty()
+        val files = bundle.getStringArrayList(SaveStorageCall.KEY_SAVE_FILES).orEmpty()
+        val content = bundle.getString(SaveStorageCall.KEY_SAVE_CONTENT)
+        return GameSaveStatus(availability, users, files, content, failure, reason)
+    }
+
+    private fun saveActivationRequiredStatus(): GameSaveStatus {
+        val provider = context.packageManager.resolveContentProvider(GAME_MOD_STORAGE_AUTHORITY, 0)
+        if (provider?.packageName != GAME_PACKAGE) return saveUnavailable(GameSaveAvailability.ProviderMissing, GameSaveFailureCode.ProviderMissing, "游戏内存档服务未安装；请重新修补并安装匹配的游戏版本。")
+        val enabled = context.packageManager.getComponentEnabledSetting(android.content.ComponentName(provider.packageName, provider.name)) != PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+        if (!enabled) return saveUnavailable(GameSaveAvailability.ProviderMissing, GameSaveFailureCode.ProviderMissing, "游戏内存档服务已被禁用；请重新修补并安装匹配的游戏版本。")
+        return saveUnavailable(GameSaveAvailability.Unknown, GameSaveFailureCode.Unknown, "无法与游戏存档服务通信。")
+    }
+
+    private fun saveUnavailable(availability: GameSaveAvailability, failure: GameSaveFailureCode, reason: String) =
+        GameSaveStatus(availability = availability, failureCode = failure, reason = reason)
 
     private fun call(method: String, extras: Bundle): GameModSyncStatus = try {
         parseResult(context.contentResolver.call(uri, method, null, extras))

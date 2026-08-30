@@ -11,16 +11,20 @@ import android.os.Binder;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
-
+import android.util.JsonToken;
 import java.io.BufferedInputStream;
+import java.io.ByteArrayInputStream;
 import java.io.DataInputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.Locale;
 import java.util.UUID;
 
 public final class ModStorageProvider extends ContentProvider {
@@ -34,6 +38,11 @@ public final class ModStorageProvider extends ContentProvider {
     private static final String KEY_RESULT_REASON = "resultReason";
     private static final String KEY_MOD_NAMES = "modNames";
     private static final String KEY_MANAGER_CACHE_KEYS = "managerCacheKeys";
+    private static final String KEY_SAVE_USER = "saveUser";
+    private static final String KEY_SAVE_FILE = "saveFile";
+    private static final String KEY_SAVE_CONTENT = "saveContent";
+    private static final String KEY_SAVE_USERS = "saveUsers";
+    private static final String KEY_SAVE_FILES = "saveFiles";
     private static final String RESULT_OK = "ok";
     private static final String RESULT_UNAUTHORIZED = "unauthorized";
     private static final String RESULT_INCOMPATIBLE = "incompatible";
@@ -42,7 +51,12 @@ public final class ModStorageProvider extends ContentProvider {
     private static final String RESULT_VALIDATION_FAILED = "validationFailed";
     private static final String RESULT_COMMIT_FAILED = "commitFailed";
     private static final String RESULT_INSUFFICIENT_STORAGE = "insufficientStorage";
+    private static final String RESULT_SAVE_NOT_FOUND = "saveNotFound";
+    private static final String RESULT_SAVE_TOO_LARGE = "saveTooLarge";
     private static final int MAX_ENTRY_COUNT = 10_000;
+    private static final long MAX_SAVE_BYTES = 1_048_576L;
+    private static final String SAVE_RELATIVE_PATH = "SultansGame" + File.separator + "SAVEDATA";
+    private static final String SAVE_BACKUP_SUFFIX = ".sgmm-bak";
 
     @Override
     public boolean onCreate() {
@@ -59,6 +73,10 @@ public final class ModStorageProvider extends ContentProvider {
             if ("listMods".equals(method)) return listMods();
             if ("syncMod".equals(method)) return syncMod(extras, input);
             if ("removeManagedMod".equals(method)) return removeManagedMod(extras);
+            if ("listSaveUsers".equals(method)) return listSaveUsers();
+            if ("listSaveFiles".equals(method)) return listSaveFiles(extras);
+            if ("readSave".equals(method)) return readSave(extras);
+            if ("writeSave".equals(method)) return writeSave(extras);
             return result(RESULT_INVALID, "不支持的调用方法");
         } finally {
             closeQuietly(input);
@@ -160,6 +178,181 @@ public final class ModStorageProvider extends ContentProvider {
         result.putStringArrayList(KEY_MOD_NAMES, names);
         result.putStringArrayList(KEY_MANAGER_CACHE_KEYS, managerKeys);
         return result;
+    }
+
+    private File saveRoot() {
+        Context context = getContext();
+        if (context == null) return null;
+        File external = context.getExternalFilesDir(null);
+        if (external == null) {
+            File[] dirs = context.getExternalFilesDirs(null);
+            if (dirs == null || dirs.length == 0 || dirs[0] == null) return null;
+            external = dirs[0];
+        }
+        File packageDir = external.getParentFile();
+        if (packageDir == null) return null;
+        return new File(packageDir, SAVE_RELATIVE_PATH);
+    }
+
+    private File userDir(String uid) {
+        File root = saveRoot();
+        if (root == null || uid == null || !uid.matches("\\d{1,32}")) return null;
+        return new File(root, uid);
+    }
+
+    private File saveFile(String uid, String name) {
+        if (!isSaveFileName(name)) return null;
+        File dir = userDir(uid);
+        return dir == null ? null : new File(dir, name);
+    }
+
+    private static boolean isSaveFileName(String name) {
+        if (!isSafeRelativePath(name)) return false;
+        int separator = name.lastIndexOf('/');
+        String leaf = separator >= 0 ? name.substring(separator + 1) : name;
+        String lower = leaf.toLowerCase(Locale.ROOT);
+        if (leaf.startsWith(".") || !lower.endsWith(".json") || lower.endsWith(".bak.json")) return false;
+        if (separator < 0) return true;
+        if (!"USERARCHIVE".equals(name.substring(0, separator)) || !leaf.matches("\\d{3}\\.json")) return false;
+        int slot = Integer.parseInt(leaf.substring(0, 3));
+        return slot >= 0 && slot < 10;
+    }
+
+    private Bundle listSaveUsers() {
+        File root = saveRoot();
+        ArrayList<String> users = new ArrayList<>();
+        if (root != null && root.isDirectory()) {
+            File[] children = root.listFiles();
+            if (children != null) {
+                Arrays.sort(children, Comparator.comparing(File::getName));
+                for (File child : children) {
+                    if (child.isDirectory() && child.getName().matches("\\d{1,32}")) {
+                        users.add(child.getName());
+                    }
+                }
+            }
+        }
+        Bundle response = result(RESULT_OK, null);
+        response.putStringArrayList(KEY_SAVE_USERS, users);
+        return response;
+    }
+
+    private Bundle listSaveFiles(Bundle extras) {
+        String uid = extras == null ? null : extras.getString(KEY_SAVE_USER);
+        File dir = userDir(uid);
+        ArrayList<String> files = new ArrayList<>();
+        if (dir != null && dir.isDirectory()) {
+            File[] children = dir.listFiles();
+            if (children != null) {
+                Arrays.sort(children, Comparator.comparing(File::getName));
+                for (File child : children) {
+                    if (child.isFile() && isSaveFileName(child.getName())) files.add(child.getName());
+                }
+            }
+            // The loop above already accepts every top-level *.json, including
+            // user_archive.json; only the USERARCHIVE/ slot files need a second pass.
+            File archiveDir = new File(dir, "USERARCHIVE");
+            File[] slots = archiveDir.listFiles();
+            if (slots != null) {
+                Arrays.sort(slots, Comparator.comparing(File::getName));
+                for (File slot : slots) {
+                    if (slot.isFile() && isSaveFileName("USERARCHIVE/" + slot.getName())) {
+                        files.add("USERARCHIVE/" + slot.getName());
+                    }
+                }
+            }
+        }
+        Bundle response = result(RESULT_OK, null);
+        response.putStringArrayList(KEY_SAVE_FILES, files);
+        return response;
+    }
+
+    private Bundle readSave(Bundle extras) {
+        String uid = extras == null ? null : extras.getString(KEY_SAVE_USER);
+        String name = extras == null ? null : extras.getString(KEY_SAVE_FILE);
+        File target = saveFile(uid, name);
+        if (target == null) return result(RESULT_INVALID, "存档路径无效");
+        if (!target.isFile()) return result(RESULT_SAVE_NOT_FOUND, "存档文件不存在");
+        if (target.length() > MAX_SAVE_BYTES) return result(RESULT_SAVE_TOO_LARGE, "存档文件过大");
+        try {
+            byte[] data = readAllBytes(target);
+            Bundle response = result(RESULT_OK, null);
+            response.putString(KEY_SAVE_CONTENT, new String(data, java.nio.charset.StandardCharsets.UTF_8));
+            return response;
+        } catch (IOException error) {
+            return result(RESULT_FAILED, error.getMessage() == null ? "读取存档失败" : error.getMessage());
+        }
+    }
+
+    private synchronized Bundle writeSave(Bundle extras) {
+        String uid = extras == null ? null : extras.getString(KEY_SAVE_USER);
+        String name = extras == null ? null : extras.getString(KEY_SAVE_FILE);
+        String content = extras == null ? null : extras.getString(KEY_SAVE_CONTENT);
+        File target = saveFile(uid, name);
+        if (target == null) return result(RESULT_INVALID, "存档路径无效");
+        if (content == null) return result(RESULT_INVALID, "存档内容为空");
+        byte[] bytes = content.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        if (bytes.length > MAX_SAVE_BYTES) return result(RESULT_SAVE_TOO_LARGE, "存档内容过大");
+        if (!isPlausibleJson(bytes)) return result(RESULT_VALIDATION_FAILED, "存档内容不是有效 JSON");
+        File dir = target.getParentFile();
+        if (dir == null) return result(RESULT_COMMIT_FAILED, "存档目录不可用");
+        if (dir.exists() && !dir.isDirectory()) return result(RESULT_COMMIT_FAILED, "存档目录不可用");
+        if (!dir.exists() && !dir.mkdirs()) return result(RESULT_COMMIT_FAILED, "无法创建存档目录");
+
+        File backup = new File(dir, target.getName() + SAVE_BACKUP_SUFFIX);
+        File temp = new File(dir, target.getName() + ".sgmm-tmp-" + UUID.randomUUID());
+        try {
+            try (FileOutputStream output = new FileOutputStream(temp)) {
+                output.write(bytes);
+                output.getFD().sync();
+            }
+            if (backup.exists() && !backup.delete()) throw new IOException("无法清理旧备份");
+            if (target.exists() && !target.renameTo(backup)) throw new IOException("无法备份现有存档");
+            if (!temp.renameTo(target)) {
+                if (backup.exists() && !target.exists()) backup.renameTo(target);
+                throw new IOException("无法写入存档");
+            }
+            return result(RESULT_OK, null);
+        } catch (IOException error) {
+            if (temp.exists()) temp.delete();
+            if (isStorageFailure(error)) return result(RESULT_INSUFFICIENT_STORAGE, "游戏存储空间不足，请释放空间后重试");
+            return result(RESULT_COMMIT_FAILED, error.getMessage() == null ? "写入存档失败" : error.getMessage());
+        }
+    }
+
+    private static byte[] readAllBytes(File file) throws IOException {
+        long length = file.length();
+        if (length > Integer.MAX_VALUE) throw new IOException("存档文件过大");
+        byte[] data = new byte[(int) length];
+        try (FileInputStream input = new FileInputStream(file)) {
+            int offset = 0;
+            while (offset < data.length) {
+                int read = input.read(data, offset, data.length - offset);
+                if (read < 0) throw new IOException("存档文件意外结束");
+                offset += read;
+            }
+        }
+        return data;
+    }
+
+    private static boolean isPlausibleJson(byte[] data) {
+        android.util.JsonReader reader = null;
+        try {
+            reader = new android.util.JsonReader(new InputStreamReader(
+                    new ByteArrayInputStream(data), java.nio.charset.StandardCharsets.UTF_8));
+            reader.setLenient(false);
+            reader.skipValue();
+            return reader.peek() == JsonToken.END_DOCUMENT;
+        } catch (Exception ignored) {
+            return false;
+        } finally {
+            if (reader != null) {
+                try {
+                    reader.close();
+                } catch (IOException ignored) {
+                }
+            }
+        }
     }
 
     private void copyMod(DataInputStream input, File staging, String cacheKey) throws IOException {
@@ -277,6 +470,31 @@ public final class ModStorageProvider extends ContentProvider {
                 else deleteRecursively(remnant);
             } else {
                 deleteRecursively(remnant);
+            }
+        }
+        recoverInterruptedSaves();
+    }
+
+    private void recoverInterruptedSaves() {
+        File root = saveRoot();
+        if (root == null || !root.isDirectory()) return;
+        File[] users = root.listFiles(File::isDirectory);
+        if (users == null) return;
+        for (File user : users) {
+            if (!user.getName().matches("\\d{1,32}")) continue;
+            File[] children = user.listFiles();
+            if (children == null) continue;
+            for (File child : children) {
+                String name = child.getName();
+                if (name.contains(".sgmm-tmp-")) {
+                    deleteRecursively(child);
+                    continue;
+                }
+                if (name.endsWith(SAVE_BACKUP_SUFFIX)) {
+                    File target = new File(user, name.substring(0, name.length() - SAVE_BACKUP_SUFFIX.length()));
+                    if (target.exists()) deleteRecursively(child);
+                    else child.renameTo(target);
+                }
             }
         }
     }
