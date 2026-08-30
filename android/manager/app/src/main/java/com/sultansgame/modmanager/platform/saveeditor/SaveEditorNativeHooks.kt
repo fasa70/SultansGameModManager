@@ -9,6 +9,9 @@ internal sealed interface SaveEditorWebEvent {
     /** The page's own export button was pressed; [fileName] is upstream's name. */
     data class ExportRequested(val fileName: String) : SaveEditorWebEvent
 
+    /** The repurposed backup button: open the native slot/backup panel. */
+    data object ToolsRequested : SaveEditorWebEvent
+
     /** The staged save parsed and rendered. */
     data object SaveInjected : SaveEditorWebEvent
 
@@ -37,15 +40,24 @@ internal class SaveEditorNativeHooks(
     @Volatile
     private var stagedFileName: String = ""
 
+    @Volatile
+    private var statusMessage: String = ""
+
     /** Makes [text] available to the next [SaveEditorShim.LOAD_BOOTSTRAP_JS] run. */
     fun stage(text: String, fileName: String) {
         stagedText = text
         stagedFileName = fileName
     }
 
+    /** Makes [message] available to the next [SaveEditorShim.SHOW_STATUS_JS] run. */
+    fun stageStatus(message: String) {
+        statusMessage = message
+    }
+
     fun clearStaged() {
         stagedText = null
         stagedFileName = ""
+        statusMessage = ""
     }
 
     @JavascriptInterface
@@ -55,8 +67,16 @@ internal class SaveEditorNativeHooks(
     fun takeSaveFileName(): String = stagedFileName
 
     @JavascriptInterface
+    fun takeStatusMessage(): String = statusMessage
+
+    @JavascriptInterface
     fun onExportRequest(fileName: String) {
         post(SaveEditorWebEvent.ExportRequested(fileName))
+    }
+
+    @JavascriptInterface
+    fun onToolsRequest() {
+        post(SaveEditorWebEvent.ToolsRequested)
     }
 
     @JavascriptInterface

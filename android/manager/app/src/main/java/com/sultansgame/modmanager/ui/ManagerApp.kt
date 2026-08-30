@@ -161,6 +161,22 @@ data class ManagerActions(
     val setMergeDisplayName: (String) -> Unit = {},
     val keepOriginalSync: () -> Unit = {},
     val stopOriginalSync: () -> Unit = {},
+    val openSaveEditor: () -> Unit = {},
+    val closeSaveEditor: () -> Unit = {},
+    val loadSaveUsers: () -> Unit = {},
+    val selectSaveUser: (String) -> Unit = {},
+    val selectSaveFile: (String) -> Unit = {},
+    val leaveSaveFile: () -> Unit = {},
+    val reloadSaveFile: () -> Unit = {},
+    val saveSave: () -> Unit = {},
+    val saveSaveArchive: (Int, String) -> Unit = { _, _ -> },
+    val restoreSaveBackup: (com.sultansgame.modmanager.platform.saveeditor.SaveBackupEntry) -> Unit = {},
+    val deleteSaveBackup: (com.sultansgame.modmanager.platform.saveeditor.SaveBackupEntry) -> Unit = {},
+    val closeSaveEditorTools: () -> Unit = {},
+    /** Hands over the retained editor WebView; see ManagerViewModel.attachSaveEditorView. */
+    val attachSaveEditorView: (android.content.Context) -> android.view.View? = { null },
+    val detachSaveEditorView: () -> Unit = {},
+    val saveEditorHasUnsavedEdits: suspend () -> Boolean = { false },
     val acceptNotice: () -> Unit,
     val setAutoUpdateCheckEnabled: (Boolean) -> Unit,
     val setWorkshopEnabled: (Boolean) -> Unit,
@@ -199,7 +215,11 @@ fun ManagerApp(state: ManagerUiState, actions: ManagerActions) {
     val showWorkshop = state.showWorkshop == true
     val destinations = remember(showWorkshop) { visibleDestinations(showWorkshop) }
     val destination = effectiveDestination(destinationFromRoute(selectedRoute), showWorkshop)
-    LaunchedEffect(destination) { if (selectedRoute != destination.name) selectedRoute = destination.name }
+    LaunchedEffect(destination) {
+        if (selectedRoute != destination.name) selectedRoute = destination.name
+        if (destination == Destination.SaveEditor) actions.openSaveEditor()
+        else if (state.saveEditor.isOpen) actions.closeSaveEditor()
+    }
 
     val readyToInstall = state.patch as? PatchUiState.ReadyToInstall
     val deviceInstallWarning = remember {
@@ -365,6 +385,7 @@ private fun MainContent(
             Destination.Start -> StartScreen(state, actions, wide, onSelectDestination)
             Destination.Acquire -> AcquireNavigation(state, actions, wide)
             Destination.Library -> MyModsScreen(state, actions, wide, onShowDialog)
+            Destination.SaveEditor -> SaveEditorScreen(state, actions, wide)
             Destination.Settings -> SettingsScreen(state, actions, wide, onShowDialog)
         }
     }
@@ -1156,7 +1177,6 @@ private fun MergeModsScreen(state: ManagerUiState, actions: ManagerActions, wide
 
 @Composable
 private fun MergeHeroPanel(onBack: () -> Unit) {
-    val context = LocalContext.current
     Card(
         Modifier.fillMaxWidth(),
         colors = CardDefaults.defaultColors(color = MiuixTheme.colorScheme.primaryContainer),
@@ -1171,24 +1191,31 @@ private fun MergeHeroPanel(onBack: () -> Unit) {
                 fontSize = 14.sp,
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
             )
-            Text(
-                MERGE_REFERENCE_URL,
-                fontSize = 13.sp,
-                color = MiuixTheme.colorScheme.primary,
-                modifier = Modifier.clickable {
-                    try {
-                        context.startActivity(
-                            Intent(Intent.ACTION_VIEW, Uri.parse(MERGE_REFERENCE_URL))
-                                .addCategory(Intent.CATEGORY_BROWSABLE),
-                        )
-                    } catch (_: android.content.ActivityNotFoundException) {
-                        // No browser is available; keep the page usable.
-                    }
-                },
-            )
+            ExternalLinkText(MERGE_REFERENCE_URL)
             PrimaryButton("返回管理 Mod", onClick = onBack)
         }
     }
+}
+
+/** A tappable URL that opens in the browser; stays inert when none is installed. */
+@Composable
+internal fun ExternalLinkText(url: String) {
+    val context = LocalContext.current
+    Text(
+        url,
+        fontSize = 13.sp,
+        color = MiuixTheme.colorScheme.primary,
+        modifier = Modifier.clickable {
+            try {
+                context.startActivity(
+                    Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                        .addCategory(Intent.CATEGORY_BROWSABLE),
+                )
+            } catch (_: android.content.ActivityNotFoundException) {
+                // No browser is available; keep the page usable.
+            }
+        },
+    )
 }
 
 @Composable
@@ -1300,7 +1327,7 @@ private fun SteamLoginDialog(auth: SteamAuthState, actions: ManagerActions, onDi
 }
 
 @Composable
-private fun ScreenList(wide: Boolean, content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit) {
+internal fun ScreenList(wide: Boolean, content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit) {
     LazyColumn(
         Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = if (wide) 34.dp else 18.dp, vertical = if (wide) 10.dp else 8.dp),
@@ -1310,7 +1337,7 @@ private fun ScreenList(wide: Boolean, content: androidx.compose.foundation.lazy.
 }
 
 @Composable
-private fun HeroPanel(eyebrow: String, title: String, body: String, action: String? = null, actionEnabled: Boolean = true, onAction: (() -> Unit)? = null) {
+internal fun HeroPanel(eyebrow: String, title: String, body: String, action: String? = null, actionEnabled: Boolean = true, onAction: (() -> Unit)? = null) {
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.defaultColors(color = MiuixTheme.colorScheme.primaryContainer), insideMargin = PaddingValues(22.dp)) {
         Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
             Text(eyebrow, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
@@ -1322,7 +1349,7 @@ private fun HeroPanel(eyebrow: String, title: String, body: String, action: Stri
 }
 
 @Composable
-private fun SectionLabel(title: String, trailing: String) {
+internal fun SectionLabel(title: String, trailing: String) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(title, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
         StatusPill(trailing)
@@ -1398,7 +1425,7 @@ private fun ListPanel(title: String, body: String, trailing: String, onClick: ()
 }
 
 @Composable
-private fun NoticeStrip(title: String, body: String) {
+internal fun NoticeStrip(title: String, body: String) {
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.defaultColors(color = MiuixTheme.colorScheme.surfaceVariant), insideMargin = PaddingValues(16.dp)) {
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(title, fontSize = 14.sp, fontWeight = FontWeight.Bold)
@@ -1417,10 +1444,10 @@ private fun DiagnosticPanel(title: String, details: String) {
 }
 
 @Composable
-private fun EmptyPanel(title: String, body: String) = NoticeStrip(title, body)
+internal fun EmptyPanel(title: String, body: String) = NoticeStrip(title, body)
 
 @Composable
-private fun LoadingPanel(body: String, title: String = "正在处理") {
+internal fun LoadingPanel(body: String, title: String = "正在处理") {
     Card(
         Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite },
         colors = CardDefaults.defaultColors(color = MiuixTheme.colorScheme.surfaceVariant),
@@ -1458,7 +1485,7 @@ private fun StatusPill(text: String) {
 }
 
 @Composable
-private fun PrimaryButton(label: String, enabled: Boolean = true, onClick: () -> Unit) {
+internal fun PrimaryButton(label: String, enabled: Boolean = true, onClick: () -> Unit) {
     PrimaryButtonContent(
         label = label,
         enabled = enabled,
@@ -1526,21 +1553,21 @@ private fun ImportButton(label: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun SecondaryButton(label: String, enabled: Boolean = true, onClick: () -> Unit) {
+internal fun SecondaryButton(label: String, enabled: Boolean = true, onClick: () -> Unit) {
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.defaultColors(color = MiuixTheme.colorScheme.surfaceVariant), insideMargin = PaddingValues(horizontal = 15.dp, vertical = 11.dp), onClick = { if (enabled) onClick() }) {
         Text(label, Modifier.fillMaxWidth(), fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = if (enabled) MiuixTheme.colorScheme.onSurface else MiuixTheme.colorScheme.onSurfaceVariantSummary)
     }
 }
 
 @Composable
-private fun SmallAction(label: String, enabled: Boolean = true, onClick: () -> Unit) {
+internal fun SmallAction(label: String, enabled: Boolean = true, onClick: () -> Unit) {
     Box(Modifier.clip(RoundedCornerShape(10.dp)).background(if (enabled) MiuixTheme.colorScheme.primaryVariant else MiuixTheme.colorScheme.surfaceVariant).clickable(enabled = enabled, onClick = onClick).padding(horizontal = 11.dp, vertical = 8.dp)) {
         Text(label, fontSize = 12.sp, color = if (enabled) MiuixTheme.colorScheme.onPrimaryVariant else MiuixTheme.colorScheme.onSurfaceVariantSummary)
     }
 }
 
 @Composable
-private fun LabeledTextField(
+internal fun LabeledTextField(
     value: String,
     onValueChange: (String) -> Unit,
     label: String,
@@ -1564,7 +1591,7 @@ private fun LabeledTextField(
 }
 
 @Composable
-private fun ConfirmationCheckbox(label: String, checked: Boolean, enabled: Boolean = true, onToggle: (Boolean) -> Unit) {
+internal fun ConfirmationCheckbox(label: String, checked: Boolean, enabled: Boolean = true, onToggle: (Boolean) -> Unit) {
     Row(
         Modifier.fillMaxWidth()
             .toggleable(checked, enabled = enabled, role = Role.Checkbox, onValueChange = onToggle)

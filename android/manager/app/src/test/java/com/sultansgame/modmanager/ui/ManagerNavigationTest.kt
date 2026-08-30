@@ -5,11 +5,28 @@ import org.junit.Test
 
 class ManagerNavigationTest {
     @Test fun workshopIsHiddenByDefault() {
-        assertEquals(listOf(Destination.Start, Destination.Library, Destination.Settings), visibleDestinations(false))
+        assertEquals(
+            listOf(Destination.Start, Destination.Library, Destination.SaveEditor, Destination.Settings),
+            visibleDestinations(false),
+        )
     }
 
     @Test fun enabledWorkshopFollowsLibrary() {
-        assertEquals(listOf(Destination.Start, Destination.Library, Destination.Acquire, Destination.Settings), visibleDestinations(true))
+        assertEquals(
+            listOf(
+                Destination.Start,
+                Destination.Library,
+                Destination.Acquire,
+                Destination.SaveEditor,
+                Destination.Settings,
+            ),
+            visibleDestinations(true),
+        )
+    }
+
+    @Test fun saveEditorIsAlwaysReachable() {
+        assertEquals(Destination.SaveEditor, effectiveDestination(Destination.SaveEditor, false))
+        assertEquals(Destination.SaveEditor, effectiveDestination(Destination.SaveEditor, true))
     }
 
     @Test fun hiddenWorkshopFallsBackToLibrary() {
@@ -18,5 +35,9 @@ class ManagerNavigationTest {
 
     @Test fun invalidRouteFallsBackToStart() {
         assertEquals(Destination.Start, destinationFromRoute("unknown"))
+    }
+
+    @Test fun saveEditorRouteRoundTrips() {
+        assertEquals(Destination.SaveEditor, destinationFromRoute(Destination.SaveEditor.name))
     }
 }

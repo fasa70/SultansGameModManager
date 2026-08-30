@@ -92,6 +92,18 @@ internal class SaveEditorWebViewHolder(
     suspend fun pullCurrentJson(): String? =
         SaveEditorShim.decodeJsStringResult(evaluate(SaveEditorShim.PULL_JSON_JS))
 
+    /**
+     * Reports a manager-side outcome in the page's own status bar. The editor
+     * fills the whole screen while editing, so this is where saves, errors and
+     * notices have to surface.
+     */
+    suspend fun showStatus(message: String) = withContext(Dispatchers.Main.immediate) {
+        val view = webView
+        if (destroyed || view == null || !pageReady) return@withContext
+        hooks.stageStatus(message)
+        view.evaluateJavascript(SaveEditorShim.SHOW_STATUS_JS, null)
+    }
+
     /** The slot summary computed by the page, as a JSON object string. */
     suspend fun pullArchiveSummary(): String? =
         SaveEditorShim.decodeJsStringResult(evaluate(SaveEditorShim.ARCHIVE_SUMMARY_JS))
@@ -103,6 +115,15 @@ internal class SaveEditorWebViewHolder(
         pageReady = false
         webView?.loadUrl(SaveEditorShim.EDITOR_URL)
         Unit
+    }
+
+    /**
+     * Drops the current view and page state but keeps the holder usable; the
+     * next [attach] builds a fresh WebView. Backup files on disk are untouched.
+     */
+    fun recycle() {
+        hooks.clearStaged()
+        discardWebView()
     }
 
     /** Permanent teardown. Safe to call more than once. */

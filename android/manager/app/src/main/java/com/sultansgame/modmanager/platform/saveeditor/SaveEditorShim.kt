@@ -42,8 +42,16 @@ internal object SaveEditorShim {
             }
             var exportBtn = document.getElementById("exportBtn");
             if (exportBtn) exportBtn.innerText = "\u{1F4BE} 保存到游戏存档";
+            // 上游"导出备份"（带时间戳的下载）已被原生的自动备份取代，
+            // 这里改用它做原生功能入口：槽位保存、备份恢复、重新读取。
             var backupBtn = document.getElementById("backupBtn");
-            if (backupBtn && backupBtn.style) backupBtn.style.display = "none";
+            if (backupBtn) {
+                backupBtn.innerText = "\u{1F5C2}️ 槽位 / 备份 / 重读";
+                backupBtn.disabled = false;
+                backupBtn.onclick = function () {
+                    try { window.SgmmNative.onToolsRequest(); } catch (e) {}
+                };
+            }
             var tip = document.getElementById("tipDbStat");
             var strip = tip && tip.closest ? tip.closest("div") : null;
             if (strip) {
@@ -55,6 +63,20 @@ internal object SaveEditorShim {
                 try { window.SgmmNative.onExportRequest(String(name == null ? "" : name)); } catch (e) {}
             };
             return "ok";
+        })()
+    """.trimIndent()
+
+    /**
+     * Shows a manager message in the page's own status bar. The text is fetched
+     * through the bridge rather than interpolated, so no JavaScript escaping is
+     * involved on the Kotlin side.
+     */
+    val SHOW_STATUS_JS = """
+        (function () {
+            try {
+                setMsg(window.SgmmNative.takeStatusMessage());
+                return "ok";
+            } catch (error) { return "error"; }
         })()
     """.trimIndent()
 

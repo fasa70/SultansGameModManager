@@ -57,6 +57,22 @@ class SaveEditorShimTest {
     }
 
     @Test
+    fun shimRepurposesBackupButtonAsTheNativePanelEntry() {
+        // The editing stage is entirely WebView, so this button is the only way
+        // to reach the native slot/backup actions.
+        val shim = SaveEditorShim.SHIM_JS
+        assertTrue(shim.contains("getElementById(\"backupBtn\")"))
+        assertTrue(shim.contains("onToolsRequest"))
+        assertTrue(shim.contains("backupBtn.disabled = false"))
+    }
+
+    @Test
+    fun statusScriptReportsThroughThePagesOwnBar() {
+        // Message text is fetched over the bridge, never interpolated into JS.
+        assertTrue(SaveEditorShim.SHOW_STATUS_JS.contains("setMsg(window.SgmmNative.takeStatusMessage())"))
+    }
+
+    @Test
     fun bootstrapSetsFileNameAfterLoadDataAndReportsBothOutcomes() {
         val bootstrap = SaveEditorShim.LOAD_BOOTSTRAP_JS
         val load = bootstrap.indexOf("loadData(text")

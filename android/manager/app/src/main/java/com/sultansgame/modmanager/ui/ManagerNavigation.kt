@@ -4,6 +4,7 @@ internal enum class Destination(val title: String, val caption: String) {
     Start("开始", "准备游戏"),
     Acquire("创意工坊", "浏览与添加"),
     Library("管理Mod", "同步mod列表"),
+    SaveEditor("存档编辑", "编辑游戏存档"),
     Settings("设置", "帮助与存储"),
 }
 
@@ -11,6 +12,7 @@ internal fun visibleDestinations(showWorkshop: Boolean): List<Destination> = bui
     add(Destination.Start)
     add(Destination.Library)
     if (showWorkshop) add(Destination.Acquire)
+    add(Destination.SaveEditor)
     add(Destination.Settings)
 }
 

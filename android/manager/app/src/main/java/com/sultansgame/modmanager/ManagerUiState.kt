@@ -83,6 +83,7 @@ data class ManagerUiState(
     val cachedMods: List<CachedMod> = emptyList(),
     val merge: MergeUiState = MergeUiState(),
     val modExport: ModExportUiState = ModExportUiState(),
+    val saveEditor: SaveEditorUiState = SaveEditorUiState(),
     val workshop: WorkshopUiState = WorkshopUiState.Idle,
     val workshopBrowse: WorkshopBrowseUiState = WorkshopBrowseUiState(),
     val downloadTasks: List<DownloadTask> = emptyList(),
