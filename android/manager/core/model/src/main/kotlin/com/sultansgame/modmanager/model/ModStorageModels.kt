@@ -26,7 +26,12 @@ object SaveStorageCall {
 
     const val KEY_SAVE_USER = "saveUser"
     const val KEY_SAVE_FILE = "saveFile"
-    const val KEY_SAVE_CONTENT = "saveContent"
+    /** Manager -> game pipe read end, used by writeSave. */
+    const val KEY_INPUT = "input"
+    /** Game -> manager pipe write end, used by readSave. */
+    const val KEY_OUTPUT = "output"
+    /** Bytes transferred, reported so the manager can verify a complete copy. */
+    const val KEY_SAVE_LENGTH = "saveLength"
     const val KEY_SAVE_USERS = "saveUsers"
     const val KEY_SAVE_FILES = "saveFiles"
 }
@@ -50,6 +55,8 @@ enum class GameSaveFailureCode {
     InvalidName,
     NotFound,
     TooLarge,
+    /** The pipe carrying the save broke before the whole file moved. */
+    TransferInterrupted,
     JsonInvalid,
     CommitFailed,
     InsufficientStorage,
@@ -62,6 +69,8 @@ data class GameSaveStatus(
     val users: List<String> = emptyList(),
     val files: List<String> = emptyList(),
     val content: String? = null,
+    /** Bytes the game reported transferring, for verifying a complete copy. */
+    val contentLength: Long? = null,
     val failureCode: GameSaveFailureCode = GameSaveFailureCode.None,
     val reason: String? = null,
 ) {

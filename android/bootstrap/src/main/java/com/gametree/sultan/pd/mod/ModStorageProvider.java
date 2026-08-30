@@ -13,13 +13,14 @@ import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
 import android.util.JsonToken;
 import java.io.BufferedInputStream;
-import java.io.ByteArrayInputStream;
 import java.io.DataInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -34,13 +35,14 @@ public final class ModStorageProvider extends ContentProvider {
     private static final String KEY_PROTOCOL_VERSION = "protocolVersion";
     private static final String KEY_CACHE_KEY = "cacheKey";
     private static final String KEY_INPUT = "input";
+    private static final String KEY_OUTPUT = "output";
     private static final String KEY_RESULT_CODE = "resultCode";
     private static final String KEY_RESULT_REASON = "resultReason";
     private static final String KEY_MOD_NAMES = "modNames";
     private static final String KEY_MANAGER_CACHE_KEYS = "managerCacheKeys";
     private static final String KEY_SAVE_USER = "saveUser";
     private static final String KEY_SAVE_FILE = "saveFile";
-    private static final String KEY_SAVE_CONTENT = "saveContent";
+    private static final String KEY_SAVE_LENGTH = "saveLength";
     private static final String KEY_SAVE_USERS = "saveUsers";
     private static final String KEY_SAVE_FILES = "saveFiles";
     private static final String RESULT_OK = "ok";
@@ -54,7 +56,12 @@ public final class ModStorageProvider extends ContentProvider {
     private static final String RESULT_SAVE_NOT_FOUND = "saveNotFound";
     private static final String RESULT_SAVE_TOO_LARGE = "saveTooLarge";
     private static final int MAX_ENTRY_COUNT = 10_000;
-    private static final long MAX_SAVE_BYTES = 1_048_576L;
+    /**
+     * Save content is streamed over a pipe, so the Binder transaction limit does
+     * not apply. This bound only exists to keep a corrupt or hostile length
+     * header from filling the game's storage; real saves are far below it.
+     */
+    private static final long MAX_SAVE_BYTES = 64L * 1024L * 1024L;
     private static final String SAVE_RELATIVE_PATH = "SultansGame" + File.separator + "SAVEDATA";
     private static final String SAVE_BACKUP_SUFFIX = ".sgmm-bak";
 
@@ -67,6 +74,7 @@ public final class ModStorageProvider extends ContentProvider {
     @Override
     public Bundle call(String method, String arg, Bundle extras) {
         ParcelFileDescriptor input = extras == null ? null : extras.getParcelable(KEY_INPUT);
+        ParcelFileDescriptor output = extras == null ? null : extras.getParcelable(KEY_OUTPUT);
         try {
             if (!hasCompatibleProtocol(extras)) return result(RESULT_INCOMPATIBLE, "协议版本不兼容，请重新修补游戏");
             if (!isPinnedManager()) return result(RESULT_UNAUTHORIZED, "调用方证书不受信任，请重新修补游戏");
@@ -75,11 +83,12 @@ public final class ModStorageProvider extends ContentProvider {
             if ("removeManagedMod".equals(method)) return removeManagedMod(extras);
             if ("listSaveUsers".equals(method)) return listSaveUsers();
             if ("listSaveFiles".equals(method)) return listSaveFiles(extras);
-            if ("readSave".equals(method)) return readSave(extras);
-            if ("writeSave".equals(method)) return writeSave(extras);
+            if ("readSave".equals(method)) return readSave(extras, output);
+            if ("writeSave".equals(method)) return writeSave(extras, input);
             return result(RESULT_INVALID, "不支持的调用方法");
         } finally {
             closeQuietly(input);
+            closeQuietly(output);
         }
     }
 
@@ -267,33 +276,48 @@ public final class ModStorageProvider extends ContentProvider {
         return response;
     }
 
-    private Bundle readSave(Bundle extras) {
+    /**
+     * Streams the save file into the manager's pipe. The content never enters the
+     * reply Bundle, so neither the Binder transaction limit nor its UTF-16
+     * expansion applies; the reply carries only the byte count for verification.
+     */
+    private Bundle readSave(Bundle extras, ParcelFileDescriptor output) {
         String uid = extras == null ? null : extras.getString(KEY_SAVE_USER);
         String name = extras == null ? null : extras.getString(KEY_SAVE_FILE);
         File target = saveFile(uid, name);
         if (target == null) return result(RESULT_INVALID, "存档路径无效");
+        if (output == null) return result(RESULT_INVALID, "缺少存档传输通道");
         if (!target.isFile()) return result(RESULT_SAVE_NOT_FOUND, "存档文件不存在");
         if (target.length() > MAX_SAVE_BYTES) return result(RESULT_SAVE_TOO_LARGE, "存档文件过大");
         try {
-            byte[] data = readAllBytes(target);
+            long copied;
+            // AutoCloseOutputStream owns the descriptor, the same ownership rule
+            // syncMod follows; wrapping the raw FileDescriptor instead would let
+            // the stream and the later closeQuietly() both close the same fd.
+            try (FileInputStream source = new FileInputStream(target);
+                    OutputStream sink = new ParcelFileDescriptor.AutoCloseOutputStream(output)) {
+                copied = copyStream(source, sink);
+            }
             Bundle response = result(RESULT_OK, null);
-            response.putString(KEY_SAVE_CONTENT, new String(data, java.nio.charset.StandardCharsets.UTF_8));
+            response.putLong(KEY_SAVE_LENGTH, copied);
             return response;
         } catch (IOException error) {
             return result(RESULT_FAILED, error.getMessage() == null ? "读取存档失败" : error.getMessage());
         }
     }
 
-    private synchronized Bundle writeSave(Bundle extras) {
+    /**
+     * Reads the new content from the manager's pipe into a temporary file, then
+     * validates and commits it. Content is never held whole in memory and never
+     * crosses the Binder transaction, so save size is bounded by storage rather
+     * than by the IPC channel.
+     */
+    private synchronized Bundle writeSave(Bundle extras, ParcelFileDescriptor input) {
         String uid = extras == null ? null : extras.getString(KEY_SAVE_USER);
         String name = extras == null ? null : extras.getString(KEY_SAVE_FILE);
-        String content = extras == null ? null : extras.getString(KEY_SAVE_CONTENT);
         File target = saveFile(uid, name);
         if (target == null) return result(RESULT_INVALID, "存档路径无效");
-        if (content == null) return result(RESULT_INVALID, "存档内容为空");
-        byte[] bytes = content.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        if (bytes.length > MAX_SAVE_BYTES) return result(RESULT_SAVE_TOO_LARGE, "存档内容过大");
-        if (!isPlausibleJson(bytes)) return result(RESULT_VALIDATION_FAILED, "存档内容不是有效 JSON");
+        if (input == null) return result(RESULT_INVALID, "缺少存档传输通道");
         File dir = target.getParentFile();
         if (dir == null) return result(RESULT_COMMIT_FAILED, "存档目录不可用");
         if (dir.exists() && !dir.isDirectory()) return result(RESULT_COMMIT_FAILED, "存档目录不可用");
@@ -302,9 +326,19 @@ public final class ModStorageProvider extends ContentProvider {
         File backup = new File(dir, target.getName() + SAVE_BACKUP_SUFFIX);
         File temp = new File(dir, target.getName() + ".sgmm-tmp-" + UUID.randomUUID());
         try {
-            try (FileOutputStream output = new FileOutputStream(temp)) {
-                output.write(bytes);
+            long written;
+            try (InputStream source = new ParcelFileDescriptor.AutoCloseInputStream(input);
+                    FileOutputStream output = new FileOutputStream(temp)) {
+                written = copyStream(source, output, MAX_SAVE_BYTES);
                 output.getFD().sync();
+            }
+            if (written > MAX_SAVE_BYTES) {
+                temp.delete();
+                return result(RESULT_SAVE_TOO_LARGE, "存档内容过大");
+            }
+            if (!isPlausibleJson(temp)) {
+                temp.delete();
+                return result(RESULT_VALIDATION_FAILED, "存档内容不是有效 JSON");
             }
             if (backup.exists() && !backup.delete()) throw new IOException("无法清理旧备份");
             if (target.exists() && !target.renameTo(backup)) throw new IOException("无法备份现有存档");
@@ -312,7 +346,9 @@ public final class ModStorageProvider extends ContentProvider {
                 if (backup.exists() && !target.exists()) backup.renameTo(target);
                 throw new IOException("无法写入存档");
             }
-            return result(RESULT_OK, null);
+            Bundle response = result(RESULT_OK, null);
+            response.putLong(KEY_SAVE_LENGTH, written);
+            return response;
         } catch (IOException error) {
             if (temp.exists()) temp.delete();
             if (isStorageFailure(error)) return result(RESULT_INSUFFICIENT_STORAGE, "游戏存储空间不足，请释放空间后重试");
@@ -320,26 +356,38 @@ public final class ModStorageProvider extends ContentProvider {
         }
     }
 
-    private static byte[] readAllBytes(File file) throws IOException {
-        long length = file.length();
-        if (length > Integer.MAX_VALUE) throw new IOException("存档文件过大");
-        byte[] data = new byte[(int) length];
-        try (FileInputStream input = new FileInputStream(file)) {
-            int offset = 0;
-            while (offset < data.length) {
-                int read = input.read(data, offset, data.length - offset);
-                if (read < 0) throw new IOException("存档文件意外结束");
-                offset += read;
-            }
-        }
-        return data;
+    private static long copyStream(InputStream source, OutputStream sink) throws IOException {
+        return copyStream(source, sink, Long.MAX_VALUE);
     }
 
-    private static boolean isPlausibleJson(byte[] data) {
+    /**
+     * Copies up to `limit + 1` bytes so the caller can tell "exactly at the
+     * limit" from "over it" without ever buffering the whole stream.
+     */
+    private static long copyStream(InputStream source, OutputStream sink, long limit)
+            throws IOException {
+        byte[] buffer = new byte[64 * 1024];
+        long total = 0;
+        while (total <= limit) {
+            int read = source.read(buffer);
+            if (read < 0) break;
+            sink.write(buffer, 0, read);
+            total += read;
+        }
+        return total;
+    }
+
+    /**
+     * Streams the staged file through a strict JSON parser. Reading from the file
+     * rather than a byte array keeps validation memory-flat, so save size stays
+     * bounded by storage alone.
+     */
+    private static boolean isPlausibleJson(File file) {
         android.util.JsonReader reader = null;
         try {
             reader = new android.util.JsonReader(new InputStreamReader(
-                    new ByteArrayInputStream(data), java.nio.charset.StandardCharsets.UTF_8));
+                    new BufferedInputStream(new FileInputStream(file)),
+                    java.nio.charset.StandardCharsets.UTF_8));
             reader.setLenient(false);
             reader.skipValue();
             return reader.peek() == JsonToken.END_DOCUMENT;

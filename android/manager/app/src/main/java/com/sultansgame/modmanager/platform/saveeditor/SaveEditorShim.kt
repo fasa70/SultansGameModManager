@@ -82,9 +82,9 @@ internal object SaveEditorShim {
 
     /**
      * Hands the staged save text to the page. The text arrives through a
-     * `@JavascriptInterface` getter rather than a script literal: a ~1 MiB
-     * literal would have to be parsed as JavaScript source and shipped over
-     * Chromium IPC, while the getter is a plain one-shot string copy.
+     * `@JavascriptInterface` getter rather than a script literal: a large literal
+     * would have to be parsed as JavaScript source and shipped over Chromium
+     * IPC, while the getter is a plain one-shot string copy.
      */
     val LOAD_BOOTSTRAP_JS = """
         (function () {
@@ -111,8 +111,9 @@ internal object SaveEditorShim {
 
     /**
      * Compact serialization on purpose: upstream's own export path pretty-prints
-     * with two-space indent, which can push a large save past the game-side
-     * 1 MiB write limit. Returns JS `null` when the page holds nothing usable.
+     * with two-space indent, which roughly doubles the bytes written for no gain
+     * — the game never reads the file for its formatting. Returns JS `null` when
+     * the page holds nothing usable.
      */
     val PULL_JSON_JS = """
         (function () {

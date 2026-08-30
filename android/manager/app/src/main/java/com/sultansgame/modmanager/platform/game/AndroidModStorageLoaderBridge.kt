@@ -89,19 +89,124 @@ class AndroidModStorageLoaderBridge(
         callSave(SaveStorageCall.LIST_SAVE_FILES, requestBundle().apply { putString(SaveStorageCall.KEY_SAVE_USER, uid) })
     }
 
+    /**
+     * Reads a save through a pipe rather than the reply Bundle.
+     *
+     * The Binder transaction buffer is ~1 MB per process and a Bundle String is
+     * parcelled as UTF-16, so a Bundle-carried save would cap out around half a
+     * megabyte. Streaming matches how [syncMod] already moves bulk data and
+     * leaves save size bounded by storage instead.
+     */
     override suspend fun readSave(uid: String, fileName: String): GameSaveStatus = withContext(Dispatchers.IO) {
-        callSave(SaveStorageCall.READ_SAVE, requestBundle().apply {
-            putString(SaveStorageCall.KEY_SAVE_USER, uid)
-            putString(SaveStorageCall.KEY_SAVE_FILE, fileName)
-        })
+        supervisorScope {
+            val pipe = ParcelFileDescriptor.createPipe()
+            // The provider blocks writing into a full pipe, so the reader has to
+            // run concurrently with the call rather than after it.
+            val reader = async(Dispatchers.IO) {
+                pipe[0].use { descriptor ->
+                    ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { it.readBytes() }
+                }
+            }
+            try {
+                val bundle = requestBundle().apply {
+                    putString(SaveStorageCall.KEY_SAVE_USER, uid)
+                    putString(SaveStorageCall.KEY_SAVE_FILE, fileName)
+                    putParcelable(SaveStorageCall.KEY_OUTPUT, pipe[1])
+                }
+                val status = callSave(SaveStorageCall.READ_SAVE, bundle)
+                closeQuietly(pipe[1])
+                if (!status.isReady) {
+                    closeQuietly(pipe[0])
+                    withContext(NonCancellable) { if (reader.isActive) reader.cancelAndJoin() }
+                    return@supervisorScope status
+                }
+                val bytes = try {
+                    reader.await()
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    return@supervisorScope saveUnavailable(
+                        GameSaveAvailability.Unknown,
+                        GameSaveFailureCode.TransferInterrupted,
+                        error.message ?: "存档数据传输中断。",
+                    )
+                }
+                val expected = status.contentLength
+                if (expected != null && expected != bytes.size.toLong()) {
+                    return@supervisorScope saveUnavailable(
+                        GameSaveAvailability.Unknown,
+                        GameSaveFailureCode.TransferInterrupted,
+                        "存档数据不完整（应为 $expected 字节，实际 ${bytes.size} 字节）。",
+                    )
+                }
+                status.copy(content = bytes.toString(Charsets.UTF_8))
+            } finally {
+                withContext(NonCancellable) {
+                    closeQuietly(pipe[0])
+                    closeQuietly(pipe[1])
+                    if (reader.isActive) reader.cancelAndJoin()
+                }
+            }
+        }
     }
 
+    /** Writes a save through a pipe; see [readSave] for why the Bundle is unused. */
     override suspend fun writeSave(uid: String, fileName: String, content: String): GameSaveStatus = withContext(Dispatchers.IO) {
-        callSave(SaveStorageCall.WRITE_SAVE, requestBundle().apply {
-            putString(SaveStorageCall.KEY_SAVE_USER, uid)
-            putString(SaveStorageCall.KEY_SAVE_FILE, fileName)
-            putString(SaveStorageCall.KEY_SAVE_CONTENT, content)
-        })
+        supervisorScope {
+            val bytes = content.toByteArray(Charsets.UTF_8)
+            val pipe = ParcelFileDescriptor.createPipe()
+            val writer = async(Dispatchers.IO) {
+                pipe[1].use { descriptor ->
+                    ParcelFileDescriptor.AutoCloseOutputStream(descriptor).use { it.write(bytes) }
+                }
+            }
+            try {
+                val bundle = requestBundle().apply {
+                    putString(SaveStorageCall.KEY_SAVE_USER, uid)
+                    putString(SaveStorageCall.KEY_SAVE_FILE, fileName)
+                    putParcelable(SaveStorageCall.KEY_INPUT, pipe[0])
+                }
+                val status = callSave(SaveStorageCall.WRITE_SAVE, bundle)
+                closeQuietly(pipe[0])
+                if (!status.isReady) {
+                    closeQuietly(pipe[1])
+                    withContext(NonCancellable) { if (writer.isActive) writer.cancelAndJoin() }
+                    return@supervisorScope status
+                }
+                val writerFailure = try {
+                    writer.await()
+                    null
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    error
+                }
+                if (writerFailure != null) {
+                    return@supervisorScope saveUnavailable(
+                        GameSaveAvailability.Unknown,
+                        GameSaveFailureCode.TransferInterrupted,
+                        writerFailure.message ?: "存档数据传输中断。",
+                    )
+                }
+                // The provider commits only a complete copy, so a byte-count
+                // mismatch means the file on disk is not what we sent.
+                val expected = status.contentLength
+                if (expected != null && expected != bytes.size.toLong()) {
+                    return@supervisorScope saveUnavailable(
+                        GameSaveAvailability.Unknown,
+                        GameSaveFailureCode.TransferInterrupted,
+                        "存档写入不完整（应为 ${bytes.size} 字节，实际 $expected 字节）。",
+                    )
+                }
+                status
+            } finally {
+                withContext(NonCancellable) {
+                    closeQuietly(pipe[0])
+                    closeQuietly(pipe[1])
+                    if (writer.isActive) writer.cancelAndJoin()
+                }
+            }
+        }
     }
 
     private fun requestBundle() = Bundle().apply { putInt(ModStorageCall.KEY_PROTOCOL_VERSION, MOD_STORAGE_PROTOCOL_VERSION) }
@@ -144,8 +249,16 @@ class AndroidModStorageLoaderBridge(
         }
         val users = bundle.getStringArrayList(SaveStorageCall.KEY_SAVE_USERS).orEmpty()
         val files = bundle.getStringArrayList(SaveStorageCall.KEY_SAVE_FILES).orEmpty()
-        val content = bundle.getString(SaveStorageCall.KEY_SAVE_CONTENT)
-        return GameSaveStatus(availability, users, files, content, failure, reason)
+        val length = bundle.getLong(SaveStorageCall.KEY_SAVE_LENGTH, -1L).takeIf { it >= 0 }
+        // Save content arrives over a pipe, not in this bundle; readSave fills it in.
+        return GameSaveStatus(
+            availability = availability,
+            users = users,
+            files = files,
+            contentLength = length,
+            failureCode = failure,
+            reason = reason,
+        )
     }
 
     private fun saveActivationRequiredStatus(): GameSaveStatus {
