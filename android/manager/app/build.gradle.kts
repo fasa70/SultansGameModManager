@@ -172,6 +172,9 @@ dependencies {
     implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.material3)
+    // Serves the vendored HTML save editor to a WebView from app assets over a
+    // real https origin, so its localStorage works and no file:// access is needed.
+    implementation(libs.androidx.webkit)
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
