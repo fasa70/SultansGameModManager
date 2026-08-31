@@ -356,6 +356,8 @@ private fun LazyListScope.SaveFileStage(
 ) {
     val busy = editor.isBusy
     val files = SaveFileSelectionClassifier.classify(editor.saveFiles)
+    val autoSaveFiles = files.otherFiles.filter { it == "auto_save.json" }
+    val collapsedOtherFiles = files.otherFiles.filterNot { it == "auto_save.json" }
     item { SecondaryButton("返回用户列表", enabled = !busy, onClick = actions.loadSaveUsers) }
     item { SectionLabel("选择存档文件", "${files.slots.size + files.otherFiles.size} 个") }
     if (files.slots.isNotEmpty()) {
@@ -369,17 +371,28 @@ private fun LazyListScope.SaveFileStage(
             )
         }
     }
-    if (files.otherFiles.isNotEmpty()) {
+    if (autoSaveFiles.isNotEmpty()) {
+        item { SectionLabel("自动存档", "${autoSaveFiles.size} 个") }
+        items(autoSaveFiles, key = { "save-auto-$it" }) {
+            ListPanel(
+                title = "自动存档",
+                body = "自动保存的存档",
+                trailing = "编辑",
+                enabled = !busy,
+            ) { actions.selectSaveFile(it) }
+        }
+    }
+    if (collapsedOtherFiles.isNotEmpty()) {
         item {
             SmallAction(
-                if (showOtherFiles) "收起其它存档文件" else "展开其它存档文件（${files.otherFiles.size} 个）",
+                if (showOtherFiles) "收起其它存档文件" else "展开其它存档文件（${collapsedOtherFiles.size} 个）",
                 enabled = !busy,
                 onClick = onToggleOtherFiles,
             )
         }
         if (showOtherFiles) {
-            items(files.otherFiles, key = { "save-other-$it" }) { file ->
-                val index = files.otherFiles.indexOf(file) + 1
+            items(collapsedOtherFiles, key = { "save-other-$it" }) { file ->
+                val index = collapsedOtherFiles.indexOf(file) + 1
                 ListPanel(
                     title = "其它存档 $index · ${saveFileKindLabel(file)}",
                     body = "高级存档文件",
