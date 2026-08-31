@@ -3,9 +3,9 @@
 ## 苏游修改器 / suyou-save-editor (khb10533/suyou-save-editor)
 
 `android/manager/app/src/main/assets/save-editor/index.html` is the upstream
-**苏游修改器 · 柳漪春涛正式版 v1** save editor, <https://github.com/khb10533/suyou-save-editor>,
-commit `d2bb41fee0b81503424a8bf108e1d4ed1e8cba72`, SHA-256
-`e1fe268866a99cbf036c5fdadb9c39211e2d9372e6b8d90ace2a8fe52e8360e3`.
+**苏游修改器 · 柳漪春涛正式版 v2** save editor, <https://github.com/khb10533/suyou-save-editor>,
+commit `ffbcb9871ec93f2599aeffa82c59176c30cf6d12`, SHA-256
+`1b760303c7aba86c4063b4573ae6a2c538850ba6d83dd07dba9a0bd371f4accb`.
 
 The file is vendored **byte-for-byte unmodified**. Copyright (C) 2026 柳漪春涛.
 It is licensed under the GNU General Public License version 3 or (at the

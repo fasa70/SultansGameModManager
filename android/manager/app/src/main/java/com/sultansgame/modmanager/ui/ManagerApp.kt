@@ -174,6 +174,7 @@ data class ManagerActions(
     val reloadSaveFile: () -> Unit = {},
     val saveSave: () -> Unit = {},
     val saveSaveArchive: (Int, String) -> Unit = { _, _ -> },
+    val saveGlobalSave: () -> Unit = {},
     val restoreSaveBackup: (com.sultansgame.modmanager.platform.saveeditor.SaveBackupEntry) -> Unit = {},
     val deleteSaveBackup: (com.sultansgame.modmanager.platform.saveeditor.SaveBackupEntry) -> Unit = {},
     val closeSaveEditorTools: () -> Unit = {},

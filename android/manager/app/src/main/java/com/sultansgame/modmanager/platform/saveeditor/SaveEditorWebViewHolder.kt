@@ -74,9 +74,14 @@ internal class SaveEditorWebViewHolder(
      * finished loading yet the injection is deferred to `onPageFinished`, which
      * is the normal case: the save is read before the editor is ever attached.
      */
-    suspend fun load(text: String, fileName: String) = withContext(Dispatchers.Main.immediate) {
+    suspend fun load(
+        text: String,
+        fileName: String,
+        globalText: String? = null,
+        globalFileName: String = "global.json",
+    ) = withContext(Dispatchers.Main.immediate) {
         if (destroyed) return@withContext
-        hooks.stage(text, fileName)
+        hooks.stage(text, fileName, globalText, globalFileName)
         val view = webView
         if (view == null || !pageReady) {
             pendingBootstrap = true
@@ -85,6 +90,15 @@ internal class SaveEditorWebViewHolder(
         view.evaluateJavascript(SaveEditorShim.LOAD_BOOTSTRAP_JS, null)
     }
 
+    suspend fun loadGlobal(text: String, fileName: String = "global.json") =
+        withContext(Dispatchers.Main.immediate) {
+            if (destroyed) return@withContext
+            hooks.stageGlobal(text, fileName)
+            val view = webView
+            if (view == null || !pageReady) return@withContext
+            view.evaluateJavascript(SaveEditorShim.LOAD_GLOBAL_JS, null)
+        }
+
     /**
      * The page's current save as compact JSON, or `null` when the page is gone
      * or holds nothing serializable.
@@ -92,11 +106,11 @@ internal class SaveEditorWebViewHolder(
     suspend fun pullCurrentJson(): String? =
         SaveEditorShim.decodeJsStringResult(evaluate(SaveEditorShim.PULL_JSON_JS))
 
-    /**
-     * Reports a manager-side outcome in the page's own status bar. The editor
-     * fills the whole screen while editing, so this is where saves, errors and
-     * notices have to surface.
-     */
+    /** The page's current global.json as compact JSON, or null when unavailable. */
+    suspend fun pullCurrentGlobalJson(): String? =
+        SaveEditorShim.decodeJsStringResult(evaluate(SaveEditorShim.PULL_GLOBAL_JSON_JS))
+
+    /** Reports a manager-side outcome in the page's own status bar. */
     suspend fun showStatus(message: String) = withContext(Dispatchers.Main.immediate) {
         val view = webView
         if (destroyed || view == null || !pageReady) return@withContext

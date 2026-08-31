@@ -89,8 +89,16 @@ class SaveBackupStoreTest {
         assertEquals(listOf("keep"), store.list("1", "auto_save.json").map { store.read(it) })
     }
 
+    @Test fun globalBackupsAreSeparateFromSlotBackups() {
+        val store = store()
+        val global = store.create("1", "global.json", "global")
+        val slot = store.create("1", "USERARCHIVE/003.json", "slot")
+        assertEquals(listOf("global"), store.list("1", "global.json").map { store.read(it) })
+        assertEquals(listOf("slot"), store.list("1", "USERARCHIVE/003.json").map { store.read(it) })
+        assertNotEquals(File(global.path).parentFile!!.path, File(slot.path).parentFile!!.path)
+    }
     @Test fun listIsEmptyForUnknownFile() {
-        assertTrue(store().list("1", "global.json").isEmpty())
+        assertTrue(store().list("1", "unknown.json").isEmpty())
     }
 
     @Test fun strayTemporaryFilesAreIgnoredAndCleaned() {

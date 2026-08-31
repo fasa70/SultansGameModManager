@@ -165,6 +165,7 @@ class MainActivity : ComponentActivity() {
                         reloadSaveFile = viewModel::reloadSaveFile,
                         saveSave = viewModel::saveSave,
                         saveSaveArchive = viewModel::saveSaveArchive,
+                        saveGlobalSave = viewModel::saveGlobalSave,
                         restoreSaveBackup = viewModel::restoreSaveBackup,
                         deleteSaveBackup = viewModel::deleteSaveBackup,
                         closeSaveEditorTools = viewModel::closeSaveEditorTools,

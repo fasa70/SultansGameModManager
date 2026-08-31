@@ -52,7 +52,10 @@ class SaveEditorShimTest {
         // exportBtn and backupBtn both call the global download(), so replacing
         // it is what keeps saves flowing through the native pipeline.
         assertTrue(SaveEditorShim.SHIM_JS.contains("window.download = function"))
-        assertTrue(SaveEditorShim.SHIM_JS.contains("onExportRequest"))
+        assertTrue(SaveEditorShim.SHIM_JS.contains("onGlobalExportRequest"))
+        assertTrue(SaveEditorShim.SHIM_JS.contains("getElementById(\"exportGlobalBtn\")"))
+        assertTrue(SaveEditorShim.SHIM_JS.contains("getElementById(\"backupGlobalBtn\")"))
+        assertTrue(SaveEditorShim.SHIM_JS.contains("outputName === \"global.json\""))
         assertTrue(SaveEditorShim.SHIM_JS.contains("getElementById(\"fileInput\")"))
     }
 
@@ -102,6 +105,23 @@ class SaveEditorShimTest {
         assertTrue(bootstrap.contains("onLoadError"))
     }
 
+    @Test
+    fun globalShimHasIndependentLoadAndPullContracts() {
+        val bootstrap = SaveEditorShim.LOAD_BOOTSTRAP_JS
+        assertTrue(bootstrap.contains("takeGlobalText"))
+        assertTrue(bootstrap.contains("loadGlobalData"))
+        assertTrue(bootstrap.contains("onSaveInjected"))
+        assertTrue(bootstrap.indexOf("loadData(text") < bootstrap.indexOf("loadGlobalData"))
+        assertTrue(SaveEditorShim.LOAD_GLOBAL_JS.contains("onGlobalInjected"))
+        assertTrue(SaveEditorShim.PULL_GLOBAL_JSON_JS.contains("JSON.stringify(globalData)"))
+    }
+
+    @Test
+    fun globalStateIsClearedBeforeLoadingAnotherSave() {
+        val bootstrap = SaveEditorShim.LOAD_BOOTSTRAP_JS
+        assertTrue(bootstrap.indexOf("globalData = null") < bootstrap.indexOf("loadData(text"))
+        assertTrue(bootstrap.indexOf("globalFileName = \"global.json\"") < bootstrap.indexOf("loadData(text"))
+    }
     @Test
     fun pullUsesCompactSerialization() {
         // Upstream's download() pretty-prints with two-space indent, which roughly

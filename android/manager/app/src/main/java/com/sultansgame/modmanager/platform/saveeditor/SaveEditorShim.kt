@@ -53,9 +53,26 @@ internal object SaveEditorShim {
                 if (label && label.style) label.style.display = "none";
             }
             var exportBtn = document.getElementById("exportBtn");
-            if (exportBtn) exportBtn.innerText = "\u{1F4BE} 保存到游戏存档";
-            // 上游"导出备份"（带时间戳的下载）已被原生的自动备份取代，
-            // 这里改用它做槽位与备份面板的入口。
+            if (exportBtn) {
+                exportBtn.innerText = "\u{1F4BE} 保存到游戏存档";
+                exportBtn.onclick = function () {
+                    try { window.SgmmNative.onExportRequest(""); } catch (e) {}
+                };
+            }
+            var globalExportBtn = document.getElementById("exportGlobalBtn");
+            if (globalExportBtn) {
+                globalExportBtn.innerText = "\u{1F4BE} 保存 global.json 到游戏存档";
+                globalExportBtn.onclick = function () {
+                    try { window.SgmmNative.onGlobalExportRequest(); } catch (e) {}
+                };
+            }
+            var globalBackupBtn = document.getElementById("backupGlobalBtn");
+            if (globalBackupBtn) {
+                globalBackupBtn.innerText = "\u{1F5C2}\u{FE0F} global.json 槽位 / 备份";
+                globalBackupBtn.onclick = function () {
+                    try { window.SgmmNative.onToolsRequest(); } catch (e) {}
+                };
+            }
             var backupBtn = document.getElementById("backupBtn");
             if (backupBtn) {
                 backupBtn.innerText = "\u{1F5C2}\u{FE0F} 槽位 / 备份";
@@ -80,7 +97,14 @@ internal object SaveEditorShim {
                     "点击卡牌 / 事件标题可展开就地编辑。";
             }
             window.download = function (obj, name) {
-                try { window.SgmmNative.onExportRequest(String(name == null ? "" : name)); } catch (e) {}
+                try {
+                    var outputName = String(name == null ? "" : name);
+                    if (outputName === "global.json" || /_global\\.json$/.test(outputName)) {
+                        window.SgmmNative.onGlobalExportRequest();
+                    } else {
+                        window.SgmmNative.onExportRequest(outputName);
+                    }
+                } catch (e) {}
             };
             return "ok";
         })()
@@ -112,18 +136,49 @@ internal object SaveEditorShim {
                 var text = window.SgmmNative.takeSaveText();
                 if (!text) { window.SgmmNative.onLoadError("存档内容为空"); return "empty"; }
                 var name = window.SgmmNative.takeSaveFileName();
+                globalData = null;
+                globalFileName = "global.json";
                 loadData(text, "file");
                 if (!saveData) {
                     window.SgmmNative.onLoadError("编辑器无法解析该存档");
                     return "failed";
                 }
                 fileName = name;
+                var globalText = window.SgmmNative.takeGlobalText();
+                if (globalText) {
+                    var globalName = window.SgmmNative.takeGlobalFileName();
+                    loadGlobalData(globalText, globalName || "global.json");
+                    if (globalData) window.SgmmNative.onGlobalInjected();
+                }
                 window.SgmmNative.onSaveInjected();
                 return "ok";
             } catch (error) {
                 try {
                     window.SgmmNative.onLoadError(String((error && error.message) || error));
                 } catch (ignored) {}
+                return "error";
+            }
+        })()
+    """.trimIndent()
+
+    /** Loads only global.json, preserving the ordinary save and its edits. */
+    val LOAD_GLOBAL_JS = """
+        (function () {
+            try {
+                globalData = null;
+                globalFileName = "global.json";
+                var text = window.SgmmNative.takeGlobalText();
+                if (!text) return "empty";
+                var name = window.SgmmNative.takeGlobalFileName();
+                loadGlobalData(text, name || "global.json");
+                if (!globalData) {
+                    window.SgmmNative.onGlobalLoadError("编辑器无法解析 global.json");
+                    return "failed";
+                }
+                window.SgmmNative.onGlobalInjected();
+                return "ok";
+            } catch (error) {
+                try { window.SgmmNative.onGlobalLoadError(String((error && error.message) || error)); } catch (ignored) {}
                 return "error";
             }
         })()
@@ -140,6 +195,15 @@ internal object SaveEditorShim {
             try {
                 if (!saveData) return null;
                 return JSON.stringify(saveData);
+            } catch (error) { return null; }
+        })()
+    """.trimIndent()
+
+    val PULL_GLOBAL_JSON_JS = """
+        (function () {
+            try {
+                if (!globalData) return null;
+                return JSON.stringify(globalData);
             } catch (error) { return null; }
         })()
     """.trimIndent()
