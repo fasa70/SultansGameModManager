@@ -17,6 +17,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -33,6 +34,8 @@ import com.sultansgame.modmanager.SaveEditorWebAction
 import com.sultansgame.modmanager.platform.saveeditor.SaveArchiveIndex
 import com.sultansgame.modmanager.platform.saveeditor.SaveBackupEntry
 import com.sultansgame.modmanager.platform.saveeditor.SaveEditorArchiveSlot
+import com.sultansgame.modmanager.platform.saveeditor.SaveFileSelectionClassifier
+import com.sultansgame.modmanager.platform.saveeditor.SaveSlotFile
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
@@ -237,6 +240,23 @@ private fun SaveEditorToolsPanel(
                 onDelete = { onPrompt(SaveEditorPrompt.DeleteBackup(entry)) },
             )
         }
+        item { SectionLabel("global.json 备份", "${editor.globalBackups.size} 份") }
+        if (editor.globalBackups.isEmpty()) {
+            item {
+                EmptyPanel(
+                    "还没有全局存档备份",
+                    "保存 global.json 前会自动留存当前版本，最多保留最近 10 份。",
+                )
+            }
+        }
+        items(editor.globalBackups, key = { "global-backup-${it.path}" }) { entry ->
+            BackupRow(
+                entry = entry,
+                busy = editor.isBusy,
+                onRestore = { onPrompt(SaveEditorPrompt.Restore(entry)) },
+                onDelete = { onPrompt(SaveEditorPrompt.DeleteBackup(entry)) },
+            )
+        }
         item { SectionLabel("使用说明", "适配自上游 HTML 版") }
         item { SaveEditorHelpPanel() }
     }
@@ -245,6 +265,8 @@ private fun SaveEditorToolsPanel(
 /** 选用户 / 选存档 阶段，沿用其他页面的列表布局。 */
 @Composable
 private fun SaveEditorPicker(editor: SaveEditorUiState, actions: ManagerActions, wide: Boolean) {
+    var showOtherFiles by rememberSaveable(editor.selectedUser) { mutableStateOf(false) }
+    var showHiddenUsers by rememberSaveable(editor.selectedUser) { mutableStateOf(false) }
     ScreenList(wide) {
         item { SaveEditorHeroPanel() }
         editor.error?.let { error ->
@@ -261,8 +283,19 @@ private fun SaveEditorPicker(editor: SaveEditorUiState, actions: ManagerActions,
         editor.notice?.let { notice -> item { NoticeStrip("提示", notice) } }
         if (editor.isBusy) item { LoadingPanel(editor.progress ?: "正在读取存档…") }
         when (editor.stage) {
-            SaveEditorStage.SelectUser -> SaveUserStage(editor.users, editor.isBusy, actions)
-            SaveEditorStage.SelectFile -> SaveFileStage(editor, actions)
+            SaveEditorStage.SelectUser -> SaveUserStage(
+                editor.users,
+                editor.isBusy,
+                actions,
+                showHiddenUsers,
+                { showHiddenUsers = !showHiddenUsers },
+            )
+            SaveEditorStage.SelectFile -> SaveFileStage(
+                editor,
+                actions,
+                showOtherFiles,
+                { showOtherFiles = !showOtherFiles },
+            )
             SaveEditorStage.Edit -> Unit
         }
         item { SectionLabel("使用说明", "适配自上游 HTML 版") }
@@ -274,45 +307,119 @@ private fun LazyListScope.SaveUserStage(
     users: List<String>,
     busy: Boolean,
     actions: ManagerActions,
+    showHiddenUsers: Boolean,
+    onToggleHiddenUsers: () -> Unit,
 ) {
+    // 游戏为了存档配置创建的默认/回退用户（目录名 "0"），对真人玩家是噪音，
+    // 默认折叠起来，需要时再展开；它仍是真实可编辑的用户，不能直接丢弃。
+    val hidden = users.filter { isHiddenSaveUser(it) }
+    val visible = users.filterNot { isHiddenSaveUser(it) }
     item { SectionLabel("选择游戏用户", "${users.size} 个") }
     if (users.isEmpty() && !busy) item { EmptyPanel("没有找到存档用户", "请先启动游戏并创建至少一个存档。") }
-    items(users, key = { "save-user-$it" }) { uid ->
-        ListPanel(
-            title = "用户 $uid",
-            body = "SAVEDATA/$uid",
-            trailing = "选择",
-            enabled = !busy,
-        ) { actions.selectSaveUser(uid) }
+    items(visible, key = { "save-user-$it" }) { uid ->
+        SaveUserRow(uid = uid, busy = busy) { actions.selectSaveUser(uid) }
+    }
+    if (hidden.isNotEmpty()) {
+        item {
+            SmallAction(
+                if (showHiddenUsers) "收起用户 0" else "展开用户 0（${hidden.size}）",
+                enabled = !busy,
+                onClick = onToggleHiddenUsers,
+            )
+        }
+        if (showHiddenUsers) {
+            items(hidden, key = { "save-user-hidden-$it" }) { uid ->
+                SaveUserRow(uid = uid, busy = busy) { actions.selectSaveUser(uid) }
+            }
+        }
     }
 }
 
-private fun LazyListScope.SaveFileStage(editor: SaveEditorUiState, actions: ManagerActions) {
+private fun isHiddenSaveUser(uid: String): Boolean = uid == "0"
+
+@Composable
+private fun SaveUserRow(uid: String, busy: Boolean, onSelect: () -> Unit) {
+    ListPanel(
+        title = "用户 $uid",
+        body = "SAVEDATA/$uid",
+        trailing = "选择",
+        enabled = !busy,
+        onClick = onSelect,
+    )
+}
+
+private fun LazyListScope.SaveFileStage(
+    editor: SaveEditorUiState,
+    actions: ManagerActions,
+    showOtherFiles: Boolean,
+    onToggleOtherFiles: () -> Unit,
+) {
     val busy = editor.isBusy
-    // user_archive.json 是读档索引而不是存档本体，编辑它没有意义。
-    val files = editor.saveFiles.filterNot { it == "user_archive.json" }
+    val files = SaveFileSelectionClassifier.classify(editor.saveFiles)
     item { SecondaryButton("返回用户列表", enabled = !busy, onClick = actions.loadSaveUsers) }
-    item { SectionLabel("选择存档文件", "${files.size} 个") }
-    if (files.isEmpty() && !busy) item { EmptyPanel("没有找到 JSON 存档", "该用户目录中没有可编辑的存档文件。") }
-    items(files, key = { "save-file-$it" }) { file ->
-        val slotName = SaveArchiveIndex.slotOfFileName(file)
-            ?.let { slot -> editor.archiveSlots.getOrNull(slot)?.name }
-        ListPanel(
-            title = if (slotName != null) "$file（$slotName）" else file,
-            body = "${saveFileKindLabel(file)} · 用户 ${editor.selectedUser.orEmpty()}",
-            trailing = "编辑",
-            enabled = !busy,
-        ) { actions.selectSaveFile(file) }
+    item { SectionLabel("选择存档文件", "${files.slots.size + files.otherFiles.size} 个") }
+    if (files.slots.isNotEmpty()) {
+        item { SectionLabel("存档槽位", "${files.slots.size} 个") }
+        items(files.slots, key = { "save-slot-select-${it.fileName}" }) { slotFile ->
+            ArchiveSlotSelectionRow(
+                slot = slotFile.slot,
+                summary = editor.archiveSlots.getOrNull(slotFile.slot),
+                busy = busy,
+                onClick = { actions.selectSaveFile(slotFile.fileName) },
+            )
+        }
+    }
+    if (files.otherFiles.isNotEmpty()) {
+        item {
+            SmallAction(
+                if (showOtherFiles) "收起其它存档文件" else "展开其它存档文件（${files.otherFiles.size} 个）",
+                enabled = !busy,
+                onClick = onToggleOtherFiles,
+            )
+        }
+        if (showOtherFiles) {
+            items(files.otherFiles, key = { "save-other-$it" }) { file ->
+                val index = files.otherFiles.indexOf(file) + 1
+                ListPanel(
+                    title = "其它存档 $index · ${saveFileKindLabel(file)}",
+                    body = "高级存档文件",
+                    trailing = "编辑",
+                    enabled = !busy,
+                ) { actions.selectSaveFile(file) }
+            }
+        }
+    }
+    if (files.slots.isEmpty() && files.otherFiles.isEmpty() && !busy) {
+        item { EmptyPanel("没有找到 JSON 存档", "该用户目录中没有可编辑的存档文件。") }
     }
 }
 
 private fun saveFileKindLabel(file: String): String = when {
     file == "auto_save.json" -> "自动存档"
-    file == "global.json" -> "全局存档"
     file.endsWith("_end.json") -> "回合结束存档"
     file.startsWith("round_") -> "回合存档"
-    file.startsWith("USERARCHIVE/") -> "存档槽位"
-    else -> "JSON 存档"
+    else -> "其它存档"
+}
+
+@Composable
+private fun ArchiveSlotSelectionRow(
+    slot: Int,
+    summary: SaveEditorArchiveSlot?,
+    busy: Boolean,
+    onClick: () -> Unit,
+) {
+    ListPanel(
+        title = "槽位 ${slot + 1} · ${summary?.name ?: "未命名存档"}",
+        body = if (summary == null) {
+            "槽位摘要不可用"
+        } else {
+            "存活天数：${summary.liveDays}天 | 苏丹卡剩余：${summary.leftSudan} | " +
+                "处刑日残余：${summary.executionDay}天\n${summary.saveTimeText}"
+        },
+        trailing = "编辑",
+        enabled = !busy,
+        onClick = onClick,
+    )
 }
 
 /** One of the game's ten load-menu slots, with its overwrite action. */
@@ -431,21 +538,28 @@ private fun SaveEditorPromptDialog(
             },
             onDismiss = onDismiss,
         )
-        is SaveEditorPrompt.Restore -> ConfirmDialog(
-            title = "恢复备份",
-            lines = listOf(
-                "将用 ${prompt.entry.createdAtText} 的备份覆盖 ${prompt.entry.fileName}。",
-                "恢复前会先把当前内容另存为一份新备份，因此这一步同样可以撤回。",
-                "编辑器里尚未保存的修改会被丢弃。恢复后请重新进入游戏读取存档。",
-            ),
-            confirmLabel = "恢复此备份",
-            busy = editor.isBusy,
-            onConfirm = {
-                actions.restoreSaveBackup(prompt.entry)
-                onDismiss()
-            },
-            onDismiss = onDismiss,
-        )
+        is SaveEditorPrompt.Restore -> {
+            val global = prompt.entry.fileName == "global.json"
+            ConfirmDialog(
+                title = if (global) "恢复 global.json 备份" else "恢复备份",
+                lines = if (global) listOf(
+                    "将用这份备份覆盖游戏全局存档 global.json。",
+                    "恢复前会先把当前 global.json 另存为一份新备份，因此这一步同样可以撤回。",
+                    "命运商城页面里尚未保存的修改会被丢弃，普通存档不受影响。",
+                ) else listOf(
+                    "将用 ${prompt.entry.createdAtText} 的备份覆盖 ${prompt.entry.fileName}。",
+                    "恢复前会先把当前内容另存为一份新备份，因此这一步同样可以撤回。",
+                    "编辑器里尚未保存的修改会被丢弃。恢复后请重新进入游戏读取存档。",
+                ),
+                confirmLabel = "恢复此备份",
+                busy = editor.isBusy,
+                onConfirm = {
+                    actions.restoreSaveBackup(prompt.entry)
+                    onDismiss()
+                },
+                onDismiss = onDismiss,
+            )
+        }
         is SaveEditorPrompt.DeleteBackup -> ConfirmDialog(
             title = "删除备份",
             lines = listOf(
@@ -497,7 +611,9 @@ private fun SaveEditorHelpPanel() {
             return@CardSurface
         }
         TextBlock("编辑器页面上方的按钮")
-        TextBlock("· 【💾 保存到游戏存档】把当前内容写回你打开的那个存档文件，覆盖前自动备份。")
+        TextBlock("· 【💾 保存到游戏存档】只写回当前打开的普通存档文件；覆盖前自动备份。")
+        TextBlock("· 命运商城里的【💾 保存 global.json 到游戏存档】只写回 global.json；覆盖前也会自动备份。")
+        TextBlock("· 命运商城里的 global.json 备份按钮会打开本页，可恢复或删除全局存档备份。")
         TextBlock("· 【🗂️ 槽位 / 备份】打开本应用的面板：保存到读档槽位、恢复或删除备份。")
         TextBlock("· 【🔄 重新读取】丢弃未保存的修改，重新从游戏目录读取当前存档。")
         TextBlock("· 【⬅️ 返回存档列表】回到本页的存档选择界面；有未保存的修改时会先确认。")
@@ -532,7 +648,8 @@ private fun SaveEditorHeroPanel() {
             Text(
                 "先选择游戏用户，再选择存档文件。修改前请先在游戏内“保存并退出”；覆盖前会自动备份，可随时恢复。\n" +
                     "编辑界面内置了 @柳漪春涛 老师开发的《苏丹的游戏》存档修改器 · " +
-                    "并把“选存档 / 读取 / 覆盖写回 / 自动备份” 功能接到了管理器上，让用户无需手动导入导出文件，即可轻松修改存档！。" +
+                    "并把“选存档 / 读取 / 覆盖写回 / 自动备份” 功能接到了管理器上，同时支持编辑账号全局存档" +
+                    "（命运商城 / 成就 / 命运点），让用户无需手动导入导出文件，即可轻松修改存档！。" +
                     "如果有能力，请点击链接去给这位老师的仓库点亮颗star！",
                 fontSize = 14.sp,
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,

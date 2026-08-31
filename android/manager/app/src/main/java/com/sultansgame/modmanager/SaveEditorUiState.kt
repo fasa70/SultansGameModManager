@@ -32,12 +32,13 @@ data class SaveEditorUiState(
     val selectedFile: String? = null,
     /** Exactly what was read from disk, for the concurrent-write check. */
     val rawJson: String? = null,
-    /**
-     * The page's serialization as of the last successful load or save. The page
-     * re-serializes the save, so its output never matches [rawJson] byte for
-     * byte even with zero edits; this is what "dirty" is measured against.
-     */
+    /** The page's serialization as of the last successful load or save. */
     val savedBaseline: String? = null,
+    /** Raw global.json read alongside the selected save, when available. */
+    val globalRawJson: String? = null,
+    /** The page's global serialization as of the last successful load or save. */
+    val globalSavedBaseline: String? = null,
+    val globalEditorReady: Boolean = false,
     /** True once the page has loaded and accepted the staged save. */
     val editorReady: Boolean = false,
     /**
@@ -60,6 +61,8 @@ data class SaveEditorUiState(
     val archiveSlots: List<SaveEditorArchiveSlot?> = List(SaveArchiveIndex.SLOT_COUNT) { null },
     /** Manager-side snapshots of the selected file, newest first. */
     val backups: List<SaveBackupEntry> = emptyList(),
+    /** Manager-side snapshots of global.json, newest first. */
+    val globalBackups: List<SaveBackupEntry> = emptyList(),
     /** 最近一次读取因游戏侧服务未运行而失败；驱动“启动游戏”入口与自动恢复。 */
     val serviceActivationRequired: Boolean = false,
     val error: String? = null,

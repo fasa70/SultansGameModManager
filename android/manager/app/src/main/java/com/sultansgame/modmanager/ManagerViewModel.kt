@@ -1041,6 +1041,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     private fun onSaveEditorWebEvent(event: SaveEditorWebEvent) {
         when (event) {
             is SaveEditorWebEvent.ExportRequested -> saveSave()
+            SaveEditorWebEvent.GlobalExportRequested -> saveGlobalSave()
             SaveEditorWebEvent.ToolsRequested -> updateSaveEditor { it.copy(toolsOpen = true) }
             // Both discard unsaved edits, so they are parked for the UI to
             // confirm rather than run from here.
@@ -1051,6 +1052,10 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                 it.copy(pendingWebAction = SaveEditorWebAction.Leave)
             }
             SaveEditorWebEvent.SaveInjected -> captureSaveBaseline()
+            SaveEditorWebEvent.GlobalInjected -> captureGlobalBaseline()
+            is SaveEditorWebEvent.GlobalLoadFailed -> updateSaveEditor {
+                it.copy(globalEditorReady = false, globalSavedBaseline = null)
+            }
             is SaveEditorWebEvent.LoadFailed -> updateSaveEditor {
                 // The page's buttons stay disabled when a load fails, so surface
                 // the reason on the native panel where 重新读取 / 返回列表 live.
@@ -1068,6 +1073,8 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                     progress = null,
                     editorReady = false,
                     savedBaseline = null,
+                    globalEditorReady = false,
+                    globalSavedBaseline = null,
                     // The page is gone, so its status bar cannot carry this; the
                     // native panel is the only surface left to report it on.
                     toolsOpen = true,
@@ -1091,6 +1098,15 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             val baseline = saveEditorWeb.pullCurrentJson()
             updateSaveEditor { it.copy(editorReady = baseline != null, savedBaseline = baseline) }
+        }
+    }
+
+    private fun captureGlobalBaseline() {
+        viewModelScope.launch {
+            val baseline = saveEditorWeb.pullCurrentGlobalJson()
+            updateSaveEditor {
+                it.copy(globalEditorReady = baseline != null, globalSavedBaseline = baseline)
+            }
         }
     }
 
@@ -1195,6 +1211,10 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                     selectedFile = fileName,
                     editorReady = false,
                     savedBaseline = null,
+                    globalRawJson = null,
+                    globalSavedBaseline = null,
+                    globalEditorReady = false,
+                    globalBackups = emptyList(),
                     error = null,
                     notice = null,
                 )
@@ -1206,15 +1226,22 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                     return@launch
                 }
                 val rawJson = status.content ?: throw IllegalStateException("存档内容为空")
+                val globalStatus = withContext(Dispatchers.IO) { loaderBridge.readSave(uid, "global.json") }
+                val globalRawJson = globalStatus.content?.takeIf { globalStatus.isReady }
                 val backups = listSaveBackups(uid, fileName)
+                val globalBackups = listSaveBackups(uid, "global.json")
                 // The page parses the text and reports back through
-                // SaveInjected/LoadFailed, which is where editorReady is settled.
-                saveEditorWeb.load(rawJson, fileName)
+                // SaveInjected/GlobalInjected, which is where readiness is settled.
+                saveEditorWeb.load(rawJson, fileName, globalRawJson, "global.json")
                 updateSaveEditor {
                     it.copy(
                         isBusy = false,
                         rawJson = rawJson,
+                        globalRawJson = globalRawJson,
+                        globalEditorReady = false,
                         backups = backups,
+                        globalBackups = globalBackups,
+                        notice = if (globalRawJson == null) "未找到可用的 global.json，命运商城功能暂不可用。" else null,
                         stage = SaveEditorStage.Edit,
                     )
                 }
@@ -1241,6 +1268,10 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                 it.copy(
                     editorReady = false,
                     savedBaseline = null,
+                    globalRawJson = null,
+                    globalSavedBaseline = null,
+                    globalEditorReady = false,
+                    globalBackups = emptyList(),
                     toolsOpen = false,
                     pendingWebAction = null,
                 )
@@ -1259,6 +1290,10 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                     stage = SaveEditorStage.SelectFile,
                     selectedFile = null,
                     rawJson = null,
+                    globalRawJson = null,
+                    globalSavedBaseline = null,
+                    globalEditorReady = false,
+                    globalBackups = emptyList(),
                     savedBaseline = null,
                     editorReady = false,
                     toolsOpen = false,
@@ -1276,9 +1311,10 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
      * because the edits live in the page, not in this state.
      */
     suspend fun saveEditorHasUnsavedEdits(): Boolean {
-        val baseline = mutableState.value.saveEditor.savedBaseline ?: return false
-        val current = saveEditorWeb.pullCurrentJson() ?: return false
-        return current != baseline
+        val current = mutableState.value.saveEditor
+        val saveDirty = current.savedBaseline != null && saveEditorWeb.pullCurrentJson() != current.savedBaseline
+        val globalDirty = current.globalSavedBaseline != null && saveEditorWeb.pullCurrentGlobalJson() != current.globalSavedBaseline
+        return saveDirty || globalDirty
     }
 
     /** Raw `user_archive.json` text, or null when absent/unreadable. */
@@ -1423,7 +1459,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                 }
                 saveEditorNoticed(message) {
                     it.copy(
-                        saveFiles = (it.saveFiles + fileName).distinct().sorted(),
+                        saveFiles = (it.saveFiles + fileName).distinct(),
                         backups = refreshedBackups,
                         archiveSlots = if (indexStatus.isReady) slots else it.archiveSlots,
                     )
@@ -1436,10 +1472,58 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    /**
-     * Writes a manager-side backup back into the game's save directory. The
-     * current content is snapshotted first, so a restore is itself undoable.
-     */
+    fun saveGlobalSave() {
+        val current = mutableState.value.saveEditor
+        val uid = current.selectedUser ?: return
+        val rawJson = current.globalRawJson ?: return
+        if (current.isBusy || !current.globalEditorReady) return
+        saveEditorJob = viewModelScope.launch {
+            saveEditorBusy("正在保存 global.json…")
+            try {
+                val edited = saveEditorWeb.pullCurrentGlobalJson()
+                if (edited == null) {
+                    saveEditorFailed("编辑器内的 global.json 无效，未做任何写入。请重新读取存档。")
+                    return@launch
+                }
+                if (edited == current.globalSavedBaseline) {
+                    saveEditorNoticed("ℹ️ global.json 没有需要保存的修改。") { it }
+                    return@launch
+                }
+                val disk = withContext(Dispatchers.IO) { loaderBridge.readSave(uid, "global.json") }
+                val diskContent = disk.content
+                if (!disk.isReady || diskContent == null) {
+                    saveEditorFailed("无法确认 global.json 当前内容，已取消本次保存。请先重新读取存档。")
+                    return@launch
+                }
+                if (diskContent != rawJson) {
+                    saveEditorFailed("global.json 已被外部改动，请先重新读取存档后再保存。")
+                    return@launch
+                }
+                backupBeforeWrite(uid, "global.json", diskContent)
+                val writeStatus = withContext(Dispatchers.IO) {
+                    loaderBridge.writeSave(uid, "global.json", edited)
+                }
+                if (!writeStatus.isReady) {
+                    saveEditorFailed(writeStatus.reason ?: "保存 global.json 失败。")
+                    return@launch
+                }
+                val savedBackups = listSaveBackups(uid, "global.json")
+                saveEditorNoticed("✅ global.json 已保存；覆盖前的版本已备份，可在“槽位 / 备份”里恢复。") {
+                    it.copy(
+                        globalRawJson = edited,
+                        globalSavedBaseline = edited,
+                        globalBackups = savedBackups,
+                    )
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                saveEditorFailed("保存 global.json 失败。", error)
+            }
+        }
+    }
+
+    /** Writes a manager-side backup back into the game's save directory. */
     fun restoreSaveBackup(entry: SaveBackupEntry) {
         val current = mutableState.value.saveEditor
         val uid = current.selectedUser ?: return
@@ -1457,21 +1541,37 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                     return@launch
                 }
                 val reopened = entry.fileName == current.selectedFile
+                val restoringGlobal = entry.fileName == "global.json"
                 if (reopened) {
                     // The restored text has to go back through the page, so drop
                     // the baseline until it reports the reload succeeded.
                     saveEditorWeb.reset()
-                    saveEditorWeb.load(content, entry.fileName)
+                    saveEditorWeb.load(
+                        content,
+                        entry.fileName,
+                        current.globalRawJson,
+                        "global.json",
+                    )
+                } else if (restoringGlobal) {
+                    saveEditorWeb.loadGlobal(content, "global.json")
                 }
-                val backups = listSaveBackups(uid, current.selectedFile ?: entry.fileName)
+                val backups = listSaveBackups(uid, entry.fileName)
                 saveEditorNoticed(
-                    "✅ 已把 ${entry.fileName} 恢复到 ${entry.createdAtText} 的备份；恢复前的内容也已另存为备份。",
+                    if (restoringGlobal) {
+                        "✅ 已把 global.json 恢复到 ${entry.createdAtText} 的备份；恢复前的内容也已另存为备份。"
+                    } else {
+                        "✅ 已把 ${entry.fileName} 恢复到 ${entry.createdAtText} 的备份；恢复前的内容也已另存为备份。"
+                    },
                 ) {
                     it.copy(
-                        rawJson = if (reopened) content else it.rawJson,
-                        editorReady = if (reopened) false else it.editorReady,
-                        savedBaseline = if (reopened) null else it.savedBaseline,
-                        backups = backups,
+                        rawJson = if (reopened && !restoringGlobal) content else it.rawJson,
+                        editorReady = if (reopened && !restoringGlobal) false else it.editorReady,
+                        savedBaseline = if (reopened && !restoringGlobal) null else it.savedBaseline,
+                        globalRawJson = if (restoringGlobal && reopened) content else it.globalRawJson,
+                        globalEditorReady = if (restoringGlobal && reopened) false else it.globalEditorReady,
+                        globalSavedBaseline = if (restoringGlobal && reopened) null else it.globalSavedBaseline,
+                        backups = if (!restoringGlobal) backups else it.backups,
+                        globalBackups = if (restoringGlobal) backups else it.globalBackups,
                     )
                 }
             } catch (error: CancellationException) {
@@ -1490,10 +1590,11 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             val removed = runCatching {
                 withContext(Dispatchers.IO) { saveBackupStore.delete(entry) }
             }.getOrDefault(false)
-            val backups = listSaveBackups(uid, current.selectedFile ?: entry.fileName)
+            val backups = listSaveBackups(uid, entry.fileName)
             updateSaveEditor {
                 it.copy(
-                    backups = backups,
+                    backups = if (entry.fileName == "global.json") it.backups else backups,
+                    globalBackups = if (entry.fileName == "global.json") backups else it.globalBackups,
                     notice = if (removed) "已删除 ${entry.createdAtText} 的备份。" else "该备份文件已不存在。",
                 )
             }
