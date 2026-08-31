@@ -5,7 +5,7 @@ import com.sultansgame.modmanager.model.MAXIMUM_MOD_MEDIA_FILE_SIZE_BYTES
 import com.sultansgame.modmanager.model.MAXIMUM_MOD_PATH_DEPTH
 import java.util.Locale
 
-const val MAXIMUM_MOD_ENTRY_COUNT = 10_000
+const val MAXIMUM_MOD_ENTRY_COUNT = 999_999
 
 object ModPathPolicy {
     fun normalize(relativePath: String): String? {

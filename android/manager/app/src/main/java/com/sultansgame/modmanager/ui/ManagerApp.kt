@@ -189,6 +189,7 @@ data class ManagerActions(
     val openAvailableUpdate: () -> Unit,
     val clearFeedback: () -> Unit,
     val confirmExternalZipImport: () -> Unit,
+    val confirmDeepScanZipImport: () -> Unit,
     val submitZipPassword: (CharArray) -> Unit,
     val cancelExternalZipImport: () -> Unit,
 )
@@ -207,6 +208,7 @@ private sealed interface DialogKind {
     data class WorkshopTaskRemoval(val taskId: String) : DialogKind
     data object ExternalZipImport : DialogKind
     data object ZipPasswordImport : DialogKind
+    data object DeepScanZipImport : DialogKind
     data object MergeSyncConfirmation : DialogKind
     data class ModExportSettings(val action: com.sultansgame.modmanager.ModExportAction) : DialogKind
 }
@@ -256,6 +258,10 @@ fun ManagerApp(state: ManagerUiState, actions: ManagerActions) {
 
     LaunchedEffect(state.pendingZipPassword) {
         if (state.pendingZipPassword) dialog = DialogKind.ZipPasswordImport
+    }
+
+    LaunchedEffect(state.pendingZipDeepScan) {
+        if (state.pendingZipDeepScan && !state.pendingZipPassword) dialog = DialogKind.DeepScanZipImport
     }
 
     LaunchedEffect(state.modExport.settingsAction) {
@@ -308,6 +314,7 @@ fun ManagerApp(state: ManagerUiState, actions: ManagerActions) {
             if (dialog == DialogKind.UpdateAvailable) actions.dismissAvailableUpdate()
             if (dialog == DialogKind.ExternalZipImport) actions.cancelExternalZipImport()
             if (dialog == DialogKind.ZipPasswordImport) actions.cancelExternalZipImport()
+            if (dialog == DialogKind.DeepScanZipImport) actions.cancelExternalZipImport()
             if (dialog == DialogKind.MergeSyncConfirmation) actions.keepOriginalSync()
             dialog = null
         },
@@ -1137,6 +1144,15 @@ private fun DialogHost(state: ManagerUiState, actions: ManagerActions, dialog: D
                 actions.submitZipPassword,
                 actions.cancelExternalZipImport,
                 onDismiss,
+            )
+        }
+        DialogKind.DeepScanZipImport -> state.pendingExternalZip?.let { request ->
+            ConfirmDialog(
+                "未找到标准 Mod 结构",
+                "该 ZIP 的 Info.json 不在标准位置（压缩包根目录或其一级子目录）。是否深度扫描所有子目录并导入找到的 Mod？不属于任何 Mod 的文件将被忽略。",
+                "深度扫描导入",
+                { actions.confirmDeepScanZipImport(); onDismiss() },
+                { actions.cancelExternalZipImport(); onDismiss() },
             )
         }
         DialogKind.MergeSyncConfirmation -> MergeSyncConfirmationDialog(actions, onDismiss)

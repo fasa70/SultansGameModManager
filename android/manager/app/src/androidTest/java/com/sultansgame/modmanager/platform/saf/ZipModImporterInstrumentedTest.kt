@@ -165,13 +165,83 @@ class ZipModImporterInstrumentedTest {
             File(target, "Info.json").writeText("{\"name\":\"Link target\"}")
             Os.symlink(target.absolutePath, link.absolutePath)
 
-            val error = runCatching { cache.validateDirectory(link) }.exceptionOrNull()
+            val error = runCatching { cache.importDirectory(link, com.sultansgame.modmanager.model.CacheSource.SafTree) }.exceptionOrNull()
 
             assertTrue(error is ImportValidationException)
             assertEquals("Mod 根目录不可读", error?.message)
         } finally {
             link.delete()
             testRoot.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun deepScanImportsNestedModRootsAndReportsIgnoredEntries() {
+        val id = UUID.randomUUID().toString()
+        val archive = File(context.cacheDir, "zip-mod-deep-$id.zip")
+        val cacheRoot = File(context.filesDir, "zip-mod-deep-cache-$id")
+        try {
+            ZipOutputStream(archive.outputStream()).use { output ->
+                writeEntry(output, "readme.txt", "not a mod")
+                writeEntry(output, "分类包/剧情/ModA/Info.json", "{\"name\":\"A\"}")
+                writeEntry(output, "分类包/剧情/ModA/config/event/1.json", "{}")
+                writeEntry(output, "分类包/功能/ModB/info.json", "{\"name\":\"B\"}")
+            }
+
+            val importer = ZipModImporter(context, AndroidPrivateModCache(cacheRoot, context))
+            val standardError = runCatching { importer.importZip(archive) }.exceptionOrNull()
+            assertTrue(standardError is ZipImportException.NoModRoots)
+
+            val result = importer.importZipDeepScan(archive)
+
+            assertEquals(listOf("ModA", "ModB"), result.mods.map { it.displayName })
+            // readme.txt + 分类包/剧情/功能 三个中间目录
+            assertEquals(4, result.ignoredEntryCount)
+            assertEquals(2, cacheRoot.listFiles()?.count { it.isDirectory && !it.name.startsWith('.') })
+        } finally {
+            archive.delete()
+            cacheRoot.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun deepScanPrefersShallowestRootWhenNestedModRootsExist() {
+        val id = UUID.randomUUID().toString()
+        val archive = File(context.cacheDir, "zip-mod-nested-$id.zip")
+        val cacheRoot = File(context.filesDir, "zip-mod-nested-cache-$id")
+        try {
+            ZipOutputStream(archive.outputStream()).use { output ->
+                writeEntry(output, "bundle/Info.json", "{\"name\":\"Bundle\"}")
+                writeEntry(output, "bundle/inner/Info.json", "{\"name\":\"Inner\"}")
+            }
+
+            val result = ZipModImporter(context, AndroidPrivateModCache(cacheRoot, context)).importZipDeepScan(archive)
+
+            assertEquals(listOf("bundle"), result.mods.map { it.displayName })
+        } finally {
+            archive.delete()
+            cacheRoot.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun deepScanFailsWithoutAnyInfoJsonAndWritesNoCache() {
+        val id = UUID.randomUUID().toString()
+        val archive = File(context.cacheDir, "zip-mod-empty-$id.zip")
+        val cacheRoot = File(context.filesDir, "zip-mod-empty-cache-$id")
+        try {
+            ZipOutputStream(archive.outputStream()).use { output ->
+                writeEntry(output, "docs/readme.txt", "no mods here")
+            }
+
+            val importer = ZipModImporter(context, AndroidPrivateModCache(cacheRoot, context))
+            val error = runCatching { importer.importZipDeepScan(archive) }.exceptionOrNull()
+
+            assertTrue(error is ImportValidationException)
+            assertFalse(cacheRoot.listFiles()?.any { it.isDirectory && !it.name.startsWith('.') } == true)
+        } finally {
+            archive.delete()
+            cacheRoot.deleteRecursively()
         }
     }
 

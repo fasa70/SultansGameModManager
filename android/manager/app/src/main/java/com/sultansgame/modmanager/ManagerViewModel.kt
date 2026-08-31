@@ -1585,7 +1585,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
 
     fun confirmExternalZipImport() {
         val request = mutableState.value.pendingExternalZip ?: return
-        if (mutableState.value.pendingZipPassword) return
+        if (mutableState.value.pendingZipPassword || mutableState.value.pendingZipDeepScan) return
         mutableState.value = mutableState.value.copy(zipImportInProgress = true, feedback = FeedbackMessage("正在校验并导入 ${request.displayName}…"))
         viewModelScope.launch {
             try {
@@ -1600,6 +1600,8 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             } catch (error: CancellationException) {
                 clearPendingZip(request)
                 throw error
+            } catch (error: com.sultansgame.modmanager.platform.saf.ZipImportException.NoModRoots) {
+                offerZipDeepScan()
             } catch (error: Exception) {
                 clearPendingZip(request)
                 mutableState.value = mutableState.value.copy(
@@ -1609,6 +1611,41 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                 mutableState.value = mutableState.value.copy(zipImportInProgress = false)
             }
         }
+    }
+
+    fun confirmDeepScanZipImport() {
+        val request = mutableState.value.pendingExternalZip ?: return
+        if (!mutableState.value.pendingZipDeepScan || mutableState.value.pendingZipPassword) return
+        mutableState.value = mutableState.value.copy(zipImportInProgress = true, feedback = FeedbackMessage("正在深度扫描并导入 ${request.displayName}…"))
+        viewModelScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    zipImporter.importZipDeepScan(
+                        externalZipInbox.fileFor(request),
+                        archiveDisplayName = request.displayName,
+                    )
+                }
+                updateDeepScanImportedMods(result)
+                clearPendingZip(request)
+            } catch (error: CancellationException) {
+                clearPendingZip(request)
+                throw error
+            } catch (error: Exception) {
+                clearPendingZip(request)
+                mutableState.value = mutableState.value.copy(
+                    feedback = FeedbackMessage("ZIP 深度扫描导入失败：${error.message ?: "无法验证内容"}", isError = true),
+                )
+            } finally {
+                mutableState.value = mutableState.value.copy(zipImportInProgress = false)
+            }
+        }
+    }
+
+    private fun offerZipDeepScan() {
+        mutableState.value = mutableState.value.copy(
+            pendingZipDeepScan = true,
+            feedback = FeedbackMessage("未找到标准 Mod 结构：Info.json 不在压缩包根目录或其一级子目录。可选择深度扫描导入。"),
+        )
     }
 
     fun submitZipPassword(password: CharArray) {
@@ -1623,14 +1660,26 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         mutableState.value = mutableState.value.copy(zipImportInProgress = true, feedback = null)
         viewModelScope.launch {
             try {
-                val imported = withContext(Dispatchers.IO) {
-                    zipImporter.importZip(
-                        externalZipInbox.fileFor(request),
-                        password,
-                        archiveDisplayName = request.displayName,
-                    )
+                val result = withContext(Dispatchers.IO) {
+                    try {
+                        com.sultansgame.modmanager.platform.saf.DeepScanImportResult(
+                            zipImporter.importZip(
+                                externalZipInbox.fileFor(request),
+                                password,
+                                archiveDisplayName = request.displayName,
+                            ),
+                            0,
+                        )
+                    } catch (error: com.sultansgame.modmanager.platform.saf.ZipImportException.NoModRoots) {
+                        // 密码刚已验证通过；就地降级深度扫描，避免要求用户重新输入密码。
+                        zipImporter.importZipDeepScan(
+                            externalZipInbox.fileFor(request),
+                            password,
+                            archiveDisplayName = request.displayName,
+                        )
+                    }
                 }
-                updateImportedMods(imported)
+                updateImportedMods(result.mods, result.ignoredEntryCount)
                 clearPendingZip(request)
             } catch (error: CancellationException) {
                 throw error
@@ -1652,24 +1701,34 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
 
     private suspend fun clearPendingZip(request: com.sultansgame.modmanager.platform.saf.ExternalZipImportRequest) {
         withContext(Dispatchers.IO) { externalZipInbox.discard(request) }
-        mutableState.value = mutableState.value.copy(pendingExternalZip = null, pendingZipPassword = false)
+        mutableState.value = mutableState.value.copy(pendingExternalZip = null, pendingZipPassword = false, pendingZipDeepScan = false)
     }
 
     fun cancelExternalZipImport() {
         val request = mutableState.value.pendingExternalZip ?: return
         if (mutableState.value.zipImportInProgress) return
-        mutableState.value = mutableState.value.copy(pendingExternalZip = null, pendingZipPassword = false)
+        mutableState.value = mutableState.value.copy(pendingExternalZip = null, pendingZipPassword = false, pendingZipDeepScan = false)
         viewModelScope.launch(Dispatchers.IO) { externalZipInbox.discard(request) }
     }
 
-    private fun updateImportedMods(imported: List<com.sultansgame.modmanager.model.CachedMod>) {
+    private fun updateDeepScanImportedMods(result: com.sultansgame.modmanager.platform.saf.DeepScanImportResult) =
+        updateImportedMods(result.mods, result.ignoredEntryCount)
+
+    private fun updateImportedMods(
+        imported: List<com.sultansgame.modmanager.model.CachedMod>,
+        ignoredEntryCount: Int = 0,
+    ) {
         val cachedMods = (mutableState.value.cachedMods + imported).distinctBy { it.cacheKey }
         deploymentPlan.ensureSynced(cachedMods)
         imported.forEach { deploymentPlan.setSyncedToGame(it.cacheKey, true, cachedMods) }
         mutableState.value = mutableState.value.copy(
             cachedMods = cachedMods,
             feedback = FeedbackMessage(
-                "已安全缓存 ${imported.size} 个 Mod，并将自动同步到游戏。请在游戏内 Mod 面板管理加载、开关和排序。",
+                if (ignoredEntryCount > 0) {
+                    "已通过深度扫描缓存 ${imported.size} 个 Mod（忽略了 ${ignoredEntryCount} 个非 Mod 条目），并将自动同步到游戏。请在游戏内 Mod 面板管理加载、开关和排序。"
+                } else {
+                    "已安全缓存 ${imported.size} 个 Mod，并将自动同步到游戏。请在游戏内 Mod 面板管理加载、开关和排序。"
+                },
             ),
         )
         refreshGameModSyncItems()
