@@ -173,6 +173,8 @@ data class ManagerActions(
     val restoreSaveBackup: (com.sultansgame.modmanager.platform.saveeditor.SaveBackupEntry) -> Unit = {},
     val deleteSaveBackup: (com.sultansgame.modmanager.platform.saveeditor.SaveBackupEntry) -> Unit = {},
     val closeSaveEditorTools: () -> Unit = {},
+    /** Clears a page-raised 重新读取 / 返回 request after the UI handled it. */
+    val consumeSaveEditorWebAction: () -> Unit = {},
     /** Hands over the retained editor WebView; see ManagerViewModel.attachSaveEditorView. */
     val attachSaveEditorView: (android.content.Context) -> android.view.View? = { null },
     val detachSaveEditorView: () -> Unit = {},
@@ -1412,8 +1414,14 @@ private fun WorkshopArtworkThumbnail(item: WorkshopItem, modifier: Modifier, con
 }
 
 @Composable
-private fun ListPanel(title: String, body: String, trailing: String, onClick: () -> Unit) {
-    Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(17.dp), onClick = onClick) {
+internal fun ListPanel(
+    title: String,
+    body: String,
+    trailing: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(17.dp), onClick = { if (enabled) onClick() }) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 Text(title, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)

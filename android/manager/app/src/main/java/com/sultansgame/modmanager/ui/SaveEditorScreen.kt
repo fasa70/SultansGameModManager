@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -28,12 +29,15 @@ import androidx.compose.ui.window.DialogProperties
 import com.sultansgame.modmanager.ManagerUiState
 import com.sultansgame.modmanager.SaveEditorStage
 import com.sultansgame.modmanager.SaveEditorUiState
+import com.sultansgame.modmanager.SaveEditorWebAction
 import com.sultansgame.modmanager.platform.saveeditor.SaveArchiveIndex
 import com.sultansgame.modmanager.platform.saveeditor.SaveBackupEntry
 import com.sultansgame.modmanager.platform.saveeditor.SaveEditorArchiveSlot
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /** Confirmations gating actions that overwrite or delete something. */
 private sealed interface SaveEditorPrompt {
@@ -51,9 +55,9 @@ private sealed interface SaveEditorPrompt {
  *
  * Picking a user and a file is native; once a save is open the whole screen is
  * the vendored upstream HTML editor, with no native chrome above it. The page's
- * own buttons drive the native side: its 保存 button runs the overwrite pipeline
- * and its repurposed 导出备份 button opens the slot/backup panel, which is the
- * one native surface that covers the editor while it is up.
+ * own toolbar drives the native side: 保存到游戏存档 runs the overwrite pipeline,
+ * 重新读取 and 返回存档列表 route back here for their confirmations, and
+ * 槽位 / 备份 opens the one native surface that covers the editor.
  */
 @Composable
 internal fun SaveEditorScreen(state: ManagerUiState, actions: ManagerActions, wide: Boolean) {
@@ -74,6 +78,18 @@ internal fun SaveEditorScreen(state: ManagerUiState, actions: ManagerActions, wi
     }
 
     val leave = { guardUnsaved(SaveEditorPrompt.Leave) { actions.leaveSaveFile() } }
+    val reload = { guardUnsaved(SaveEditorPrompt.Reload) { actions.reloadSaveFile() } }
+
+    // The page's 重新读取 / 返回 buttons arrive as state rather than as direct
+    // calls: both discard unsaved edits, and the confirmation dialog lives here.
+    LaunchedEffect(editor.pendingWebAction) {
+        val pendingAction = editor.pendingWebAction ?: return@LaunchedEffect
+        actions.consumeSaveEditorWebAction()
+        when (pendingAction) {
+            SaveEditorWebAction.Reload -> reload()
+            SaveEditorWebAction.Leave -> leave()
+        }
+    }
 
     if (editor.stage == SaveEditorStage.Edit) {
         BackHandler(enabled = true) { if (editor.toolsOpen) actions.closeSaveEditorTools() else leave() }
@@ -85,7 +101,7 @@ internal fun SaveEditorScreen(state: ManagerUiState, actions: ManagerActions, wi
                 editor = editor,
                 wide = wide,
                 onClose = actions.closeSaveEditorTools,
-                onReload = { guardUnsaved(SaveEditorPrompt.Reload) { actions.reloadSaveFile() } },
+                onReload = reload,
                 onLeave = leave,
                 onSaveSlot = { slot -> archiveTarget = slot },
                 onPrompt = { pending -> prompt = pending },
@@ -145,11 +161,12 @@ private fun SaveEditorWebHost(generation: Int, actions: ManagerActions, modifier
 }
 
 /**
- * 槽位保存、备份恢复、重新读取、返回列表。
+ * 槽位保存与备份管理。
  *
  * 编辑阶段整屏都是 WebView，这些动作没有别的落脚处，所以由页面上被改造的
  * 「导出备份」按钮唤出本页；打开时替换而非叠加编辑器，避免触摸穿透。
- * WebView 是常驻的，摘下来不会丢失任何编辑。
+ * WebView 是常驻的，摘下来不会丢失任何编辑。重新读取与返回在页面工具栏上也有，
+ * 这里同样保留一份——载入失败时页面无法显示错误，本页是唯一的落脚处。
  */
 @Composable
 private fun SaveEditorToolsPanel(
@@ -173,7 +190,9 @@ private fun SaveEditorToolsPanel(
                 onAction = onClose,
             )
         }
-        editor.error?.let { error -> item { NoticeStrip("存档未写入", error) } }
+        // Every path that sets `error` fails closed before writing, so the file on
+        // disk is untouched — which is the first thing the player needs told.
+        editor.error?.let { error -> item { NoticeStrip("存档未改动", error) } }
         editor.notice?.let { notice -> item { NoticeStrip("提示", notice) } }
         if (editor.isBusy) item { LoadingPanel(editor.progress ?: "正在处理存档…") }
         item {
@@ -220,7 +239,6 @@ private fun SaveEditorToolsPanel(
         }
         item { SectionLabel("使用说明", "适配自上游 HTML 版") }
         item { SaveEditorHelpPanel() }
-        item { SaveEditorReferencePanel() }
     }
 }
 
@@ -228,15 +246,7 @@ private fun SaveEditorToolsPanel(
 @Composable
 private fun SaveEditorPicker(editor: SaveEditorUiState, actions: ManagerActions, wide: Boolean) {
     ScreenList(wide) {
-        item {
-            HeroPanel(
-                eyebrow = "存档编辑器",
-                title = "编辑游戏存档",
-                body = "先选择游戏用户，再选择存档文件。修改前请先在游戏内“保存并退出”；" +
-                    "覆盖前会自动备份，可随时恢复。",
-            )
-        }
-        item { SaveEditorReferencePanel() }
+        item { SaveEditorHeroPanel() }
         editor.error?.let { error -> item { NoticeStrip("存档编辑不可用", error) } }
         editor.notice?.let { notice -> item { NoticeStrip("提示", notice) } }
         if (editor.isBusy) item { LoadingPanel(editor.progress ?: "正在读取存档…") }
@@ -258,9 +268,12 @@ private fun LazyListScope.SaveUserStage(
     item { SectionLabel("选择游戏用户", "${users.size} 个") }
     if (users.isEmpty() && !busy) item { EmptyPanel("没有找到存档用户", "请先启动游戏并创建至少一个存档。") }
     items(users, key = { "save-user-$it" }) { uid ->
-        CardRow(title = "用户 $uid", subtitle = "SAVEDATA/$uid", enabled = !busy) {
-            actions.selectSaveUser(uid)
-        }
+        ListPanel(
+            title = "用户 $uid",
+            body = "SAVEDATA/$uid",
+            trailing = "选择",
+            enabled = !busy,
+        ) { actions.selectSaveUser(uid) }
     }
 }
 
@@ -274,9 +287,10 @@ private fun LazyListScope.SaveFileStage(editor: SaveEditorUiState, actions: Mana
     items(files, key = { "save-file-$it" }) { file ->
         val slotName = SaveArchiveIndex.slotOfFileName(file)
             ?.let { slot -> editor.archiveSlots.getOrNull(slot)?.name }
-        CardRow(
+        ListPanel(
             title = if (slotName != null) "$file（$slotName）" else file,
-            subtitle = "${saveFileKindLabel(file)} · 用户 ${editor.selectedUser.orEmpty()}",
+            body = "${saveFileKindLabel(file)} · 用户 ${editor.selectedUser.orEmpty()}",
+            trailing = "编辑",
             enabled = !busy,
         ) { actions.selectSaveFile(file) }
     }
@@ -472,9 +486,11 @@ private fun SaveEditorHelpPanel() {
             TextBlock("修改存档前请先在游戏内“保存并退出”；覆盖保存前会自动备份，可在“槽位 / 备份”里一键恢复。")
             return@CardSurface
         }
-        TextBlock("保存与槽位")
-        TextBlock("· 编辑器里的【💾 保存到游戏存档】会把当前内容写回你打开的那个存档文件。")
-        TextBlock("· 编辑器里的【🗂️ 槽位 / 备份 / 重读】会打开本应用的面板：保存到读档槽位、恢复备份、重新读取存档、返回存档列表。")
+        TextBlock("编辑器页面上方的按钮")
+        TextBlock("· 【💾 保存到游戏存档】把当前内容写回你打开的那个存档文件，覆盖前自动备份。")
+        TextBlock("· 【🗂️ 槽位 / 备份】打开本应用的面板：保存到读档槽位、恢复或删除备份。")
+        TextBlock("· 【🔄 重新读取】丢弃未保存的修改，重新从游戏目录读取当前存档。")
+        TextBlock("· 【⬅️ 返回存档列表】回到本页的存档选择界面；有未保存的修改时会先确认。")
         TextBlock("· 具体字段含义、卡牌与仪式的编辑说明请看编辑器页面内的提示，本应用不改动它的编辑逻辑。")
         TextBlock("来源与致谢")
         TextBlock("· 编辑界面为内置的《苏丹的游戏》存档编辑器网页版（作者 柳漪春涛，GPL-3.0-or-later）")
@@ -483,33 +499,40 @@ private fun SaveEditorHelpPanel() {
 }
 
 /**
- * Attribution for the vendored HTML editor. Upstream is GPLv3, so the notice is
- * an obligation as well as a credit; the repo-level THIRD_PARTY_NOTICES.md
- * carries the full declaration.
+ * The tab's opening card. Attribution rides in the hero panel — matching the
+ * merge tab — rather than in a separate card: upstream is GPLv3, so the notice
+ * is an obligation as well as a credit, and it should be the first thing read.
+ * The repo-level THIRD_PARTY_NOTICES.md carries the full declaration.
  */
 @Composable
-private fun SaveEditorReferencePanel() {
-    CardSurface {
-        Text("引用与致谢", fontSize = 14.sp, fontWeight = FontWeight.Bold)
-        TextBlock(
-            "存档编辑界面内置了 @khb10533 开发的《苏丹的游戏》存档编辑器网页版（苏游修改器 · " +
-                "柳漪春涛正式版，GPL-3.0-or-later，Copyright (C) 2026 柳漪春涛），原样收录未作修改。" +
-                "安卓版只是把“选存档 / 读取 / 覆盖写回 / 自动备份”接到了游戏本体上。" +
-                "如果有能力，请点击链接去给这位作者的仓库点亮颗 star！",
-        )
-        ExternalLinkText(SAVE_EDITOR_REFERENCE_URL)
+private fun SaveEditorHeroPanel() {
+    Card(
+        Modifier.fillMaxWidth(),
+        colors = CardDefaults.defaultColors(color = MiuixTheme.colorScheme.primaryContainer),
+        insideMargin = PaddingValues(22.dp),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            Text(
+                "存档编辑器",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            )
+            Text("编辑游戏存档", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            Text(
+                "先选择游戏用户，再选择存档文件。修改前请先在游戏内“保存并退出”；覆盖前会自动备份，可随时恢复。\n" +
+                    "编辑界面内置了 @柳漪春涛 老师开发的《苏丹的游戏》存档修改器 · " +
+                    "并把“选存档 / 读取 / 覆盖写回 / 自动备份” 功能接到了管理器上，让用户无需手动导入导出文件，即可轻松修改存档！。" +
+                    "如果有能力，请点击链接去给这位老师的仓库点亮颗star！",
+                fontSize = 14.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            )
+            ExternalLinkText(SAVE_EDITOR_REFERENCE_URL)
+        }
     }
 }
 
 private const val SAVE_EDITOR_REFERENCE_URL = "https://github.com/khb10533/suyou-save-editor"
-
-@Composable
-private fun CardRow(title: String, subtitle: String, enabled: Boolean, onClick: () -> Unit) {
-    CardSurface(onClick = if (enabled) onClick else null) {
-        TextBlock(title)
-        TextBlock(subtitle)
-    }
-}
 
 @Composable
 private fun CardSurface(onClick: (() -> Unit)? = null, content: @Composable () -> Unit) {

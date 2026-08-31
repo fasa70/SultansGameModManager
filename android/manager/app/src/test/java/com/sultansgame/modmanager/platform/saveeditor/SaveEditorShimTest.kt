@@ -58,12 +58,32 @@ class SaveEditorShimTest {
 
     @Test
     fun shimRepurposesBackupButtonAsTheNativePanelEntry() {
-        // The editing stage is entirely WebView, so this button is the only way
-        // to reach the native slot/backup actions.
+        // The editing stage is entirely WebView, so the page's toolbar is the only
+        // way to reach the native actions.
         val shim = SaveEditorShim.SHIM_JS
         assertTrue(shim.contains("getElementById(\"backupBtn\")"))
         assertTrue(shim.contains("onToolsRequest"))
         assertTrue(shim.contains("backupBtn.disabled = false"))
+    }
+
+    @Test
+    fun shimGivesReloadAndLeaveTheirOwnButtons() {
+        // Folding these into the slot/backup entry hid them behind a label that
+        // did not say what tapping it would do.
+        val shim = SaveEditorShim.SHIM_JS
+        assertTrue(shim.contains("sgmmReloadBtn"))
+        assertTrue(shim.contains("onReloadRequest"))
+        assertTrue(shim.contains("sgmmLeaveBtn"))
+        assertTrue(shim.contains("onLeaveRequest"))
+    }
+
+    @Test
+    fun injectedButtonsOnlyUseStylesUpstreamAlreadyCompiled() {
+        // The vendored Tailwind bundle is pre-built, so a class upstream never
+        // used has no rule and the button would render unstyled.
+        val shim = SaveEditorShim.SHIM_JS
+        val used = Regex("""bg-[a-z]+-[0-9]+""").findAll(shim).map { it.value }.toSet()
+        assertEquals(setOf("bg-sky-600", "bg-slate-700"), used)
     }
 
     @Test
@@ -84,8 +104,8 @@ class SaveEditorShimTest {
 
     @Test
     fun pullUsesCompactSerialization() {
-        // Upstream's download() pretty-prints with two-space indent, which can
-        // push a large save past the game-side 1 MiB write limit.
+        // Upstream's download() pretty-prints with two-space indent, which roughly
+        // doubles the bytes written for no gain.
         assertTrue(SaveEditorShim.PULL_JSON_JS.contains("JSON.stringify(saveData)"))
         assertTrue(!SaveEditorShim.PULL_JSON_JS.contains("null, 2"))
     }

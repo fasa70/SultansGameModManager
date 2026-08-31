@@ -12,6 +12,12 @@ internal sealed interface SaveEditorWebEvent {
     /** The repurposed backup button: open the native slot/backup panel. */
     data object ToolsRequested : SaveEditorWebEvent
 
+    /** The injected 重新读取 button. */
+    data object ReloadRequested : SaveEditorWebEvent
+
+    /** The injected 返回存档列表 button. */
+    data object LeaveRequested : SaveEditorWebEvent
+
     /** The staged save parsed and rendered. */
     data object SaveInjected : SaveEditorWebEvent
 
@@ -77,6 +83,16 @@ internal class SaveEditorNativeHooks(
     @JavascriptInterface
     fun onToolsRequest() {
         post(SaveEditorWebEvent.ToolsRequested)
+    }
+
+    @JavascriptInterface
+    fun onReloadRequest() {
+        post(SaveEditorWebEvent.ReloadRequested)
+    }
+
+    @JavascriptInterface
+    fun onLeaveRequest() {
+        post(SaveEditorWebEvent.LeaveRequested)
     }
 
     @JavascriptInterface

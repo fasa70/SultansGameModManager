@@ -34,6 +34,18 @@ internal object SaveEditorShim {
         (function () {
             if (window.__sgmmShimInstalled) return "ok";
             window.__sgmmShimInstalled = true;
+            // Only the Tailwind classes upstream already uses are available: the
+            // stylesheet is a pre-built bundle, so an unused class name is absent.
+            function nativeButton(id, label, tone, hook) {
+                var button = document.createElement("button");
+                button.id = id;
+                button.className = tone + " px-4 py-2 rounded-lg transition";
+                button.innerText = label;
+                button.onclick = function () {
+                    try { window.SgmmNative[hook](); } catch (e) {}
+                };
+                return button;
+            }
             var input = document.getElementById("fileInput");
             if (input) {
                 input.disabled = true;
@@ -43,14 +55,22 @@ internal object SaveEditorShim {
             var exportBtn = document.getElementById("exportBtn");
             if (exportBtn) exportBtn.innerText = "\u{1F4BE} 保存到游戏存档";
             // 上游"导出备份"（带时间戳的下载）已被原生的自动备份取代，
-            // 这里改用它做原生功能入口：槽位保存、备份恢复、重新读取。
+            // 这里改用它做槽位与备份面板的入口。
             var backupBtn = document.getElementById("backupBtn");
             if (backupBtn) {
-                backupBtn.innerText = "\u{1F5C2}️ 槽位 / 备份 / 重读";
+                backupBtn.innerText = "\u{1F5C2}\u{FE0F} 槽位 / 备份";
                 backupBtn.disabled = false;
                 backupBtn.onclick = function () {
                     try { window.SgmmNative.onToolsRequest(); } catch (e) {}
                 };
+            }
+            // 重新读取与返回各自独占一个按钮：它们是独立动作，聚合进一个入口
+            // 会让人猜不到点下去会发生什么。两者都不随存档是否载入成功而禁用，
+            // 载入失败时正是最需要它们的时候。
+            var bar = backupBtn ? backupBtn.parentElement : null;
+            if (bar) {
+                bar.appendChild(nativeButton("sgmmReloadBtn", "\u{1F504} 重新读取", "bg-sky-600", "onReloadRequest"));
+                bar.appendChild(nativeButton("sgmmLeaveBtn", "\u{2B05}\u{FE0F} 返回存档列表", "bg-slate-700", "onLeaveRequest"));
             }
             var tip = document.getElementById("tipDbStat");
             var strip = tip && tip.closest ? tip.closest("div") : null;
