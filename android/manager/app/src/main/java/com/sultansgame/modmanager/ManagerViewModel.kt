@@ -883,6 +883,11 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             } finally {
                 mutableState.value = mutableState.value.copy(gameModSyncProgress = null)
                 refreshGameModSyncItems()
+                // 导入等流程可能在本批排空期间追加同步项；仅当本批无失败且协程仍活跃时继续
+                // 统一消费，避免新 Mod 停留在待同步队列直到下一次刷新。失败与取消都不自动重试。
+                if (!interrupted && coroutineContext[Job]?.isActive != false && deploymentPlan.pendingOperations().isNotEmpty()) {
+                    processPendingGameModSyncOperations()
+                }
             }
         }
     }
@@ -1559,6 +1564,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                 availableUpdate = null,
                 pendingExternalZip = null,
                 pendingZipPassword = false,
+                pendingZipDeepScan = false,
                 zipImportInProgress = false,
                 workshop = WorkshopUiState.Idle,
                 workshopBrowse = WorkshopBrowseUiState(),

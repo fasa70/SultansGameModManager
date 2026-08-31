@@ -30,6 +30,10 @@ import java.io.File
 import java.io.FileInputStream
 import java.security.MessageDigest
 
+/** Byte thresholds for progress callbacks: at least every 256 KiB, plus every file end. */
+internal const val PROGRESS_REPORT_THRESHOLD_BYTES = 256L * 1024
+internal const val PROGRESS_REPORT_BUFFER_BYTES = 256 * 1024
+
 class AndroidModStorageLoaderBridge(
     private val context: Context,
     private val cacheRoot: File,
@@ -39,10 +43,6 @@ class AndroidModStorageLoaderBridge(
     private companion object {
         const val GAME_PACKAGE = "com.gametree.sultan.pd"
         const val KEY_MANAGER_CACHE_KEYS = "managerCacheKeys"
-
-        /** Byte thresholds for progress callbacks: at least every 256 KiB, plus every file end. */
-        const val PROGRESS_REPORT_THRESHOLD_BYTES = 256L * 1024
-        const val PROGRESS_REPORT_BUFFER_BYTES = 256 * 1024
     }
 
     private val uri = Uri.parse("content://$GAME_MOD_STORAGE_AUTHORITY")
@@ -336,52 +336,70 @@ class AndroidModStorageLoaderBridge(
     ) {
         val root = File(cacheRoot, item.cacheKey)
         require(root.isDirectory) { "Mod 缓存已不存在：${item.displayName}" }
-        val files = root.walkTopDown().filter(File::isFile).sortedBy { it.relativeTo(root).invariantSeparatorsPath }.toList()
-        val totalBytes = files.sumOf(File::length)
-        var writtenBytes = 0L
-        var lastReportedBytes = 0L
-        val report = { ->
-            // A file may grow between sizing and copying; keep the reported value consistent.
-            val written = minOf(writtenBytes, totalBytes)
-            if (written != lastReportedBytes) {
-                lastReportedBytes = written
-                onProgress?.invoke(written, totalBytes)
-            }
+        writeModPayload(output, root, onProgress)
+    }
+}
+
+private fun sha256(file: File): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    FileInputStream(file).use { input ->
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            digest.update(buffer, 0, count)
         }
-        output.writeInt(files.size)
-        report()
-        files.forEach { file ->
-            val relativePath = file.relativeTo(root).invariantSeparatorsPath
-            output.writeUTF(relativePath)
-            output.writeLong(file.length())
-            output.writeUTF(sha256(file))
-            if (onProgress != null) {
-                val buffer = ByteArray(PROGRESS_REPORT_BUFFER_BYTES)
+    }
+    return digest.digest().joinToString("") { "%02x".format(it) }
+}
+
+/**
+ * 将 Mod 缓存根目录序列化为游戏侧 Provider 可校验的字节流。
+ *
+ * 布局与 bootstrap 的 ModStorageProvider.copyMod 严格对应：int 文件数；每个文件依次为
+ * UTF 相对路径、long 字节长度、UTF 小写 64 位 SHA-256，随后为文件原始内容。非空 [onProgress]
+ * 时按固定阈值与每文件结束上报 (written, total)，字节输出与无回调分支完全一致。每个文件只
+ * 以单个输入流连续读取，避免重复发送文件开头导致游戏侧摘要不匹配。
+ */
+internal fun writeModPayload(
+    output: DataOutputStream,
+    root: File,
+    onProgress: ((writtenBytes: Long, totalBytes: Long) -> Unit)?,
+) {
+    val files = root.walkTopDown().filter(File::isFile).sortedBy { it.relativeTo(root).invariantSeparatorsPath }.toList()
+    val totalBytes = files.sumOf(File::length)
+    var writtenBytes = 0L
+    var lastReportedBytes = 0L
+    val report = { ->
+        // A file may grow between sizing and copying; keep the reported value consistent.
+        val written = minOf(writtenBytes, totalBytes)
+        if (written != lastReportedBytes) {
+            lastReportedBytes = written
+            onProgress?.invoke(written, totalBytes)
+        }
+    }
+    output.writeInt(files.size)
+    report()
+    files.forEach { file ->
+        val relativePath = file.relativeTo(root).invariantSeparatorsPath
+        output.writeUTF(relativePath)
+        output.writeLong(file.length())
+        output.writeUTF(sha256(file))
+        if (onProgress != null) {
+            val buffer = ByteArray(PROGRESS_REPORT_BUFFER_BYTES)
+            FileInputStream(file).use { input ->
                 while (true) {
-                    val count = FileInputStream(file).use { input -> input.read(buffer) }
+                    val count = input.read(buffer)
                     if (count < 0) break
                     output.write(buffer, 0, count)
                     writtenBytes += count
                     if (writtenBytes - lastReportedBytes >= PROGRESS_REPORT_THRESHOLD_BYTES) report()
                 }
-            } else {
-                FileInputStream(file).use { input -> writtenBytes += input.copyTo(output) }
             }
-            report()
+        } else {
+            FileInputStream(file).use { input -> writtenBytes += input.copyTo(output) }
         }
-        output.flush()
+        report()
     }
-
-    private fun sha256(file: File): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        FileInputStream(file).use { input ->
-            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-            while (true) {
-                val count = input.read(buffer)
-                if (count < 0) break
-                digest.update(buffer, 0, count)
-            }
-        }
-        return digest.digest().joinToString("") { "%02x".format(it) }
-    }
+    output.flush()
 }
