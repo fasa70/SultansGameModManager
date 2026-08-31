@@ -130,6 +130,22 @@ data class PendingGameModSyncOperation(
     }
 }
 
+/**
+ * Progress of streaming one mod's files to the game-side Provider.
+ *
+ * Counts describe what the Manager has written into the transfer pipe. The Provider validates and
+ * commits after the last byte arrives, so reaching [totalBytes] means the transfer finished, not
+ * that the mod is already visible in the game directory.
+ */
+data class GameModSyncTransferProgress(
+    val writtenBytes: Long,
+    val totalBytes: Long,
+) {
+    init {
+        require(writtenBytes >= 0 && totalBytes >= 0) { "byte counts must not be negative" }
+    }
+}
+
 data class GameModDirectoryEntry(
     val directoryName: String,
     val managerCacheKey: String? = null,

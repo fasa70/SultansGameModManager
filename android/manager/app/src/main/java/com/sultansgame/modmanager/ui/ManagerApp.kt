@@ -92,6 +92,7 @@ import com.sultansgame.modmanager.model.DownloadStage
 import com.sultansgame.modmanager.model.DownloadTask
 import com.sultansgame.modmanager.model.GameModSyncAvailability
 import com.sultansgame.modmanager.model.GameModSyncItem
+import com.sultansgame.modmanager.GameModSyncProgress
 import com.sultansgame.modmanager.model.PatchConfirmation
 import com.sultansgame.modmanager.model.SteamAuthState
 import com.sultansgame.modmanager.model.WorkshopBrowseQuery
@@ -902,7 +903,7 @@ private fun MyModsScreen(state: ManagerUiState, actions: ManagerActions, wide: B
                 eyebrow = "同步给游戏",
                 title = "管理 Mod",
                 body = when {
-                    state.gameModSyncInProgress -> "正在同步 Mod 到游戏目录…"
+                    state.gameModSyncProgress != null -> gameModSyncProgressText(state.gameModSyncProgress)
                     activationRequired -> "请先启动游戏并保持在后台，返回此处会自动继续同步。"
                     syncStatus?.isReady == true -> "Manager 只管理同步到游戏目录。加载、热开关和排序请在游戏内官方 Mod 面板完成。"
                     syncStatus != null -> syncStatus.reason ?: "暂时无法读取游戏 Mod 目录。"
@@ -910,14 +911,12 @@ private fun MyModsScreen(state: ManagerUiState, actions: ManagerActions, wide: B
                 },
                 action = when {
                     activationRequired -> "启动游戏"
-                    syncStatus?.isReady != true -> "重新检查"
-                    else -> null
+                    else -> "立即同步"
                 },
-                actionEnabled = !state.gameModSyncInProgress && !state.cachedModDeletionInProgress,
+                actionEnabled = state.gameModSyncProgress == null && !state.cachedModDeletionInProgress,
                 onAction = when {
                     activationRequired -> actions.launchGameForModSync
-                    syncStatus?.isReady != true -> actions.refreshGameMods
-                    else -> null
+                    else -> actions.refreshGameMods
                 },
             )
         }
@@ -925,7 +924,7 @@ private fun MyModsScreen(state: ManagerUiState, actions: ManagerActions, wide: B
         item {
             PrimaryButton(
                 "合并 Mod（可解决Mod冲突）",
-                enabled = !state.gameModSyncInProgress &&
+                enabled = state.gameModSyncProgress == null &&
                     !state.cachedModDeletionInProgress,
                 onClick = actions.openMerge,
             )
@@ -934,7 +933,7 @@ private fun MyModsScreen(state: ManagerUiState, actions: ManagerActions, wide: B
             PrimaryButton(
                 "导出/分享 Mod",
                 enabled = state.cachedMods.isNotEmpty() &&
-                    !state.gameModSyncInProgress &&
+                    state.gameModSyncProgress == null &&
                     !state.cachedModDeletionInProgress &&
                     state.modExport.operation is com.sultansgame.modmanager.ModExportOperation.Idle,
                 onClick = actions.openModExport,
@@ -960,7 +959,7 @@ private fun MyModsScreen(state: ManagerUiState, actions: ManagerActions, wide: B
                         StatusPill(if (item.syncedToGame) "同步给游戏" else "未同步")
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        val enabled = !state.gameModSyncInProgress && !state.cachedModDeletionInProgress
+                        val enabled = state.gameModSyncProgress == null && !state.cachedModDeletionInProgress
                         SmallAction(if (item.syncedToGame) "从游戏中移除" else "同步给游戏", enabled) {
                             actions.setModSyncedToGame(item.cacheKey, !item.syncedToGame)
                         }
@@ -985,8 +984,20 @@ private fun MyModsScreen(state: ManagerUiState, actions: ManagerActions, wide: B
     }
 }
 
-private fun syncItemStatus(item: GameModSyncItem, state: ManagerUiState): String {
-    val pending = state.pendingGameModSyncOperations.firstOrNull { it.cacheKey == item.cacheKey }
+/** Hero body text while the drain loop runs; tested in [GameModSyncProgressTextTest]. */
+internal fun gameModSyncProgressText(progress: GameModSyncProgress): String {
+    val position = "${progress.operationIndex}/${progress.operationCount}"
+    val name = progress.displayName ?: "已删除的 Mod"
+    val header = if (progress.isRemoval) {
+        "正在同步 Mod 到游戏目录（$position）：正在从游戏中移除 $name"
+    } else {
+        "正在同步 Mod 到游戏目录（$position）：$name"
+    }
+    if (progress.isRemoval || progress.totalBytes <= 0L) return "$header…"
+    return "$header · ${formatBytes(progress.writtenBytes)} / ${formatBytes(progress.totalBytes)}…"
+}
+
+private fun syncItemStatus(item: GameModSyncItem, state: ManagerUiState): String {    val pending = state.pendingGameModSyncOperations.firstOrNull { it.cacheKey == item.cacheKey }
     return when {
         pending != null && pending.type == com.sultansgame.modmanager.model.GameModSyncOperationType.Sync -> "等待同步到游戏"
         pending != null -> "等待从游戏中移除"

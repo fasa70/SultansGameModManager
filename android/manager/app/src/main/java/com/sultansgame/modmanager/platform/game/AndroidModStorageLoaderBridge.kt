@@ -39,18 +39,25 @@ class AndroidModStorageLoaderBridge(
     private companion object {
         const val GAME_PACKAGE = "com.gametree.sultan.pd"
         const val KEY_MANAGER_CACHE_KEYS = "managerCacheKeys"
+
+        /** Byte thresholds for progress callbacks: at least every 256 KiB, plus every file end. */
+        const val PROGRESS_REPORT_THRESHOLD_BYTES = 256L * 1024
+        const val PROGRESS_REPORT_BUFFER_BYTES = 256 * 1024
     }
 
     private val uri = Uri.parse("content://$GAME_MOD_STORAGE_AUTHORITY")
 
     override suspend fun listMods(): GameModSyncStatus = withContext(Dispatchers.IO) { call(ModStorageCall.LIST_MODS, requestBundle()) }
 
-    override suspend fun syncMod(item: GameModSyncItem): GameModSyncStatus = withContext(Dispatchers.IO) {
+    override suspend fun syncMod(
+        item: GameModSyncItem,
+        onProgress: ((writtenBytes: Long, totalBytes: Long) -> Unit)?,
+    ): GameModSyncStatus = withContext(Dispatchers.IO) {
         supervisorScope {
             val pipe = ParcelFileDescriptor.createPipe()
             val writer = async(Dispatchers.IO) {
                 pipe[1].use { descriptor ->
-                    DataOutputStream(BufferedOutputStream(ParcelFileDescriptor.AutoCloseOutputStream(descriptor))).use { output -> writeMod(output, item) }
+                    DataOutputStream(BufferedOutputStream(ParcelFileDescriptor.AutoCloseOutputStream(descriptor))).use { output -> writeMod(output, item, onProgress) }
                 }
             }
             try {
@@ -322,17 +329,45 @@ class AndroidModStorageLoaderBridge(
     private fun unavailable(availability: GameModSyncAvailability, failure: GameModSyncFailureCode, reason: String) = GameModSyncStatus(availability = availability, failureCode = failure, reason = reason)
     private fun closeQuietly(descriptor: ParcelFileDescriptor) { try { descriptor.close() } catch (_: Exception) {} }
 
-    private fun writeMod(output: DataOutputStream, item: GameModSyncItem) {
+    private fun writeMod(
+        output: DataOutputStream,
+        item: GameModSyncItem,
+        onProgress: ((writtenBytes: Long, totalBytes: Long) -> Unit)?,
+    ) {
         val root = File(cacheRoot, item.cacheKey)
         require(root.isDirectory) { "Mod 缓存已不存在：${item.displayName}" }
         val files = root.walkTopDown().filter(File::isFile).sortedBy { it.relativeTo(root).invariantSeparatorsPath }.toList()
+        val totalBytes = files.sumOf(File::length)
+        var writtenBytes = 0L
+        var lastReportedBytes = 0L
+        val report = { ->
+            // A file may grow between sizing and copying; keep the reported value consistent.
+            val written = minOf(writtenBytes, totalBytes)
+            if (written != lastReportedBytes) {
+                lastReportedBytes = written
+                onProgress?.invoke(written, totalBytes)
+            }
+        }
         output.writeInt(files.size)
+        report()
         files.forEach { file ->
             val relativePath = file.relativeTo(root).invariantSeparatorsPath
             output.writeUTF(relativePath)
             output.writeLong(file.length())
             output.writeUTF(sha256(file))
-            FileInputStream(file).use { input -> input.copyTo(output) }
+            if (onProgress != null) {
+                val buffer = ByteArray(PROGRESS_REPORT_BUFFER_BYTES)
+                while (true) {
+                    val count = FileInputStream(file).use { input -> input.read(buffer) }
+                    if (count < 0) break
+                    output.write(buffer, 0, count)
+                    writtenBytes += count
+                    if (writtenBytes - lastReportedBytes >= PROGRESS_REPORT_THRESHOLD_BYTES) report()
+                }
+            } else {
+                FileInputStream(file).use { input -> writtenBytes += input.copyTo(output) }
+            }
+            report()
         }
         output.flush()
     }

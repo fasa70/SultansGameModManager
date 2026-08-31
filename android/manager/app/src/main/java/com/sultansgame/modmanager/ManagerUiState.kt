@@ -74,13 +74,28 @@ sealed interface MergePreflightState {
 }
 
 
+/**
+ * Snapshot of the running mod-sync drain loop.
+ *
+ * `operationIndex` is 1-based within [operationCount]. [writtenBytes]/[totalBytes] describe the
+ * transfer of the current mod; both are 0 for removal operations, which move no bytes.
+ */
+data class GameModSyncProgress(
+    val operationIndex: Int,
+    val operationCount: Int,
+    val displayName: String?,
+    val isRemoval: Boolean,
+    val writtenBytes: Long,
+    val totalBytes: Long,
+)
+
 data class ManagerUiState(
     val gameProbeResult: GameProbeResult? = null,
     val gameReadiness: GameReadiness = GameReadiness.Checking,
     val gameModSync: GameModSyncStatus? = null,
     val gameModSyncItems: List<GameModSyncItem> = emptyList(),
     val pendingGameModSyncOperations: List<PendingGameModSyncOperation> = emptyList(),
-    val gameModSyncInProgress: Boolean = false,
+    val gameModSyncProgress: GameModSyncProgress? = null,
     val cachedModDeletionInProgress: Boolean = false,
     val cachedMods: List<CachedMod> = emptyList(),
     val merge: MergeUiState = MergeUiState(),

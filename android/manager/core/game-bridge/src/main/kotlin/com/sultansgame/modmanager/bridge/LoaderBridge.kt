@@ -5,13 +5,25 @@ import com.sultansgame.modmanager.model.GameModSyncAvailability
 import com.sultansgame.modmanager.model.GameModSyncFailureCode
 import com.sultansgame.modmanager.model.GameModSyncItem
 import com.sultansgame.modmanager.model.GameModSyncStatus
+import com.sultansgame.modmanager.model.GameModSyncTransferProgress
 import com.sultansgame.modmanager.model.GameSaveAvailability
 import com.sultansgame.modmanager.model.GameSaveFailureCode
 import com.sultansgame.modmanager.model.GameSaveStatus
 
 interface LoaderBridge {
     suspend fun listMods(): GameModSyncStatus
-    suspend fun syncMod(item: GameModSyncItem): GameModSyncStatus
+
+    /**
+     * Streams one mod to the game-side Provider.
+     *
+     * [onProgress] is invoked from the transfer thread as bytes are written into the pipe; it must
+     * be cheap and non-blocking.
+     */
+    suspend fun syncMod(
+        item: GameModSyncItem,
+        onProgress: ((writtenBytes: Long, totalBytes: Long) -> Unit)? = null,
+    ): GameModSyncStatus
+
     suspend fun removeManagedMod(cacheKey: String): GameModSyncStatus
     suspend fun listSaveUsers(): GameSaveStatus
     suspend fun listSaveFiles(uid: String): GameSaveStatus
@@ -34,7 +46,10 @@ class UnavailableLoaderBridge : LoaderBridge {
 
     override suspend fun listMods(): GameModSyncStatus = unavailable
 
-    override suspend fun syncMod(item: GameModSyncItem): GameModSyncStatus = unavailable
+    override suspend fun syncMod(
+        item: GameModSyncItem,
+        onProgress: ((writtenBytes: Long, totalBytes: Long) -> Unit)?,
+    ): GameModSyncStatus = unavailable
 
     override suspend fun removeManagedMod(cacheKey: String): GameModSyncStatus = unavailable
 

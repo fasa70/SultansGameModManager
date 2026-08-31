@@ -262,7 +262,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
 
     fun openModExport() {
         val current = mutableState.value
-        if (current.cachedMods.isEmpty() || current.gameModSyncInProgress || current.cachedModDeletionInProgress) return
+        if (current.cachedMods.isEmpty() || current.gameModSyncProgress != null || current.cachedModDeletionInProgress) return
         mutableState.value = current.copy(
             modExport = current.modExport.copy(
                 isOpen = true,
@@ -640,7 +640,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun refreshGameModSync() {
-        if (gameModSyncJob?.isActive == true || mutableState.value.gameModSyncInProgress) return
+        if (gameModSyncJob?.isActive == true || mutableState.value.gameModSyncProgress != null) return
         gameModSyncJob = viewModelScope.launch {
             val status = withContext(Dispatchers.IO) { loaderBridge.listMods() }
             mutableState.value = mutableState.value.copy(gameModSync = status)
@@ -656,7 +656,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun renameCachedMod(cacheKey: String, rawName: String) {
-        if (mutableState.value.cachedModDeletionInProgress || mutableState.value.gameModSyncInProgress) return
+        if (mutableState.value.cachedModDeletionInProgress || mutableState.value.gameModSyncProgress != null) return
         val target = mutableState.value.cachedMods.firstOrNull { it.cacheKey == cacheKey } ?: return
         viewModelScope.launch {
             when (val result = withContext(Dispatchers.IO) {
@@ -721,24 +721,38 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private fun processPendingGameModSyncOperations() {
-        if (mutableState.value.gameModSyncInProgress || mutableState.value.cachedModDeletionInProgress) return
+        if (mutableState.value.gameModSyncProgress != null || mutableState.value.cachedModDeletionInProgress) return
         val pending = deploymentPlan.pendingOperations()
         if (pending.isEmpty()) return
         mutableState.value = mutableState.value.copy(
             pendingGameModSyncOperations = pending,
-            gameModSyncInProgress = true,
+            gameModSyncProgress = GameModSyncProgress(0, pending.size, null, isRemoval = true, writtenBytes = 0, totalBytes = 0),
         )
         viewModelScope.launch {
+            var interrupted = false
             try {
-                for (operation in pending) {
+                pending.forEachIndexed { index, operation ->
                     val item = deploymentPlan.entries(mutableState.value.cachedMods)
                         .firstOrNull { it.cacheKey == operation.cacheKey }
+                    val isRemoval = operation.type == com.sultansgame.modmanager.model.GameModSyncOperationType.Remove || item == null
+                    mutableState.value = mutableState.value.copy(
+                        gameModSyncProgress = GameModSyncProgress(
+                            operationIndex = index + 1,
+                            operationCount = pending.size,
+                            displayName = item?.displayName,
+                            isRemoval = isRemoval,
+                            writtenBytes = 0,
+                            totalBytes = 0,
+                        ),
+                    )
                     val status = withContext(Dispatchers.IO) {
-                        when (operation.type) {
-                            com.sultansgame.modmanager.model.GameModSyncOperationType.Sync -> {
-                                if (item == null) loaderBridge.removeManagedMod(operation.cacheKey) else loaderBridge.syncMod(item)
+                        when {
+                            isRemoval -> loaderBridge.removeManagedMod(operation.cacheKey)
+                            else -> loaderBridge.syncMod(item!!) { written, total ->
+                                mutableState.value = mutableState.value.copy(
+                                    gameModSyncProgress = mutableState.value.gameModSyncProgress?.copy(writtenBytes = written, totalBytes = total),
+                                )
                             }
-                            com.sultansgame.modmanager.model.GameModSyncOperationType.Remove -> loaderBridge.removeManagedMod(operation.cacheKey)
                         }
                     }
                     mutableState.value = mutableState.value.copy(gameModSync = status)
@@ -746,13 +760,18 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                         mutableState.value = mutableState.value.copy(
                             feedback = FeedbackMessage(status.reason ?: "等待同步到游戏。", isError = status.availability != com.sultansgame.modmanager.model.GameModSyncAvailability.ActivationRequired),
                         )
-                        break
+                        interrupted = true
+                        return@forEachIndexed
                     }
                     deploymentPlan.complete(operation)
                 }
                 refreshGameModSyncItems()
-                val status = withContext(Dispatchers.IO) { loaderBridge.listMods() }
-                mutableState.value = mutableState.value.copy(gameModSync = status)
+                // A failed operation leaves its own non-ready status above; re-listing here would
+                // overwrite it with a healthy status while pending operations remain queued.
+                if (!interrupted) {
+                    val status = withContext(Dispatchers.IO) { loaderBridge.listMods() }
+                    mutableState.value = mutableState.value.copy(gameModSync = status)
+                }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -760,7 +779,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                     feedback = FeedbackMessage("同步给游戏失败：${error.message ?: "请重试。"}", isError = true),
                 )
             } finally {
-                mutableState.value = mutableState.value.copy(gameModSyncInProgress = false)
+                mutableState.value = mutableState.value.copy(gameModSyncProgress = null)
                 refreshGameModSyncItems()
             }
         }
@@ -1424,6 +1443,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                 cachedMods = cachedMods,
                 gameModSyncItems = deploymentPlan.entries(cachedMods),
                 pendingGameModSyncOperations = deploymentPlan.pendingOperations(),
+                gameModSyncProgress = null,
                 downloadTasks = taskStore.tasks.value,
                 steamAuthState = com.sultansgame.modmanager.model.SteamAuthState.SignedOut,
                 noticeAccepted = false,
