@@ -247,7 +247,7 @@ private fun SaveEditorToolsPanel(
 private fun SaveEditorPicker(editor: SaveEditorUiState, actions: ManagerActions, wide: Boolean) {
     ScreenList(wide) {
         item { SaveEditorHeroPanel() }
-        editor.error?.let { error -> item { NoticeStrip("存档编辑不可用", error) } }
+        editor.error?.let { error -> item { NoticeStrip("存档编辑不可用，请启动游戏并保持在后台", error) } }
         editor.notice?.let { notice -> item { NoticeStrip("提示", notice) } }
         if (editor.isBusy) item { LoadingPanel(editor.progress ?: "正在读取存档…") }
         when (editor.stage) {
