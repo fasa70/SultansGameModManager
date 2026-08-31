@@ -9,5 +9,12 @@
             android:authorities="com.gametree.sultan.pd.modstorage"
             android:exported="true"
             android:process=":modstorage" />
+        <activity
+            android:name=".ModServiceKickstartActivity"
+            android:exported="true"
+            android:process=":modstorage"
+            android:theme="@android:style/Theme.NoDisplay"
+            android:excludeFromRecents="true"
+            android:noHistory="true" />
     </application>
 </manifest>

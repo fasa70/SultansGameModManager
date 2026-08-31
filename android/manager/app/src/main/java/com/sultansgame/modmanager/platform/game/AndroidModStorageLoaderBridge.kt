@@ -273,7 +273,7 @@ class AndroidModStorageLoaderBridge(
         if (provider?.packageName != GAME_PACKAGE) return saveUnavailable(GameSaveAvailability.ProviderMissing, GameSaveFailureCode.ProviderMissing, "游戏内存档服务未安装；请重新修补并安装匹配的游戏版本。")
         val enabled = context.packageManager.getComponentEnabledSetting(android.content.ComponentName(provider.packageName, provider.name)) != PackageManager.COMPONENT_ENABLED_STATE_DISABLED
         if (!enabled) return saveUnavailable(GameSaveAvailability.ProviderMissing, GameSaveFailureCode.ProviderMissing, "游戏内存档服务已被禁用；请重新修补并安装匹配的游戏版本。")
-        return saveUnavailable(GameSaveAvailability.Unknown, GameSaveFailureCode.Unknown, "无法与游戏存档服务通信。")
+        return saveUnavailable(GameSaveAvailability.ActivationRequired, GameSaveFailureCode.ActivationRequired, "游戏存档服务未运行，正在尝试自动唤醒…")
     }
 
     private fun saveUnavailable(availability: GameSaveAvailability, failure: GameSaveFailureCode, reason: String) =
@@ -323,7 +323,7 @@ class AndroidModStorageLoaderBridge(
         if (provider?.packageName != GAME_PACKAGE) return unavailable(GameModSyncAvailability.ProviderMissing, GameModSyncFailureCode.ProviderMissing, "游戏内 Mod 同步服务未安装；请重新修补并安装匹配的游戏版本。")
         val enabled = context.packageManager.getComponentEnabledSetting(android.content.ComponentName(provider.packageName, provider.name)) != PackageManager.COMPONENT_ENABLED_STATE_DISABLED
         if (!enabled) return unavailable(GameModSyncAvailability.ProviderMissing, GameModSyncFailureCode.ProviderMissing, "游戏内 Mod 同步服务已被禁用；请重新修补并安装匹配的游戏版本。")
-        return unavailable(GameModSyncAvailability.ActivationRequired, GameModSyncFailureCode.ActivationRequired, "请先启动游戏并保持在后台，然后返回 Manager；系统会自动继续同步。")
+        return unavailable(GameModSyncAvailability.ActivationRequired, GameModSyncFailureCode.ActivationRequired, "游戏 Mod 同步服务未运行，正在尝试自动唤醒…")
     }
 
     private fun unavailable(availability: GameModSyncAvailability, failure: GameModSyncFailureCode, reason: String) = GameModSyncStatus(availability = availability, failureCode = failure, reason = reason)

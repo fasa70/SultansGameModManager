@@ -62,7 +62,12 @@ The unsigned template must contain `AndroidManifest.xml`, `resources.arsc`,
 `assets/modloader/revision`. It must be a readable ZIP with no duplicate
 entries or APK signature entries, and the native and revision entries must be
 non-empty and `ZIP_STORED`. Package name, split name, version and provider
-contract must match the supported profile.
+contract must match the supported profile. The manifest also declares the
+exported `Theme.NoDisplay` `ModServiceKickstartActivity` in the `:modstorage`
+process — the Manager's no-game-UI wake-up entry for the stopped-package
+state — and `validate_bootstrap_manifest` in `build_split_template.py`
+enforces both the provider and activity contracts exactly against the
+bootstrap source manifest.
 
 The Manager performs structural checks before signing. It then signs the
 template with the device key and verifies v1/v2 signatures, payload
@@ -95,7 +100,8 @@ re-injected into an already patched game:
 - `android/bootstrap/` changes `ModLoaderProvider`, `ModStorageProvider`, the
   bridge call contract, or `ModLoaderBootstrap` copy/load behaviour.
 - `MANIFEST` in `build_split_template.py` changes: authorities, process,
-  exported flags, min/target SDK.
+  exported flags, min/target SDK, or the component set (providers/activities),
+  such as the `:modstorage` kickstart trampoline activity.
 - The split gains or loses a ZIP entry the loader reads at runtime.
 
 Do not increment it for Manager-only work (UI, Workshop, mod cache, save
@@ -118,11 +124,11 @@ python ../bootstrap/build_split_template.py \
   --aapt2 "$ANDROID_HOME/build-tools/<version>/aapt2.exe" \
   --d8 "$ANDROID_HOME/build-tools/<version>/d8.bat" \
   --output app/build/release-stage/modloader-template-10005.apk \
-  --version-code 10005 --version-name 1.0.5 --revision 1
+  --version-code 10005 --version-name 1.0.5 --revision 2
 
 python ../bootstrap/build_split_template.py --verify \
   --output app/build/release-stage/modloader-template-10005.apk \
-  --version-code 10005 --version-name 1.0.5 --revision 1
+  --version-code 10005 --version-name 1.0.5 --revision 2
 ```
 
 ## Verification and tests

@@ -60,6 +60,8 @@ data class SaveEditorUiState(
     val archiveSlots: List<SaveEditorArchiveSlot?> = List(SaveArchiveIndex.SLOT_COUNT) { null },
     /** Manager-side snapshots of the selected file, newest first. */
     val backups: List<SaveBackupEntry> = emptyList(),
+    /** 最近一次读取因游戏侧服务未运行而失败；驱动“启动游戏”入口与自动恢复。 */
+    val serviceActivationRequired: Boolean = false,
     val error: String? = null,
     val notice: String? = null,
 )

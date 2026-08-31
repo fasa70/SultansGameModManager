@@ -2,6 +2,7 @@ package com.sultansgame.modmanager
 
 import android.app.Application
 import android.net.Uri
+import android.os.SystemClock
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -38,6 +39,8 @@ import com.sultansgame.modmanager.platform.auth.steamAccountBindingHash
 import com.sultansgame.modmanager.platform.game.AndroidModStorageLoaderBridge
 import com.sultansgame.modmanager.platform.game.GameProbeResult
 import com.sultansgame.modmanager.platform.game.GameReadinessProbe
+import com.sultansgame.modmanager.platform.game.ModServiceKickstarter
+import com.sultansgame.modmanager.platform.game.ModServiceKickstartPolicy
 import com.sultansgame.modmanager.platform.game.PackageManagerGameProbe
 import com.sultansgame.modmanager.platform.saveeditor.SaveArchiveIndex
 import com.sultansgame.modmanager.platform.saveeditor.SaveBackupEntry
@@ -62,8 +65,10 @@ import com.sultansgame.modmanager.platform.workshop.WorkshopTaskStore
 import com.sultansgame.modmanager.workshop.SteamPublicWorkshopProvider
 import com.sultansgame.modmanager.workshop.WorkshopLookupResult
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -79,6 +84,16 @@ import java.util.UUID
 
 sealed interface ManagerUiEvent {
     data class LaunchGameForModSync(val intent: android.content.Intent) : ManagerUiEvent
+
+    /**
+     * 前台启动游戏 loader split 内的跳板 Activity：唤醒 :modstorage 进程而不打开
+     * 游戏界面。只能由前台消费（repeatOnLifecycle(STARTED)）；[onLaunched] 回报
+     * startActivity 是否真正执行成功。
+     */
+    data class StartModServiceKickstart(
+        val intent: android.content.Intent,
+        val onLaunched: (Boolean) -> Unit,
+    ) : ManagerUiEvent
     data class OpenGameUninstall(val transactionId: String) : ManagerUiEvent
     data class OpenUnknownSourcesSettings(val intent: android.content.Intent) : ManagerUiEvent
     data class ConfirmPackageInstall(val intent: android.content.Intent) : ManagerUiEvent
@@ -195,6 +210,11 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     private var gameRefreshJob: Job? = null
     private var workshopBrowseGeneration = 0L
     private var gameModSyncJob: Job? = null
+    private val modServiceKickstarter = ModServiceKickstarter(application.packageManager)
+
+    /** 单飞跳板尝试；并发调用共享同一次结果。 */
+    private var modServiceKickAttempt: CompletableDeferred<Boolean>? = null
+    private var modServiceKickLastFailureAtMs = 0L
     private var mergePreflightJob: Job? = null
     private var modExportJob: Job? = null
     private var updateCheckJob: Job? = null
@@ -642,10 +662,88 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     fun refreshGameModSync() {
         if (gameModSyncJob?.isActive == true || mutableState.value.gameModSyncProgress != null) return
         gameModSyncJob = viewModelScope.launch {
-            val status = withContext(Dispatchers.IO) { loaderBridge.listMods() }
-            mutableState.value = mutableState.value.copy(gameModSync = status)
+            var status = withContext(Dispatchers.IO) { loaderBridge.listMods() }
+            if (ModServiceKickstartPolicy.requiredFor(status) && ensureModServiceReady()) {
+                status = withContext(Dispatchers.IO) { loaderBridge.listMods() }
+            }
+            mutableState.value = mutableState.value.copy(
+                gameModSync = status,
+                // 服务已可达时清掉陈旧的失败/不可用标记，避免残留提示。
+                modServiceKickstart = if (status.isReady) ModServiceKickstartState.Idle else mutableState.value.modServiceKickstart,
+            )
             if (status.isReady) processPendingGameModSyncOperations()
         }
+    }
+
+    /**
+     * 单飞冷启动：第一个调用者发起尝试并轮询就绪，并发调用者共享同一次结果；
+     * 失败后有冷却窗口，避免 onResume 反复触发。返回 true 表示 Provider 已可达
+     * （含“可达但 revision 不匹配”等情况——那由调用方的状态分支去呈现）。
+     *
+     * 只能由能在前台执行 Activity start 的路径触发：StartModServiceKickstart 经
+     * uiEvents 在 Lifecycle.STARTED 之后才被 MainActivity 消费，Manager 被退到
+     * 后台时事件会留到下一次 onStart 再真正启动跳板。
+     */
+    private suspend fun ensureModServiceReady(): Boolean {
+        modServiceKickAttempt?.let { return it.await() }
+        if (ModServiceKickstartPolicy.cooldownRemainingMs(modServiceKickLastFailureAtMs, SystemClock.elapsedRealtime()) > 0L) return false
+        val outcome = CompletableDeferred<Boolean>()
+        modServiceKickAttempt = outcome
+        try {
+            val ready = runModServiceKickstart()
+            outcome.complete(ready)
+            return ready
+        } catch (error: CancellationException) {
+            outcome.cancel(error)
+            throw error
+        } finally {
+            modServiceKickAttempt = null
+        }
+    }
+
+    private suspend fun runModServiceKickstart(): Boolean {
+        var intent = withContext(Dispatchers.IO) { modServiceKickstarter.trampolineIntent() }
+        if (intent == null) {
+            // 刚提交安装后的短暂窗口里 PackageManager 可能还没登记新组件。
+            var attemptsLeft = ModServiceKickstartPolicy.TRAMPOLINE_RESOLVE_ATTEMPTS - 1
+            while (intent == null && attemptsLeft > 0) {
+                delay(ModServiceKickstartPolicy.TRAMPOLINE_RESOLVE_RETRY_DELAY_MS)
+                intent = withContext(Dispatchers.IO) { modServiceKickstarter.trampolineIntent() }
+                attemptsLeft--
+            }
+        }
+        if (intent == null) {
+            mutableState.value = mutableState.value.copy(modServiceKickstart = ModServiceKickstartState.Unavailable)
+            modServiceKickLastFailureAtMs = SystemClock.elapsedRealtime()
+            return false
+        }
+        mutableState.value = mutableState.value.copy(modServiceKickstart = ModServiceKickstartState.Running)
+        val launched = CompletableDeferred<Boolean>()
+        val event = ManagerUiEvent.StartModServiceKickstart(intent) { launched.complete(it) }
+        if (uiEventChannel.trySend(event).isFailure) return modServiceKickFailed()
+        val acknowledged = withTimeoutOrNull(ModServiceKickstartPolicy.LAUNCH_ACK_TIMEOUT_MS) { launched.await() } ?: false
+        if (!acknowledged) return modServiceKickFailed()
+        // stopped 标志一旦清除，后续 Provider 调用自己也能拉起进程，轮询自愈。
+        val deadline = SystemClock.elapsedRealtime() + ModServiceKickstartPolicy.POLL_TIMEOUT_MS
+        while (true) {
+            val status = withContext(Dispatchers.IO) { loaderBridge.listMods() }
+            if (!ModServiceKickstartPolicy.requiredFor(status)) {
+                mutableState.value = mutableState.value.copy(modServiceKickstart = ModServiceKickstartState.Idle)
+                // 存档编辑器可能正停在“服务未运行”上；这里补一次用户列表加载。
+                val saveEditor = mutableState.value.saveEditor
+                if (saveEditor.isOpen && saveEditor.serviceActivationRequired) loadSaveUsers()
+                return true
+            }
+            if (SystemClock.elapsedRealtime() >= deadline) break
+            delay(ModServiceKickstartPolicy.POLL_INTERVAL_MS)
+        }
+        return modServiceKickFailed()
+    }
+
+    private fun modServiceKickFailed(): Boolean {
+        mutableState.value = mutableState.value.copy(modServiceKickstart = ModServiceKickstartState.Failed)
+        modServiceKickLastFailureAtMs = SystemClock.elapsedRealtime()
+        return false
     }
 
     fun setModSyncedToGame(cacheKey: String, syncedToGame: Boolean) {
@@ -745,15 +843,19 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                             totalBytes = 0,
                         ),
                     )
-                    val status = withContext(Dispatchers.IO) {
+                    suspend fun perform(): com.sultansgame.modmanager.model.GameModSyncStatus = withContext(Dispatchers.IO) {
                         when {
                             isRemoval -> loaderBridge.removeManagedMod(operation.cacheKey)
-                            else -> loaderBridge.syncMod(item!!) { written, total ->
+                            else -> loaderBridge.syncMod(item) { written, total ->
                                 mutableState.value = mutableState.value.copy(
                                     gameModSyncProgress = mutableState.value.gameModSyncProgress?.copy(writtenBytes = written, totalBytes = total),
                                 )
                             }
                         }
+                    }
+                    var status = perform()
+                    if (!status.isReady && ModServiceKickstartPolicy.requiredFor(status) && ensureModServiceReady()) {
+                        status = perform()
                     }
                     mutableState.value = mutableState.value.copy(gameModSync = status)
                     if (!status.isReady) {
@@ -1034,13 +1136,19 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         saveEditorJob = viewModelScope.launch {
             updateSaveEditor { it.copy(isBusy = true, error = null) }
             try {
-                val status = withContext(Dispatchers.IO) { loaderBridge.listSaveUsers() }
+                var status = withContext(Dispatchers.IO) { loaderBridge.listSaveUsers() }
+                if (ModServiceKickstartPolicy.requiredFor(status) && ensureModServiceReady()) {
+                    status = withContext(Dispatchers.IO) { loaderBridge.listSaveUsers() }
+                }
                 when (status.availability) {
                     GameSaveAvailability.Available -> updateSaveEditor {
-                        it.copy(isBusy = false, users = status.users, stage = SaveEditorStage.SelectUser)
+                        it.copy(isBusy = false, users = status.users, stage = SaveEditorStage.SelectUser, serviceActivationRequired = false)
+                    }
+                    GameSaveAvailability.ActivationRequired -> updateSaveEditor {
+                        it.copy(isBusy = false, serviceActivationRequired = true, error = status.reason ?: "游戏存档服务未运行。")
                     }
                     else -> updateSaveEditor {
-                        it.copy(isBusy = false, error = status.reason ?: "无法读取游戏存档。")
+                        it.copy(isBusy = false, serviceActivationRequired = false, error = status.reason ?: "无法读取游戏存档。")
                     }
                 }
             } catch (error: CancellationException) {
@@ -2336,6 +2444,9 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             is PatchOrchestrationResult.Completed -> {
                 selectedPatchInput = null
                 refreshGame()
+                // 新装包处于 stopped 状态；跳板可在不打开游戏界面的情况下
+                // 恢复同步服务并排空待同步队列。
+                refreshGameModSync()
                 PatchUiState.Completed(result.transactionId)
             }
             is PatchOrchestrationResult.Failed -> PatchUiState.Failed(result.reason, result.transactionId)
