@@ -124,6 +124,29 @@ class DeviceSigningKeyStoreTest {
     }
 
     @Test
+    fun frozenLoaderTemplateDeclaresInvisibleModStorageKickstartActivity() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val template = File(context.cacheDir, "modloader-template-kickstart.apk").apply {
+            context.assets.open("release/modloader-template-10005.apk").use { input -> outputStream().use(input::copyTo) }
+        }
+        try {
+            val packageInfo = requireNotNull(
+                context.packageManager.getPackageArchiveInfo(template.absolutePath, PackageManager.GET_ACTIVITIES),
+            )
+            val activity = requireNotNull(
+                packageInfo.activities?.singleOrNull { it.name == "com.gametree.sultan.pd.mod.ModServiceKickstartActivity" },
+            )
+            assertTrue(activity.exported)
+            assertEquals(":modstorage", activity.processName)
+            assertEquals(android.R.style.Theme_NoDisplay, activity.theme)
+            assertTrue(activity.excludeFromRecents)
+            assertEquals(null, activity.permission)
+        } finally {
+            template.delete()
+        }
+    }
+
+    @Test
     fun preparesSignedMigrationArtifactSet() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val identity = DeviceSigningKeyStore(context).getOrCreate()

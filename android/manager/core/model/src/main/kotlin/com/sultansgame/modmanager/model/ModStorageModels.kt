@@ -1,6 +1,8 @@
 package com.sultansgame.modmanager.model
 
 const val GAME_MOD_STORAGE_AUTHORITY = "com.gametree.sultan.pd.modstorage"
+/** 游戏 loader split 内用于唤醒 :modstorage 进程的跳板 Activity（全限定类名）。 */
+const val GAME_MOD_STORAGE_KICKSTART_ACTIVITY = "com.gametree.sultan.pd.mod.ModServiceKickstartActivity"
 const val GAME_MOD_STORAGE_MANAGER_PACKAGE = "com.sultansgame.modmanager"
 const val MANAGER_MOD_DIRECTORY_PREFIX = "sgmm-"
 
@@ -38,6 +40,8 @@ object SaveStorageCall {
 
 enum class GameSaveAvailability {
     Available,
+    /** Provider 已注册但不可达（游戏包处于 stopped 状态）：可由跳板 Activity 冷启动恢复。 */
+    ActivationRequired,
     ProviderMissing,
     Unauthorized,
     Incompatible,
@@ -46,6 +50,7 @@ enum class GameSaveAvailability {
 
 enum class GameSaveFailureCode {
     None,
+    ActivationRequired,
     ProviderMissing,
     ProviderAccessDenied,
     Unauthorized,

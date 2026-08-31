@@ -61,6 +61,19 @@ class MainActivity : ComponentActivity() {
                 viewModel.uiEvents.collect { event ->
                     when (event) {
                         is ManagerUiEvent.LaunchGameForModSync -> startActivity(event.intent)
+                        is ManagerUiEvent.StartModServiceKickstart -> {
+                            // 跳板 Activity 无界面且立即 finish；启动失败按未唤醒处理，
+                            // 由 ViewModel 的冷却与降级文案接管。
+                            val started = try {
+                                startActivity(event.intent)
+                                true
+                            } catch (_: android.content.ActivityNotFoundException) {
+                                false
+                            } catch (_: SecurityException) {
+                                false
+                            }
+                            event.onLaunched(started)
+                        }
                         is ManagerUiEvent.OpenGameUninstall -> uninstallOriginalGame.launch(
                             Intent(Intent.ACTION_UNINSTALL_PACKAGE, Uri.parse("package:com.gametree.sultan.pd"))
                                 .putExtra(Intent.EXTRA_RETURN_RESULT, true),

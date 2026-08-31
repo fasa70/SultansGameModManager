@@ -81,6 +81,7 @@ import com.sultansgame.modmanager.ApksExportUiState
 import com.sultansgame.modmanager.FeedbackMessage
 import com.sultansgame.modmanager.ManagerUiState
 import com.sultansgame.modmanager.MergePreflightState
+import com.sultansgame.modmanager.ModServiceKickstartState
 import com.sultansgame.modmanager.PatchUiState
 import com.sultansgame.modmanager.PreparedPatchRecovery
 import com.sultansgame.modmanager.WORKSHOP_NATIVE_URL
@@ -899,12 +900,20 @@ private fun MyModsScreen(state: ManagerUiState, actions: ManagerActions, wide: B
     val externalMods = syncStatus?.mods.orEmpty().filterNot { it.managedByManager }
     ScreenList(wide) {
         item {
+            val kickstarting = state.modServiceKickstart == ModServiceKickstartState.Running
             HeroPanel(
                 eyebrow = "同步给游戏",
                 title = "管理 Mod",
                 body = when {
                     state.gameModSyncProgress != null -> gameModSyncProgressText(state.gameModSyncProgress)
-                    activationRequired -> "请先启动游戏并保持在后台，返回此处会自动继续同步。"
+                    kickstarting -> "正在唤醒游戏的同步服务（不会打开游戏界面）…"
+                    activationRequired -> when (state.modServiceKickstart) {
+                        ModServiceKickstartState.Unavailable ->
+                            "当前已修补的游戏不支持免启动恢复：请启动游戏并保持在后台，返回后会自动继续；重新修补游戏后可获得自动恢复。"
+                        ModServiceKickstartState.Failed ->
+                            "自动唤醒游戏同步服务未成功；请启动游戏并保持在后台，返回此处会自动继续同步。"
+                        else -> "请先启动游戏并保持在后台，返回此处会自动继续同步。"
+                    }
                     syncStatus?.isReady == true -> "Manager 只管理同步到游戏目录。加载、热开关和排序请在游戏内官方 Mod 面板完成。"
                     syncStatus != null -> syncStatus.reason ?: "暂时无法读取游戏 Mod 目录。"
                     else -> "正在检查游戏 Mod 目录…"
@@ -913,12 +922,24 @@ private fun MyModsScreen(state: ManagerUiState, actions: ManagerActions, wide: B
                     activationRequired -> "启动游戏"
                     else -> "立即同步"
                 },
-                actionEnabled = state.gameModSyncProgress == null && !state.cachedModDeletionInProgress,
+                actionEnabled = state.gameModSyncProgress == null && !state.cachedModDeletionInProgress && !kickstarting,
                 onAction = when {
                     activationRequired -> actions.launchGameForModSync
                     else -> actions.refreshGameMods
                 },
             )
+        }
+        if (activationRequired &&
+            state.modServiceKickstart != ModServiceKickstartState.Running &&
+            state.modServiceKickstart != ModServiceKickstartState.Idle &&
+            deviceInstallWarningFor(Build.MANUFACTURER, Build.BRAND) == DeviceInstallWarning.Xiaomi
+        ) {
+            item {
+                NoticeStrip(
+                    "MIUI 自启动限制",
+                    "如果不想每次启动游戏：系统设置 → 应用设置 → 应用管理 → 苏丹的游戏 → 自启动，打开后 Manager 可以在不打开游戏界面的情况下完成同步。",
+                )
+            }
         }
         item { ImportButton("从本地添加 Mod", onClick = actions.importMod) }
         item {

@@ -89,6 +89,22 @@ data class GameModSyncProgress(
     val totalBytes: Long,
 )
 
+/**
+ * 游戏侧 :modstorage 冷启动（跳板 Activity）状态。
+ *
+ * 成功没有专用态：`gameModSync` 变为 ready 即表达恢复完成。
+ */
+sealed interface ModServiceKickstartState {
+    data object Idle : ModServiceKickstartState
+    data object Running : ModServiceKickstartState
+
+    /** 已修补的游戏没有跳板（旧 revision）或组件被停用：只能完整启动游戏恢复。 */
+    data object Unavailable : ModServiceKickstartState
+
+    /** 跳板已启动但 Provider 未在时限内就绪，或前台 start 被系统拒绝。 */
+    data object Failed : ModServiceKickstartState
+}
+
 data class ManagerUiState(
     val gameProbeResult: GameProbeResult? = null,
     val gameReadiness: GameReadiness = GameReadiness.Checking,
@@ -96,6 +112,7 @@ data class ManagerUiState(
     val gameModSyncItems: List<GameModSyncItem> = emptyList(),
     val pendingGameModSyncOperations: List<PendingGameModSyncOperation> = emptyList(),
     val gameModSyncProgress: GameModSyncProgress? = null,
+    val modServiceKickstart: ModServiceKickstartState = ModServiceKickstartState.Idle,
     val cachedModDeletionInProgress: Boolean = false,
     val cachedMods: List<CachedMod> = emptyList(),
     val merge: MergeUiState = MergeUiState(),

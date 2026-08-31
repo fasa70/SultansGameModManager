@@ -23,6 +23,7 @@ MANIFEST = """<manifest xmlns:android="http://schemas.android.com/apk/res/androi
     <application>
         <provider android:name="com.gametree.sultan.pd.mod.ModLoaderProvider" android:authorities="com.gametree.sultan.pd.modloader" android:exported="false" />
         <provider android:name="com.gametree.sultan.pd.mod.ModStorageProvider" android:authorities="com.gametree.sultan.pd.modstorage" android:exported="true" android:process=":modstorage" />
+        <activity android:name="com.gametree.sultan.pd.mod.ModServiceKickstartActivity" android:exported="true" android:process=":modstorage" android:theme="@android:style/Theme.NoDisplay" android:excludeFromRecents="true" android:noHistory="true" />
     </application>
 </manifest>
 """
@@ -30,7 +31,8 @@ MANIFEST = """<manifest xmlns:android="http://schemas.android.com/apk/res/androi
 REVISION_ENTRY = "assets/modloader/revision"
 # 冻结 loader split 的显式修订号。仅当 loader 侧引入需要重新注入到已修补
 # 游戏的变更时手动 +1；判据见 docs/build.md 的 "Loader revision" 小节。
-LOADER_REVISION = 1
+# 2: 模板 manifest 新增 :modstorage 跳板 Activity（免启动游戏的冷启动入口）。
+LOADER_REVISION = 2
 REVISION_FORMAT = re.compile(r"[1-9][0-9]{0,8}")
 
 
@@ -75,7 +77,30 @@ def validate_bootstrap_manifest(path: Path) -> None:
         "com.gametree.sultan.pd.mod.ModLoaderProvider": {"authority": "com.gametree.sultan.pd.modloader", "exported": "false", "process": None},
         "com.gametree.sultan.pd.mod.ModStorageProvider": {"authority": "com.gametree.sultan.pd.modstorage", "exported": "true", "process": ":modstorage"},
     }
-    if providers != expected:
+    activities = {}
+    for activity in root.findall(".//activity"):
+        name = activity.get(f"{{{ANDROID_NS}}}name", "")
+        if name.startswith("."):
+            name = "com.gametree.sultan.pd.mod" + name
+        activities[name] = {
+            "exported": activity.get(f"{{{ANDROID_NS}}}exported"),
+            "process": activity.get(f"{{{ANDROID_NS}}}process"),
+            "theme": activity.get(f"{{{ANDROID_NS}}}theme"),
+            "excludeFromRecents": activity.get(f"{{{ANDROID_NS}}}excludeFromRecents"),
+            "noHistory": activity.get(f"{{{ANDROID_NS}}}noHistory"),
+            "permission": activity.get(f"{{{ANDROID_NS}}}permission"),
+        }
+    expected_activities = {
+        "com.gametree.sultan.pd.mod.ModServiceKickstartActivity": {
+            "exported": "true",
+            "process": ":modstorage",
+            "theme": "@android:style/Theme.NoDisplay",
+            "excludeFromRecents": "true",
+            "noHistory": "true",
+            "permission": None,
+        },
+    }
+    if providers != expected or activities != expected_activities:
         raise SystemExit(f"Bootstrap manifest does not match frozen split contract: {path}")
 
 
