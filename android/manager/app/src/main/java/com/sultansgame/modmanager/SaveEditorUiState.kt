@@ -7,6 +7,13 @@ import com.sultansgame.modmanager.platform.saveeditor.SaveEditorArchiveSlot
 enum class SaveEditorStage { SelectUser, SelectFile, Edit }
 
 /**
+ * An action the page's own toolbar asked for. It cannot be run straight away:
+ * both discard unsaved edits, and the confirmation lives in the composition, so
+ * the request is parked here until the UI picks it up.
+ */
+enum class SaveEditorWebAction { Reload, Leave }
+
+/**
  * State for the save editor tab.
  *
  * The editing surface itself is the vendored HTML editor running in a WebView,
@@ -44,6 +51,11 @@ data class SaveEditorUiState(
      * to live; the page's repurposed 导出备份 button opens this.
      */
     val toolsOpen: Boolean = false,
+    /**
+     * Set when the page's 重新读取 / 返回存档列表 button was pressed. The UI owns
+     * the unsaved-edit confirmation, so it consumes this and clears it.
+     */
+    val pendingWebAction: SaveEditorWebAction? = null,
     /** Ten slot summaries read from `user_archive.json`; `null` marks an empty slot. */
     val archiveSlots: List<SaveEditorArchiveSlot?> = List(SaveArchiveIndex.SLOT_COUNT) { null },
     /** Manager-side snapshots of the selected file, newest first. */

@@ -921,6 +921,14 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         when (event) {
             is SaveEditorWebEvent.ExportRequested -> saveSave()
             SaveEditorWebEvent.ToolsRequested -> updateSaveEditor { it.copy(toolsOpen = true) }
+            // Both discard unsaved edits, so they are parked for the UI to
+            // confirm rather than run from here.
+            SaveEditorWebEvent.ReloadRequested -> updateSaveEditor {
+                it.copy(pendingWebAction = SaveEditorWebAction.Reload)
+            }
+            SaveEditorWebEvent.LeaveRequested -> updateSaveEditor {
+                it.copy(pendingWebAction = SaveEditorWebAction.Leave)
+            }
             SaveEditorWebEvent.SaveInjected -> captureSaveBaseline()
             is SaveEditorWebEvent.LoadFailed -> updateSaveEditor {
                 // The page's buttons stay disabled when a load fails, so surface
@@ -983,6 +991,11 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
 
     fun closeSaveEditorTools() {
         updateSaveEditor { it.copy(toolsOpen = false) }
+    }
+
+    /** Clears a page-raised action once the UI has run or declined it. */
+    fun consumeSaveEditorWebAction() {
+        updateSaveEditor { it.copy(pendingWebAction = null) }
     }
 
     /**
@@ -1097,7 +1110,14 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             // Wipe the page first so a failed re-read cannot leave stale edits on
             // screen looking like they are still backed by the file.
             saveEditorWeb.reset()
-            updateSaveEditor { it.copy(editorReady = false, savedBaseline = null, toolsOpen = false) }
+            updateSaveEditor {
+                it.copy(
+                    editorReady = false,
+                    savedBaseline = null,
+                    toolsOpen = false,
+                    pendingWebAction = null,
+                )
+            }
             selectSaveFile(fileName)
         }
     }
@@ -1115,6 +1135,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                     savedBaseline = null,
                     editorReady = false,
                     toolsOpen = false,
+                    pendingWebAction = null,
                     backups = emptyList(),
                     error = null,
                     notice = null,

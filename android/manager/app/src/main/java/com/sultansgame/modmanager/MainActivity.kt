@@ -155,6 +155,7 @@ class MainActivity : ComponentActivity() {
                         restoreSaveBackup = viewModel::restoreSaveBackup,
                         deleteSaveBackup = viewModel::deleteSaveBackup,
                         closeSaveEditorTools = viewModel::closeSaveEditorTools,
+                        consumeSaveEditorWebAction = viewModel::consumeSaveEditorWebAction,
                         attachSaveEditorView = viewModel::attachSaveEditorView,
                         detachSaveEditorView = viewModel::detachSaveEditorView,
                         saveEditorHasUnsavedEdits = viewModel::saveEditorHasUnsavedEdits,
