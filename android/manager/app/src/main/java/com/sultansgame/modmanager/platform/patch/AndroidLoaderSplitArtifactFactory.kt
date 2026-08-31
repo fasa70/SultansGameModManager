@@ -6,11 +6,16 @@ import com.sultansgame.modmanager.split.LoaderSplitArtifact
 import com.sultansgame.modmanager.split.LoaderSplitRequest
 import com.sultansgame.modmanager.split.LoaderSplitResult
 import com.sultansgame.modmanager.split.SplitArtifactFactory
+import com.sultansgame.modmanager.apk.LoaderSplitRevision
+import com.sultansgame.modmanager.apk.LoaderSplitRevisionReader
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
+
+/** Manager 内嵌的 loader split 模板资产；修补与修补状态检测共用同一份来源。 */
+internal const val LOADER_TEMPLATE_ASSET = "release/modloader-template-10005.apk"
 
 internal class AndroidLoaderSplitArtifactFactory(
     private val context: Context,
@@ -86,6 +91,11 @@ internal class AndroidLoaderSplitArtifactFactory(
             val native = requireNotNull(archive.getEntry(NATIVE_ASSET))
             require(native.method == ZipEntry.STORED) { "loader split native asset 必须未压缩" }
             require(native.size > 0L) { "loader split native asset 为空" }
+            val revisionEntry = requireNotNull(archive.getEntry(REVISION_ASSET))
+            require(revisionEntry.method == ZipEntry.STORED) { "loader split revision entry 必须未压缩" }
+            require(LoaderSplitRevisionReader().read(file) is LoaderSplitRevision.Known) {
+                "loader split 模板缺少有效的 revision"
+            }
             require(names.none { it.startsWith("META-INF/", ignoreCase = true) && SIGNATURE_ENTRY.matches(it.substringAfterLast('/')) }) {
                 "loader split 模板必须未签名"
             }
@@ -95,9 +105,10 @@ internal class AndroidLoaderSplitArtifactFactory(
     private companion object {
         const val GAME_PACKAGE = "com.gametree.sultan.pd"
         const val SPLIT_NAME = "modloader"
-        const val TEMPLATE_ASSET = "release/modloader-template-10005.apk"
+        const val TEMPLATE_ASSET = LOADER_TEMPLATE_ASSET
         const val NATIVE_ASSET = "assets/modloader/arm64-v8a/modloader.bin"
-        val REQUIRED_ENTRIES = setOf("AndroidManifest.xml", "resources.arsc", "classes.dex", NATIVE_ASSET)
+        const val REVISION_ASSET = com.sultansgame.modmanager.apk.LOADER_REVISION_ENTRY
+        val REQUIRED_ENTRIES = setOf("AndroidManifest.xml", "resources.arsc", "classes.dex", NATIVE_ASSET, REVISION_ASSET)
         val SIGNATURE_ENTRY = Regex(".+\\.(RSA|DSA|EC|SF|MF)", RegexOption.IGNORE_CASE)
     }
 }

@@ -149,8 +149,8 @@ export ANDROID_NDK_HOME="$android_ndk"
 printf '%s\n' '[2/6] Build protocol v2 Bootstrap AAR'
 (cd "$repo_root/android/manager" && bash ./gradlew --no-configuration-cache :bootstrap:assembleRelease -PmanagerCertificateSha256="$certificate_sha256" -PmodloaderBinary="$(native_path "$native_binary")")
 printf '%s\n' '[3/6] Build and validate frozen split candidate'
-python -X utf8 "$repo_root/android/bootstrap/build_split_template.py" --bootstrap-aar "$(native_path "$repo_root/android/bootstrap/build/outputs/aar/bootstrap-release.aar")" --bootstrap-manifest "$(native_path "$repo_root/android/bootstrap/src/main/AndroidManifest.xml")" --android-jar "$(native_path "$android_jar")" --aapt2 "$(native_path "$aapt2")" --d8 "$(native_path "$d8")" --output "$(native_path "$template_candidate")" --version-code 10005 --version-name 1.0.5
-python -X utf8 "$repo_root/android/bootstrap/build_split_template.py" --verify --output "$(native_path "$template_candidate")" --version-code 10005 --version-name 1.0.5
+python -X utf8 "$repo_root/android/bootstrap/build_split_template.py" --bootstrap-aar "$(native_path "$repo_root/android/bootstrap/build/outputs/aar/bootstrap-release.aar")" --bootstrap-manifest "$(native_path "$repo_root/android/bootstrap/src/main/AndroidManifest.xml")" --android-jar "$(native_path "$android_jar")" --aapt2 "$(native_path "$aapt2")" --d8 "$(native_path "$d8")" --output "$(native_path "$template_candidate")" --version-code 10005 --version-name 1.0.5 --revision 1
+python -X utf8 "$repo_root/android/bootstrap/build_split_template.py" --verify --output "$(native_path "$template_candidate")" --version-code 10005 --version-name 1.0.5 --revision 1
 printf '%s\n' '[4/6] Stage and validate loader template'
 PYTHONPATH="$script_dir" python -X utf8 "$script_dir/update-release-pins.py" --template "$template_candidate" --stage "$publish_stage"
 PYTHONPATH="$script_dir" python -X utf8 "$script_dir/verify-loader-template.py" --stage "$publish_stage"

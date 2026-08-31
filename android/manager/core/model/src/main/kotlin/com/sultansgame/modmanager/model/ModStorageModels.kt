@@ -1,6 +1,5 @@
 package com.sultansgame.modmanager.model
 
-const val MOD_STORAGE_PROTOCOL_VERSION = 2
 const val GAME_MOD_STORAGE_AUTHORITY = "com.gametree.sultan.pd.modstorage"
 const val GAME_MOD_STORAGE_MANAGER_PACKAGE = "com.sultansgame.modmanager"
 const val MANAGER_MOD_DIRECTORY_PREFIX = "sgmm-"
@@ -10,7 +9,8 @@ object ModStorageCall {
     const val SYNC_MOD = "syncMod"
     const val REMOVE_MANAGED_MOD = "removeManagedMod"
 
-    const val KEY_PROTOCOL_VERSION = "protocolVersion"
+    /** Manager 声称它那一侧 loader 的 revision；与游戏侧 split 内 assets/modloader/revision 比对。 */
+    const val KEY_EXPECTED_REVISION = "expectedRevision"
     const val KEY_CACHE_KEY = "cacheKey"
     const val KEY_INPUT = "input"
     const val KEY_RESULT_CODE = "resultCode"
@@ -38,7 +38,6 @@ object SaveStorageCall {
 
 enum class GameSaveAvailability {
     Available,
-    ProviderTooOld,
     ProviderMissing,
     Unauthorized,
     Incompatible,
@@ -47,7 +46,6 @@ enum class GameSaveAvailability {
 
 enum class GameSaveFailureCode {
     None,
-    ProviderTooOld,
     ProviderMissing,
     ProviderAccessDenied,
     Unauthorized,

@@ -11,6 +11,7 @@ import com.sultansgame.modmanager.model.PatchSource
 import com.sultansgame.modmanager.model.PendingGameModSyncOperation
 import com.sultansgame.modmanager.model.SteamAuthState
 import com.sultansgame.modmanager.model.WorkshopItem
+import com.sultansgame.modmanager.platform.game.GameReadiness
 import com.sultansgame.modmanager.platform.game.GameProbeResult
 import com.sultansgame.modmanager.platform.saf.ExternalZipImportRequest
 import com.sultansgame.modmanager.merge.CatalogSelection
@@ -75,6 +76,7 @@ sealed interface MergePreflightState {
 
 data class ManagerUiState(
     val gameProbeResult: GameProbeResult? = null,
+    val gameReadiness: GameReadiness = GameReadiness.Checking,
     val gameModSync: GameModSyncStatus? = null,
     val gameModSyncItems: List<GameModSyncItem> = emptyList(),
     val pendingGameModSyncOperations: List<PendingGameModSyncOperation> = emptyList(),

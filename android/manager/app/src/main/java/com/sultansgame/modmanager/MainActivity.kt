@@ -203,6 +203,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        viewModel.refreshGame()
         viewModel.refreshGameModSync()
     }
 

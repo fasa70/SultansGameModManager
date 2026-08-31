@@ -37,7 +37,6 @@ data class GameProfile(
     val requiredAbi: String = "arm64-v8a",
     val versionCodes: Set<Long> = emptySet(),
     val loaderSplitName: String = "modloader",
-    val providerProtocolVersion: Int? = null,
     val signingRequirement: ApkSigningRequirement = ApkSigningRequirement(),
 ) {
     fun matchesVerified(

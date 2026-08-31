@@ -88,7 +88,6 @@ internal class GameProfileRegistry(
             requiredAbi = REQUIRED_ABI,
             versionCodes = setOf(10005L),
             loaderSplitName = "modloader",
-            providerProtocolVersion = 2,
         )
     }
 }

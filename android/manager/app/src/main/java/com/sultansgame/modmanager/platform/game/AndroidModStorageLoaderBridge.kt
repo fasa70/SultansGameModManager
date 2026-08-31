@@ -15,7 +15,6 @@ import com.sultansgame.modmanager.model.GameModSyncStatus
 import com.sultansgame.modmanager.model.GameSaveAvailability
 import com.sultansgame.modmanager.model.GameSaveFailureCode
 import com.sultansgame.modmanager.model.GameSaveStatus
-import com.sultansgame.modmanager.model.MOD_STORAGE_PROTOCOL_VERSION
 import com.sultansgame.modmanager.model.ModStorageCall
 import com.sultansgame.modmanager.model.SaveStorageCall
 import kotlinx.coroutines.CancellationException
@@ -34,6 +33,8 @@ import java.security.MessageDigest
 class AndroidModStorageLoaderBridge(
     private val context: Context,
     private val cacheRoot: File,
+    /** 期望的 loader revision；-1 表示管理器内嵌模板不可读，调用会被游戏侧拒绝。 */
+    private val expectedLoaderRevision: Int = -1,
 ) : LoaderBridge {
     private companion object {
         const val GAME_PACKAGE = "com.gametree.sultan.pd"
@@ -209,10 +210,10 @@ class AndroidModStorageLoaderBridge(
         }
     }
 
-    private fun requestBundle() = Bundle().apply { putInt(ModStorageCall.KEY_PROTOCOL_VERSION, MOD_STORAGE_PROTOCOL_VERSION) }
+    private fun requestBundle() = Bundle().apply { putInt(ModStorageCall.KEY_EXPECTED_REVISION, expectedLoaderRevision) }
 
     private fun callSave(method: String, extras: Bundle): GameSaveStatus = try {
-        parseSaveResult(context.contentResolver.call(uri, method, null, extras), method)
+        parseSaveResult(context.contentResolver.call(uri, method, null, extras))
     } catch (error: CancellationException) {
         throw error
     } catch (_: SecurityException) {
@@ -223,7 +224,7 @@ class AndroidModStorageLoaderBridge(
         saveUnavailable(GameSaveAvailability.Unknown, GameSaveFailureCode.InternalError, error.message ?: "无法与游戏存档服务通信。")
     }
 
-    private fun parseSaveResult(bundle: Bundle?, method: String): GameSaveStatus {
+    private fun parseSaveResult(bundle: Bundle?): GameSaveStatus {
         if (bundle == null) return saveActivationRequiredStatus()
         val code = bundle.getString(ModStorageCall.KEY_RESULT_CODE).orEmpty()
         val reason = bundle.getString(ModStorageCall.KEY_RESULT_REASON)
@@ -231,7 +232,6 @@ class AndroidModStorageLoaderBridge(
             "ok" -> GameSaveAvailability.Available
             "unauthorized" -> GameSaveAvailability.Unauthorized
             "incompatible" -> GameSaveAvailability.Incompatible
-            "invalid" -> if (method == SaveStorageCall.LIST_SAVE_USERS) GameSaveAvailability.ProviderTooOld else GameSaveAvailability.Unknown
             else -> GameSaveAvailability.Unknown
         }
         val failure = when (code) {
@@ -244,7 +244,7 @@ class AndroidModStorageLoaderBridge(
             "commitFailed" -> GameSaveFailureCode.CommitFailed
             "insufficientStorage" -> GameSaveFailureCode.InsufficientStorage
             "failed" -> GameSaveFailureCode.InternalError
-            "invalid" -> if (method == SaveStorageCall.LIST_SAVE_USERS) GameSaveFailureCode.ProviderTooOld else GameSaveFailureCode.InvalidName
+            "invalid" -> GameSaveFailureCode.InvalidName
             else -> GameSaveFailureCode.Unknown
         }
         val users = bundle.getStringArrayList(SaveStorageCall.KEY_SAVE_USERS).orEmpty()

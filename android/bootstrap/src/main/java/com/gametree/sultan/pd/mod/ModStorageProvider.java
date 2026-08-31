@@ -29,10 +29,10 @@ import java.util.Locale;
 import java.util.UUID;
 
 public final class ModStorageProvider extends ContentProvider {
-    private static final int PROTOCOL_VERSION = 2;
     private static final String MANAGER_PACKAGE = "com.sultansgame.modmanager";
     private static final String MANAGER_DIRECTORY_PREFIX = "sgmm-";
-    private static final String KEY_PROTOCOL_VERSION = "protocolVersion";
+    private static final String REVISION_ASSET = "modloader/revision";
+    private static final String KEY_EXPECTED_REVISION = "expectedRevision";
     private static final String KEY_CACHE_KEY = "cacheKey";
     private static final String KEY_INPUT = "input";
     private static final String KEY_OUTPUT = "output";
@@ -76,7 +76,7 @@ public final class ModStorageProvider extends ContentProvider {
         ParcelFileDescriptor input = extras == null ? null : extras.getParcelable(KEY_INPUT);
         ParcelFileDescriptor output = extras == null ? null : extras.getParcelable(KEY_OUTPUT);
         try {
-            if (!hasCompatibleProtocol(extras)) return result(RESULT_INCOMPATIBLE, "协议版本不兼容，请重新修补游戏");
+            if (!hasCompatibleRevision(extras)) return result(RESULT_INCOMPATIBLE, "Mod 加载器版本不匹配，请重新修补游戏");
             if (!isPinnedManager()) return result(RESULT_UNAUTHORIZED, "调用方证书不受信任，请重新修补游戏");
             if ("listMods".equals(method)) return listMods();
             if ("syncMod".equals(method)) return syncMod(extras, input);
@@ -92,8 +92,43 @@ public final class ModStorageProvider extends ContentProvider {
         }
     }
 
-    private boolean hasCompatibleProtocol(Bundle extras) {
-        return extras != null && extras.getInt(KEY_PROTOCOL_VERSION, -1) == PROTOCOL_VERSION;
+    /**
+     * 本 split 打包的 loader revision（单一事实来源：assets/modloader/revision，
+     * 与管理器内嵌模板里的同一个 entry）。读取失败视为自身损坏，按不兼容处理。
+     */
+    private static volatile int cachedRevision = -1;
+
+    private boolean hasCompatibleRevision(Bundle extras) {
+        if (extras == null) return false;
+        int expected = extras.getInt(KEY_EXPECTED_REVISION, -1);
+        if (expected <= 0) return false;
+        int revision = cachedRevision;
+        if (revision <= 0) {
+            Integer parsed = readRevisionAsset();
+            if (parsed == null) return false;
+            cachedRevision = revision = parsed;
+        }
+        return revision == expected;
+    }
+
+    private Integer readRevisionAsset() {
+        Context context = getContext();
+        if (context == null) return null;
+        try (InputStream stream = context.getAssets().open(REVISION_ASSET)) {
+            byte[] buffer = new byte[32];
+            int filled = 0;
+            while (filled < buffer.length) {
+                int count = stream.read(buffer, filled, buffer.length - filled);
+                if (count < 0) break;
+                filled += count;
+            }
+            if (filled >= buffer.length && stream.read() >= 0) return null;
+            String text = new String(buffer, 0, filled, java.nio.charset.StandardCharsets.US_ASCII).trim();
+            if (!text.matches("[1-9][0-9]{0,8}")) return null;
+            return Integer.parseInt(text);
+        } catch (IOException error) {
+            return null;
+        }
     }
 
     private synchronized Bundle syncMod(Bundle extras, ParcelFileDescriptor input) {

@@ -99,6 +99,8 @@ import com.sultansgame.modmanager.model.WorkshopDateRangeFilter
 import com.sultansgame.modmanager.model.WorkshopBrowseTagGroupSelectionMode
 import com.sultansgame.modmanager.model.WorkshopItem
 import com.sultansgame.modmanager.platform.game.GameProbeResult
+import com.sultansgame.modmanager.platform.game.GameReadiness
+import com.sultansgame.modmanager.platform.game.UnpatchedReason
 import com.sultansgame.modmanager.workshop.WorkshopHttpPolicy
 import kotlinx.coroutines.delay
 import top.yukonga.miuix.kmp.basic.Card
@@ -412,11 +414,9 @@ private fun StartScreen(state: ManagerUiState, actions: ManagerActions, wide: Bo
                 body = presentation.body,
                 action = presentation.primaryLabel,
                 actionEnabled = presentation.primaryEnabled,
-                onAction = if (state.patch is PatchUiState.Completed) {
-                    { onSelectDestination(Destination.Library) }
-                } else {
-                    presentation.primaryAction(actions)
-                },
+                onAction = presentation.primaryDestination
+                    ?.let { destination -> { onSelectDestination(destination) } }
+                    ?: presentation.primaryAction(actions),
             )
         }
         item { StartOperationStatusPanel(patch = state.patch) }
@@ -424,7 +424,11 @@ private fun StartScreen(state: ManagerUiState, actions: ManagerActions, wide: Bo
             item {
                 Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(18.dp)) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("由于安装修补过的游戏，会导致原本的游戏数据丢失，所以请您确认", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        if (state.gameReadiness is GameReadiness.UpgradeRequired) {
+                            Text("本次为覆盖更新：通常可以保留游戏存档，但为防万一，仍建议先通过游戏内云存档等方式备份。", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        } else {
+                            Text("由于安装修补过的游戏，会导致原本的游戏数据丢失，所以请您确认", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        }
                         val review = state.patch as PatchUiState.Review
                         ConfirmationCheckbox("我已经通过游戏内云存档等方式备份好了存档", review.confirmation.acknowledgedReinstallRequirement) {
                             actions.updatePatchConfirmation(review.confirmation.withSinglePatchConfirmation(it))
@@ -519,7 +523,7 @@ internal fun PatchUiState.toStartOperationStatus(): StartOperationStatus? = when
     else -> null
 }
 
-private data class StartPresentation(
+internal data class StartPresentation(
     val title: String,
     val body: String,
     val primaryLabel: String,
@@ -527,20 +531,12 @@ private data class StartPresentation(
     val showConfirmations: Boolean = false,
     val diagnostics: String,
     val primaryAction: (ManagerActions) -> () -> Unit,
+    /** 非空时主按钮切换页面，而不是调用 action。 */
+    val primaryDestination: Destination? = null,
 )
 
-private fun startPresentation(state: ManagerUiState): StartPresentation = when (val patch = state.patch) {
-    PatchUiState.ChooseSource -> {
-        val found = state.gameProbeResult is GameProbeResult.Found
-        StartPresentation(
-            title = if (found) "检测到游戏已安装" else "检测到游戏未安装",
-            body = if (found) "我们可以直接导入已安装的游戏进行修补" else "需要先从本地导入游戏安装包后才能进行修补",
-            primaryLabel = if (found) "导入游戏安装包" else "从本地导入游戏安装包",
-            primaryEnabled = true,
-            diagnostics = gameProbeDiagnostic(state.gameProbeResult),
-            primaryAction = { actions -> if (found) actions.selectInstalledGame else actions.importLocalApk },
-        )
-    }
+internal fun startPresentation(state: ManagerUiState): StartPresentation = when (val patch = state.patch) {
+    PatchUiState.ChooseSource -> chooseSourcePresentation(state)
     is PatchUiState.Importing -> StartPresentation("正在导入游戏安装包", "请不要关闭应用", "正在导入…", false, diagnostics = patch.label, primaryAction = { {} })
     is PatchUiState.Review -> {
         val unsupported = patch.input.classification.compatibility.compatibility == Compatibility.Unsupported
@@ -567,12 +563,77 @@ private fun startPresentation(state: ManagerUiState): StartPresentation = when (
     is PatchUiState.SubmittingInstall -> StartPresentation("正在打开系统安装", "请稍候，马上会转到系统安装确认。", "正在处理…", false, diagnostics = patch.transactionId, primaryAction = { {} })
     is PatchUiState.AwaitingInstallPermission -> StartPresentation("需要允许安装应用权限", "请在系统设置允许此应用安装游戏", "前往系统设置", diagnostics = "准备事务：${patch.transactionId ?: "尚未创建"}", primaryAction = { it.openUnknownSourcesSettings })
     is PatchUiState.AwaitingSystemInstall -> StartPresentation("请在系统页面完成安装", "安装完成后回到这里，应用会核验游戏是否已准备好。", "等待安装", false, diagnostics = patch.transactionId, primaryAction = { {} })
-    is PatchUiState.Completed -> StartPresentation("游戏安装成功", "现在可以使用mod", "浏览创意工坊", diagnostics = patch.transactionId, primaryAction = { {} })
+    is PatchUiState.Completed -> StartPresentation("游戏安装成功", "现在可以添加并同步 Mod", "前往管理 Mod", diagnostics = patch.transactionId, primaryAction = { {} }, primaryDestination = Destination.Library)
     is PatchUiState.Failed -> StartPresentation("准备未完成", "这一步没有完成，游戏和 Mod 未被更改。请重新开始；仍有问题时可查看诊断信息。", "重新开始", diagnostics = patch.reason, primaryAction = { it.restartPatch })
 }
 
-@Composable
-private fun StartPresentation.primaryAction(actions: ManagerActions): () -> Unit = primaryAction(actions)
+private fun chooseSourcePresentation(state: ManagerUiState): StartPresentation {
+    val diagnostics = "${gameProbeDiagnostic(state.gameProbeResult)}\n${gameReadinessDiagnostic(state.gameReadiness)}"
+    return when (val readiness = state.gameReadiness) {
+        GameReadiness.Checking -> StartPresentation(
+            title = "正在检测游戏状态",
+            body = "正在读取已安装游戏的修补状态，请稍候。",
+            primaryLabel = "正在检测…",
+            primaryEnabled = false,
+            diagnostics = diagnostics,
+            primaryAction = { {} },
+        )
+        GameReadiness.NotInstalled -> StartPresentation(
+            title = "检测到游戏未安装",
+            body = "需要先从本地导入游戏安装包后才能进行修补。",
+            primaryLabel = "从本地导入游戏安装包",
+            diagnostics = diagnostics,
+            primaryAction = { actions -> actions.importLocalApk },
+        )
+        is GameReadiness.ProbeFailed -> StartPresentation(
+            title = "无法确认游戏状态",
+            body = "没有读取到已安装游戏的信息。可以先从本地导入游戏安装包再进行修补。",
+            primaryLabel = "从本地导入游戏安装包",
+            diagnostics = diagnostics,
+            primaryAction = { actions -> actions.importLocalApk },
+        )
+        is GameReadiness.Unpatched -> StartPresentation(
+            title = "游戏未修补，请修补游戏以使用Mod服务",
+            body = "${unpatchedBody(readiness.reason)}当前版本 ${readiness.versionLabel}；我们可以直接导入已安装的游戏进行修补。",
+            primaryLabel = "导入游戏安装包",
+            diagnostics = diagnostics,
+            primaryAction = { actions -> actions.selectInstalledGame },
+        )
+        is GameReadiness.UpgradeRequired -> StartPresentation(
+            title = "修补版本需升级，请重新修补游戏",
+            body = "游戏 ${readiness.versionLabel} 已修补，但 Mod 加载器版本为 ${readiness.installedRevision}，" +
+                "当前管理器提供 ${readiness.expectedRevision}。请重新修补以覆盖更新加载器。",
+            primaryLabel = "重新修补游戏",
+            diagnostics = diagnostics,
+            primaryAction = { actions -> actions.selectInstalledGame },
+        )
+        is GameReadiness.Ready -> StartPresentation(
+            title = "游戏已就绪",
+            body = "游戏 ${readiness.versionLabel} 已完成修补并使用本机签名，可以开始添加并同步 Mod。",
+            primaryLabel = "前往管理 Mod",
+            diagnostics = diagnostics,
+            primaryAction = { {} },
+            primaryDestination = Destination.Library,
+        )
+        is GameReadiness.ManagerOutdated -> StartPresentation(
+            title = "游戏已就绪",
+            body = "游戏 ${readiness.versionLabel} 的 Mod 加载器版本 ${readiness.installedRevision} " +
+                "比当前管理器提供的 ${readiness.expectedRevision} 更新。建议更新管理器；现在仍可正常管理 Mod。",
+            primaryLabel = "前往管理 Mod",
+            diagnostics = diagnostics,
+            primaryAction = { {} },
+            primaryDestination = Destination.Library,
+        )
+    }
+}
+
+private fun unpatchedBody(reason: UnpatchedReason): String = when (reason) {
+    UnpatchedReason.OfficialInstall -> "检测到未修补的官方游戏。"
+    UnpatchedReason.ForeignSigner -> "当前游戏由其他设备或工具修补，这台设备无法直接管理它的 Mod。"
+    UnpatchedReason.LoaderSplitMissing -> "当前游戏使用本机签名，但缺少 Mod 加载器组件。"
+    UnpatchedReason.DeviceKeyMissing -> "这台设备还没有修补过游戏。"
+    UnpatchedReason.DeviceKeyLost -> "设备签名密钥已丢失；需要先卸载当前游戏，再重新修补。"
+}
 
 @Composable
 private fun ResumePatchCard(recovery: PreparedPatchRecovery, actions: ManagerActions) {
@@ -1747,6 +1808,19 @@ private fun gameProbeDiagnostic(result: GameProbeResult?): String = when (result
     GameProbeResult.NotInstalled -> "未检测到已安装游戏"
     is GameProbeResult.Found -> "已检测到游戏：${result.snapshot.packageName}"
     is GameProbeResult.Failed -> result.reason
+}
+
+internal fun gameReadinessDiagnostic(readiness: GameReadiness): String = when (readiness) {
+    GameReadiness.Checking -> "修补状态：正在检测"
+    GameReadiness.NotInstalled -> "修补状态：游戏未安装"
+    is GameReadiness.ProbeFailed -> "修补状态：无法确认（${readiness.reason}）"
+    is GameReadiness.Unpatched -> "修补状态：未修补（${readiness.reason.name}）"
+    is GameReadiness.UpgradeRequired ->
+        "修补状态：需升级（已安装 revision ${readiness.installedRevision}，管理器提供 ${readiness.expectedRevision}）"
+    is GameReadiness.ManagerOutdated ->
+        "修补状态：管理器较旧（已安装 revision ${readiness.installedRevision}，管理器提供 ${readiness.expectedRevision}）"
+    is GameReadiness.Ready -> "修补状态：已就绪（loader revision ${readiness.revision ?: "未确认"}）" +
+        readiness.note?.let { "\n$it" }.orEmpty()
 }
 
 private fun downloadStatus(task: DownloadTask): String {

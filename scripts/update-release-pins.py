@@ -14,7 +14,7 @@ RELEASE_METADATA = {
     "splitName": "modloader",
     "versionCode": 10005,
     "versionName": "1.0.5",
-    "providerProtocolVersion": 2,
+    "loaderRevision": 1,
 }
 
 

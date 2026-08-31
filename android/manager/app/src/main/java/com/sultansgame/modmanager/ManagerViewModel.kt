@@ -37,6 +37,7 @@ import com.sultansgame.modmanager.platform.auth.SteamCredentials
 import com.sultansgame.modmanager.platform.auth.steamAccountBindingHash
 import com.sultansgame.modmanager.platform.game.AndroidModStorageLoaderBridge
 import com.sultansgame.modmanager.platform.game.GameProbeResult
+import com.sultansgame.modmanager.platform.game.GameReadinessProbe
 import com.sultansgame.modmanager.platform.game.PackageManagerGameProbe
 import com.sultansgame.modmanager.platform.saveeditor.SaveArchiveIndex
 import com.sultansgame.modmanager.platform.saveeditor.SaveBackupEntry
@@ -108,6 +109,14 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
     )
     private val gameProbe = PackageManagerGameProbe(application)
     private val deviceSigningKeyStore = DeviceSigningKeyStore(application)
+    private val gameReadinessProbe = GameReadinessProbe(application, deviceSigningKeyStore)
+    private val loaderBridge: LoaderBridge by lazy {
+        AndroidModStorageLoaderBridge(
+            application,
+            File(application.filesDir, "mod-cache"),
+            expectedLoaderRevision = gameReadinessProbe.embeddedTemplateRevision(),
+        )
+    }
     private val archiveInspector = AndroidApkArchiveInspector(application)
     private val profileRegistry = GameProfileRegistry()
     private val apkExtractor = InstalledApkExtractor(application)
@@ -123,7 +132,6 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         gameProbe = gameProbe,
         splitFactory = AndroidLoaderSplitArtifactFactory(application),
     )
-    private val loaderBridge: LoaderBridge = AndroidModStorageLoaderBridge(application, File(application.filesDir, "mod-cache"))
     private val legalNotice = LegalNoticeRepository(application)
     private val updateCheckSettings = UpdateCheckSettingsRepository(application)
     private val workshopVisibilitySettings = WorkshopVisibilitySettingsRepository(application)
@@ -184,6 +192,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
 
     private var workshopBrowseJob: Job? = null
     private var steamGuardSubmissionJob: Job? = null
+    private var gameRefreshJob: Job? = null
     private var workshopBrowseGeneration = 0L
     private var gameModSyncJob: Job? = null
     private var mergePreflightJob: Job? = null
@@ -777,8 +786,14 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         )
     }
     fun refreshGame() {
-        viewModelScope.launch {
-            val result = withContext(Dispatchers.IO) { gameProbe.probe() }
+        // 取消重启而不是丢弃：探测幂等且便宜，丢弃会让安装/卸载返回后的刷新失效。
+        gameRefreshJob?.cancel()
+        gameRefreshJob = viewModelScope.launch {
+            val probed = withContext(Dispatchers.IO) {
+                val result = gameProbe.probe()
+                result to gameReadinessProbe.evaluate(result)
+            }
+            val (result, readiness) = probed
             val currentPatch = mutableState.value.patch
             val nextPatch = when (currentPatch) {
                 is PatchUiState.AwaitingOriginalUninstall -> when (result) {
@@ -800,6 +815,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
             }
             mutableState.value = mutableState.value.copy(
                 gameProbeResult = result,
+                gameReadiness = readiness,
                 patch = nextPatch,
             )
         }
@@ -991,14 +1007,6 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                     GameSaveAvailability.Available -> updateSaveEditor {
                         it.copy(isBusy = false, users = status.users, stage = SaveEditorStage.SelectUser)
                     }
-                    // Save access shipped after the mod-sync provider, so a game
-                    // patched by an older manager answers these calls with invalid.
-                    GameSaveAvailability.ProviderTooOld -> updateSaveEditor {
-                        it.copy(
-                            isBusy = false,
-                            error = "当前游戏未启用存档编辑，请重新修补并安装匹配的游戏版本。",
-                        )
-                    }
                     else -> updateSaveEditor {
                         it.copy(isBusy = false, error = status.reason ?: "无法读取游戏存档。")
                     }
@@ -1023,9 +1031,7 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
                 updateSaveEditor {
                     it.copy(
                         isBusy = false,
-                        // A game patched before the provider's dedup fix reports
-                        // user_archive.json twice.
-                        saveFiles = status.files.distinct(),
+                        saveFiles = status.files,
                         archiveSlots = slots,
                         stage = SaveEditorStage.SelectFile,
                     )

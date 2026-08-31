@@ -7,12 +7,13 @@ from pathlib import Path
 
 TEMPLATE_NAME = "modloader-template-10005.apk"
 METADATA_NAME = "loader-template-10005.json"
+LOADER_REVISION_ENTRY = "assets/modloader/revision"
 REQUIRED_METADATA = (
     "packageName",
     "splitName",
     "versionCode",
     "versionName",
-    "providerProtocolVersion",
+    "loaderRevision",
 )
 
 
@@ -29,6 +30,7 @@ def read_metadata(path: Path) -> dict:
 
 
 __all__ = [
+    "LOADER_REVISION_ENTRY",
     "METADATA_NAME",
     "REQUIRED_METADATA",
     "TEMPLATE_NAME",

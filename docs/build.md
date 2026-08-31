@@ -58,16 +58,50 @@ validated together.
 ## Loader template checks
 
 The unsigned template must contain `AndroidManifest.xml`, `resources.arsc`,
-`classes.dex`, and `assets/modloader/arm64-v8a/modloader.bin`. It must be a
-readable ZIP with no duplicate entries or APK signature entries, and the native
-entry must be non-empty and `ZIP_STORED`. Package name, split name, version and
-provider contract must match the supported profile.
+`classes.dex`, `assets/modloader/arm64-v8a/modloader.bin`, and
+`assets/modloader/revision`. It must be a readable ZIP with no duplicate
+entries or APK signature entries, and the native and revision entries must be
+non-empty and `ZIP_STORED`. Package name, split name, version and provider
+contract must match the supported profile.
 
 The Manager performs structural checks before signing. It then signs the
 template with the device key and verifies v1/v2 signatures, payload
 preservation, certificate identity, and the final split set. The release
 verifier compares embedded template bytes with the staged template; it does
 not compare a fixed native/template digest.
+
+## Loader revision
+
+`assets/modloader/revision` inside the loader split carries one decimal
+integer stored as `ZIP_STORED`, written before the native payload so the
+Manager can stream-scan it from its embedded template asset.
+`android/bootstrap/build_split_template.py` writes it from `LOADER_REVISION`
+(`--revision` overrides), the release metadata pins it as `loaderRevision`,
+and `scripts/verify-loader-template.py` fails when the two disagree. The
+Manager compares the revision in its embedded template with the revision in
+the installed `split_modloader.apk`; a readable split without the entry counts
+as revision 0. `ModStorageProvider` gates bridge calls on the same revision
+instead of a separate protocol number: the Manager sends
+`expectedRevision` with each call, and the provider compares it against the
+revision packaged in its own split.
+
+Increment `LOADER_REVISION`, `RELEASE_METADATA["loaderRevision"]` in
+`scripts/update-release-pins.py`, and the `--revision` argument in
+`scripts/build-release.sh` together, by one, only when a change must be
+re-injected into an already patched game:
+
+- `native/` changes the `libmodloader.so` contract: hooks, profile gate, mod
+  root/path/index layout, resource override behaviour, ABI or 16 KB alignment.
+- `android/bootstrap/` changes `ModLoaderProvider`, `ModStorageProvider`, the
+  bridge call contract, or `ModLoaderBootstrap` copy/load behaviour.
+- `MANIFEST` in `build_split_template.py` changes: authorities, process,
+  exported flags, min/target SDK.
+- The split gains or loses a ZIP entry the loader reads at runtime.
+
+Do not increment it for Manager-only work (UI, Workshop, mod cache, save
+editor), for release plumbing, or for a rebuild that yields an equivalent
+loader. A needless increment tells every patched user to re-patch; a missing
+one leaves them on a stale loader.
 
 ## Manual template build
 
@@ -84,10 +118,11 @@ python ../bootstrap/build_split_template.py \
   --aapt2 "$ANDROID_HOME/build-tools/<version>/aapt2.exe" \
   --d8 "$ANDROID_HOME/build-tools/<version>/d8.bat" \
   --output app/build/release-stage/modloader-template-10005.apk \
-  --version-code 10005 --version-name 1.0.5
+  --version-code 10005 --version-name 1.0.5 --revision 1
 
 python ../bootstrap/build_split_template.py --verify \
-  --output app/build/release-stage/modloader-template-10005.apk
+  --output app/build/release-stage/modloader-template-10005.apk \
+  --version-code 10005 --version-name 1.0.5 --revision 1
 ```
 
 ## Verification and tests

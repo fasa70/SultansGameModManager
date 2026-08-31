@@ -24,7 +24,6 @@ class GameProfileRegistryTest {
 
         requireNotNull(result)
         assertEquals("modloader", result.loaderSplitName)
-        assertEquals(2, result.providerProtocolVersion)
     }
 
     @Test

@@ -27,6 +27,12 @@ MANIFEST = """<manifest xmlns:android="http://schemas.android.com/apk/res/androi
 </manifest>
 """
 
+REVISION_ENTRY = "assets/modloader/revision"
+# 冻结 loader split 的显式修订号。仅当 loader 侧引入需要重新注入到已修补
+# 游戏的变更时手动 +1；判据见 docs/build.md 的 "Loader revision" 小节。
+LOADER_REVISION = 1
+REVISION_FORMAT = re.compile(r"[1-9][0-9]{0,8}")
+
 
 def run(*args: str) -> None:
     subprocess.run(args, check=True)
@@ -73,7 +79,7 @@ def validate_bootstrap_manifest(path: Path) -> None:
         raise SystemExit(f"Bootstrap manifest does not match frozen split contract: {path}")
 
 
-def validate_template(path: Path) -> str:
+def validate_template(path: Path, revision: int) -> str:
     if not path.is_file():
         raise SystemExit(f"Missing template: {path}")
     try:
@@ -82,7 +88,7 @@ def validate_template(path: Path) -> str:
                 raise SystemExit(f"Corrupt template ZIP: {path}")
             infos = archive.infolist()
             names = [info.filename for info in infos]
-            required = {"AndroidManifest.xml", "resources.arsc", "classes.dex", "assets/modloader/arm64-v8a/modloader.bin"}
+            required = {"AndroidManifest.xml", "resources.arsc", "classes.dex", "assets/modloader/arm64-v8a/modloader.bin", REVISION_ENTRY}
             if len(names) != len(set(names)):
                 raise SystemExit(f"Template contains duplicate entries: {path}")
             if not required.issubset(names):
@@ -90,6 +96,14 @@ def validate_template(path: Path) -> str:
             native_entry = archive.getinfo("assets/modloader/arm64-v8a/modloader.bin")
             if native_entry.compress_type != zipfile.ZIP_STORED or native_entry.file_size <= 0:
                 raise SystemExit("Template native entry must be non-empty ZIP_STORED")
+            revision_entry = archive.getinfo(REVISION_ENTRY)
+            if revision_entry.compress_type != zipfile.ZIP_STORED:
+                raise SystemExit("Template revision entry must be ZIP_STORED")
+            declared = archive.read(REVISION_ENTRY).decode("ascii", errors="replace").strip()
+            if REVISION_FORMAT.fullmatch(declared) is None:
+                raise SystemExit(f"Template revision must be a positive decimal integer: {declared!r}")
+            if int(declared) != revision:
+                raise SystemExit(f"Template revision {declared} does not match expected {revision}")
             if any(re.fullmatch(r"META-INF/[^/]+\.(RSA|DSA|EC|SF|MF)", name, re.IGNORECASE) for name in names):
                 raise SystemExit("Template must be unsigned")
     except zipfile.BadZipFile as error:
@@ -130,9 +144,15 @@ def build(args: argparse.Namespace) -> None:
             with zipfile.ZipFile(resource_apk) as source, zipfile.ZipFile(candidate, "w", compression=zipfile.ZIP_DEFLATED) as destination:
                 for item in source.infolist():
                     destination.writestr(normalize_info(item, item.compress_type), source.read(item.filename))
+                # revision 必须写在 native 负载之前：管理器用 ZipInputStream
+                # 从 AssetManager 顺序扫描该 entry。
+                destination.writestr(
+                    normalize_info(zipfile.ZipInfo(REVISION_ENTRY), zipfile.ZIP_STORED),
+                    f"{args.revision}\n".encode("ascii"),
+                )
                 destination.write(classes_dex, "classes.dex", compress_type=zipfile.ZIP_DEFLATED)
                 destination.writestr(normalize_info(zipfile.ZipInfo("assets/modloader/arm64-v8a/modloader.bin"), zipfile.ZIP_STORED), asset.read_bytes())
-        template = validate_template(candidate)
+        template = validate_template(candidate, args.revision)
         os.replace(candidate, args.output)
         print(f"template={template}")
     finally:
@@ -149,10 +169,11 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--version-code", type=int, default=10005)
     parser.add_argument("--version-name", default="1.0.5")
+    parser.add_argument("--revision", type=int, default=LOADER_REVISION)
     parser.add_argument("--verify", action="store_true")
     args = parser.parse_args()
     if args.verify:
-        print(f"template={validate_template(args.output)}")
+        print(f"template={validate_template(args.output, args.revision)}")
         return
     required = (args.bootstrap_aar, args.android_jar, args.aapt2, args.d8)
     if any(path is None for path in required):

@@ -8,14 +8,15 @@ import re
 import zipfile
 from pathlib import Path
 
-from release_pin_contracts import METADATA_NAME, REQUIRED_METADATA, TEMPLATE_NAME, read_metadata
+from release_pin_contracts import LOADER_REVISION_ENTRY, METADATA_NAME, REQUIRED_METADATA, TEMPLATE_NAME, read_metadata
 
 NATIVE_ENTRY = "assets/modloader/arm64-v8a/modloader.bin"
-REQUIRED_ENTRIES = {"AndroidManifest.xml", "resources.arsc", "classes.dex", NATIVE_ENTRY}
+REQUIRED_ENTRIES = {"AndroidManifest.xml", "resources.arsc", "classes.dex", NATIVE_ENTRY, LOADER_REVISION_ENTRY}
 SIGNATURE_ENTRY = re.compile(r"META-INF/[^/]+\.(RSA|DSA|EC|SF|MF)$", re.IGNORECASE)
+REVISION_FORMAT = re.compile(r"[1-9][0-9]{0,8}")
 
 
-def verify_template(path: Path) -> None:
+def verify_template(path: Path, revision: int) -> None:
     if not path.is_file():
         raise SystemExit(f"Missing template: {path}")
     try:
@@ -36,6 +37,14 @@ def verify_template(path: Path) -> None:
                 raise SystemExit("Template native entry is not ZIP_STORED")
             if native_info.file_size <= 0:
                 raise SystemExit("Template native entry is empty")
+            revision_info = archive.getinfo(LOADER_REVISION_ENTRY)
+            if revision_info.compress_type != zipfile.ZIP_STORED:
+                raise SystemExit("Template revision entry is not ZIP_STORED")
+            declared = archive.read(LOADER_REVISION_ENTRY).decode("ascii", errors="replace").strip()
+            if REVISION_FORMAT.fullmatch(declared) is None:
+                raise SystemExit(f"Template revision is not a positive decimal integer: {declared!r}")
+            if int(declared) != revision:
+                raise SystemExit(f"Template revision {declared} does not match metadata {revision}")
             for name in REQUIRED_ENTRIES:
                 if not archive.read(name):
                     raise SystemExit(f"Template entry is empty: {name}")
@@ -70,10 +79,10 @@ def main() -> None:
     stage = args.stage.resolve()
     metadata = verify_metadata(stage / METADATA_NAME)
     template = stage / TEMPLATE_NAME
-    verify_template(template)
+    verify_template(template, int(metadata["loaderRevision"]))
     if args.manager_apk is not None:
         verify_manager_apk(args.manager_apk.resolve(), template)
-    print(f"package={metadata['packageName']} split={metadata['splitName']} protocol={metadata['providerProtocolVersion']}")
+    print(f"package={metadata['packageName']} split={metadata['splitName']} revision={metadata['loaderRevision']}")
 
 
 if __name__ == "__main__":
