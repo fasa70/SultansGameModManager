@@ -101,6 +101,7 @@ data class ManagerUiState(
     val availableUpdate: AvailableUpdate? = null,
     val pendingExternalZip: ExternalZipImportRequest? = null,
     val pendingZipPassword: Boolean = false,
+    val pendingZipDeepScan: Boolean = false,
     val zipImportInProgress: Boolean = false,
     val feedback: FeedbackMessage? = null,
 )
