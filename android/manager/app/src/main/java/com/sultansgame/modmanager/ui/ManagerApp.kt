@@ -837,7 +837,7 @@ private fun MyModsScreen(state: ManagerUiState, actions: ManagerActions, wide: B
         item { ImportButton("从本地添加 Mod", onClick = actions.importMod) }
         item {
             PrimaryButton(
-                "合并 Mod",
+                "合并 Mod（可解决Mod冲突）",
                 enabled = !state.gameModSyncInProgress &&
                     !state.cachedModDeletionInProgress,
                 onClick = actions.openMerge,
