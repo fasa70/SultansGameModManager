@@ -185,6 +185,7 @@ class MainActivity : ComponentActivity() {
                         setAutoUpdateCheckEnabled = viewModel::setAutoUpdateCheckEnabled,
                         setWorkshopEnabled = viewModel::setWorkshopEnabled,
                         openWorkshopNative = viewModel::openWorkshopNative,
+                        openGitHubRepo = viewModel::openGitHubRepo,
                         dismissAvailableUpdate = viewModel::dismissAvailableUpdate,
                         openAvailableUpdate = viewModel::openAvailableUpdate,
                         clearFeedback = viewModel::clearFeedback,

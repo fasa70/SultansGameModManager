@@ -188,6 +188,7 @@ data class ManagerActions(
     val setAutoUpdateCheckEnabled: (Boolean) -> Unit,
     val setWorkshopEnabled: (Boolean) -> Unit,
     val openWorkshopNative: () -> Unit,
+    val openGitHubRepo: () -> Unit,
     val dismissAvailableUpdate: () -> Unit,
     val openAvailableUpdate: () -> Unit,
     val clearFeedback: () -> Unit,
@@ -483,7 +484,7 @@ private fun StartScreen(state: ManagerUiState, actions: ManagerActions, wide: Bo
             )
         }
         item { DiagnosticPanel("诊断信息", presentation.diagnostics) }
-        item { GitHubStarLink(actions.openWorkshopNative) }
+        item { GitHubStarLink(actions.openGitHubRepo) }
     }
 }
 

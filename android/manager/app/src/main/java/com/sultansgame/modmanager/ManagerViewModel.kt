@@ -987,6 +987,12 @@ class ManagerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun openGitHubRepo() {
+        if (isAllowedGitHubRepoUrl(GITHUB_REPO_URL)) {
+            uiEventChannel.trySend(ManagerUiEvent.OpenExternalUrl(GITHUB_REPO_URL))
+        }
+    }
+
     fun dismissAvailableUpdate() {
         mutableState.value = mutableState.value.copy(availableUpdate = null)
     }
