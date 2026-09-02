@@ -10,7 +10,9 @@ The solution has three layers:
 
 1. **Native loader** (`libmodloader.so`) — injected into the game process to intercept IL2CPP runtime calls and inject mod data
 2. **Loader split APK** — an Android split APK sharing the game's package ID, carrying the native library via a `ContentProvider`
-3. **Manager app** — a separate Android app that extracts, signs, and installs the patched game
+3. **Manager app** — a separate Android app that extracts, signs, and installs the patched game, and manages Mods and saves
+
+The Manager layer itself contains a Python/JNI merge subsystem (`core:merge`, `merge-native`, and the Chaquopy wheel) that never runs inside the game process; see [Manager-side Mod Merge](#manager-side-mod-merge).
 
 ## Design Decisions
 
@@ -38,40 +40,64 @@ Analysis of the official APK shows it uses v1+v2 (not v3). We match this to avoi
 ## Component Architecture
 
 ```
-┌──────────────────────────────────────────┐
-│              Manager App                  │
-│  ┌─────────┐  ┌──────────┐  ┌──────────┐ │
-│  │ Patch   │  │  Mod     │  │ Workshop │ │
-│  │ Screen  │  │ Manager  │  │ Client   │ │
-│  └────┬────┘  └────┬─────┘  └────┬─────┘ │
-│       │            │              │       │
-│  ┌────┴────────────┴──────────────┴─────┐ │
-│  │         Core Libraries               │ │
-│  │  APK │ Model │ Storage │ Steam Proto │ │
-│  └──────────────────────────────────────┘ │
-└──────────────────────────────────────────┘
-                    │
-        PackageInstaller (system)
-                    │
-        ┌───────────┴───────────┐
-        │                       │
-┌───────┴────────┐    ┌────────┴──────────┐
-│  Base APK      │    │  Loader Split APK │
-│  (re-signed)   │    │  (re-signed)      │
-│                │    │  ┌──────────────┐ │
-│                │    │  │ContentProvider│ │
-│                │    │  │ extracts .so  │ │
-│                │    │  │ to code_cache │ │
-│                │    │  └──────┬───────┘ │
-│                │    │         │         │
-│                │    │    System.load()    │
-│                │    │         │         │
-│                │    │  ┌──────┴───────┐ │
-│                │    │  │libmodloader  │ │
-│                │    │  │  .so         │ │
-│                │    │  └──────────────┘ │
-└────────────────┴────┴───────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                           Manager App                            │
+│  ┌────────┐ ┌─────────┐ ┌──────────┐ ┌───────────┐ ┌──────────┐ │
+│  │ Start  │ │ Library │ │ Workshop │ │Save Editor│ │ Settings │ │
+│  │ patch, │ │ sync +  │ │ optional │ │  WebView  │ │ storage, │ │
+│  │ ready  │ │ merge + │ │          │ │ + JS shim │ │ update   │ │
+│  │ states │ │ export  │ │          │ │           │ │ check    │ │
+│  └───┬────┘ └────┬────┘ └────┬─────┘ └─────┬─────┘ └────┬─────┘ │
+│      └───────────┴───────────┴─────────────┴────────────┘       │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │                       Core Libraries                       │ │
+│  │  apk │ model │ storage │ loader-split │ game-bridge        │ │
+│  │  workshop │ workshop-download │ steam-protocol │ merge     │ │
+│  └──────────────────────────────┬─────────────────────────────┘ │
+│  ┌──────────────────────────────┴─────────────────────────────┐ │
+│  │ merge-native (JNI JSON repair) │ Chaquopy CPython 3.11     │ │
+│  │                                │ + sultan_core wheel       │ │
+│  └────────────────────────────────────────────────────────────┘ │
+└───────────┬──────────────────────────────────────┬─────────────┘
+            │ PackageInstaller                      │ ContentResolver
+            │ (one multi-APK session)               │ (same signer +
+            │                                       │  expectedRevision)
+            ▼                                       ▼
+┌───────────────────────┐            ┌──────────────────────────────┐
+│ Base APK + original   │            │ Loader Split APK             │
+│ splits (re-signed,    │            │ split = "modloader"          │
+│ unmodified content)   │            │ ┌──────────────────────────┐ │
+│                       │            │ │ ModLoaderProvider        │ │
+│                       │            │ │  extracts .so → code_    │ │
+│                       │            │ │  cache, System.load()    │ │
+│                       │            │ ├──────────────────────────┤ │
+│                       │            │ │ libmodloader.so          │ │
+│                       │            │ │  IL2CPP hooks            │ │
+│                       │            │ ├──────────────────────────┤ │
+│                       │            │ │ ModStorageProvider       │ │
+│                       │            │ │  (:modstorage process)   │ │
+│                       │            │ │  mods:  list/sync/remove │ │
+│                       │            │ │  saves: list/read/write  │ │
+│                       │            │ ├──────────────────────────┤ │
+│                       │            │ │ ModServiceKickstart      │ │
+│                       │            │ │  Activity (trampoline,   │ │
+│                       │            │ │  Theme.NoDisplay)        │ │
+│                       │            │ └──────────────────────────┘ │
+└───────────────────────┘            └──────────────────────────────┘
+                                     externalFilesDir/
+                                       ├── Mod/<mod-name>/…
+                                       └── SAVEDATA/<uid>/*.json
 ```
+
+The Manager talks to the game side through `core:game-bridge`; its contract is the
+seven `LoaderBridge` methods `listMods`, `syncMod`, `removeManagedMod`,
+`listSaveUsers`, `listSaveFiles`, `readSave`, and `writeSave`. The provider
+gates every call on two checks — the `expectedRevision` the Manager sends must
+match the revision packaged in the game's own split, and the calling app's
+signing certificate must match the pinned Manager certificate. Large payloads
+travel over pipes, not Bundles. Save paths are whitelisted to top-level
+`*.json` files and `USERARCHIVE/NNN.json` slots (excluding `.bak.json`
+backups), with a 64 MiB per-file cap.
 
 ## Native Loader Pipeline
 
@@ -82,9 +108,20 @@ When the game process starts and `libmodloader.so` is loaded:
 3. **Install official compatibility gates** — when the release flags are enabled, install the official UI reveal/observer, resource URI/Texture, and TMP glyph-field hooks; any failed gate rejects the compatibility state
 4. **Use the official Mod backend** — the game scans all directories below `externalFilesDir/Mod`; the official in-game panel owns discovery refresh, hot loading, enable/disable state, and ordering
 5. **Synchronize Manager-owned Mods** — the Manager sends each validated Mod through the co-signed Provider, which writes only an owner-prefixed directory using per-Mod staging and replacement; it never replaces the whole `Mod` root or external Mod directories
-6. **Recover the stopped-package state without the game UI** — when the Provider is unreachable because the game package is still in the Android stopped state (MIUI blocks cross-app provider wake), the Manager starts the loader split's exported `Theme.NoDisplay` trampoline activity (declared in `:modstorage`) from the foreground; the start clears the stopped flag and publishes the provider, after which the Manager verifies reachability with a short bounded poll and retries the pending work. Games patched with loader revision 1 have no trampoline: those users keep the explicit guidance (launch the game and keep it in the background, or enable the game's autostart permission on MIUI) plus the persisted pending-operation queue
+6. **Recover the stopped-package state without the game UI** — when the Provider is unreachable because the game package is still in the Android stopped state (MIUI blocks cross-app provider wake), the Manager starts the loader split's exported `Theme.NoDisplay` trampoline activity (declared in `:modstorage`) from the foreground; the start clears the stopped flag and publishes the provider, after which the Manager verifies reachability with a short bounded poll and retries the pending work. Games patched with an older loader revision than the current one have no trampoline: those users keep the explicit guidance (launch the game and keep it in the background, or enable the game's autostart permission on MIUI) plus the persisted pending-operation queue
 
 The complete release combination and its device evidence are recorded in [official Android compatibility validation](official-android-compatibility-validation.md). The Manager's unsigned frozen template is the artifact used by future patch operations; the Manager does not compile a new native library at patch time.
+
+## Patch readiness and loader revision comparison
+
+The Start page does not merely show "installed/not installed". `GameReadiness` compares the loader revision inside the Manager's embedded template with the revision in the installed `split_modloader.apk` (a readable split without the entry counts as revision 0) and classifies the game into:
+
+- **Unpatched** — with one of five reasons: an official install, a foreign signer (patched by another device or tool), a missing loader split, or a missing/lost device signing key (a lost key forces uninstall and re-patch).
+- **UpgradeRequired** — installed revision < expected revision; the user should re-patch, which takes the in-place update path and usually preserves saves.
+- **Ready** — revisions match (or the comparison is skipped with an explanatory note when either side cannot be read).
+- **ManagerOutdated** — installed revision > expected revision; the user should update the Manager, not re-patch the game.
+
+This is also why a loader revision bump asks every patched user to re-patch; the increment criteria live in the [build guide](build.md#loader-revision).
 
 ## Manager-side Mod Merge
 
@@ -96,17 +133,56 @@ Because the game base JSON cannot be extracted, Android uses a no-base-JSON over
 
 This policy only applies to Mod merging. APK patch/install and native loader compatibility checks remain fail-closed.
 
+## Save Editor Data Path
+
+The fourth navigation page hosts the upstream HTML save editor (see
+[THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)) in a single retained WebView.
+
+1. **Vendored page.** `assets/save-editor/index.html` is served through
+   AndroidX `WebViewAssetLoader` under an `https://appassets.androidplatform.net`
+   origin, so the page runs with ordinary web security rather than `file://`.
+   It is vendored byte-for-byte unmodified; all behaviour changes are made by a
+   JS shim injected in `onPageFinished`.
+2. **Shim.** The shim hides the upstream file-picker affordance and redirects the
+   page's download path to the Manager, so importing/exporting in the page
+   actually reads and writes game save files. Large text is passed through
+   `@JavascriptInterface` getters rather than script literals.
+3. **Bridge.** The ViewModel drives the same co-signed
+   `ModStorageProvider` as Mod synchronization — `listSaveUsers`,
+   `listSaveFiles`, `readSave`, `writeSave` — with content streamed over
+   `ParcelFileDescriptor` pipes; `saveLength` verifies complete transfer. The
+   channel is gated by the same `expectedRevision` mechanism; there is no
+   separate protocol number.
+4. **Two backup layers.** The game side renames the previous version to
+   `<file>.sgmm-bak` (single generation, inside the game's save directory) on
+   every write. Independently, the Manager snapshots the file to app-private
+   storage before every overwrite or backup restore, keeping up to the 10 most
+   recent per file (`platform/saveeditor/SaveBackupStore.kt`). `global.json`
+   (account-level data such as the Fate Bazaar) has its own load/save channel
+   and its own 10-slot backup quota.
+5. **Slot saves.** Saving to a load slot writes `USERARCHIVE/NNN.json` and
+   rewrites the ten-entry `user_archive.json` index; summaries shown in the
+   picker come from the page's bundled card database.
+6. **Failure policy.** Save editing is best-effort for the user's data but
+   fail-closed for transport: every error path is rejected before any write, so
+   a failed operation leaves the on-disk save untouched. When the provider is
+   unreachable because the game package is in the stopped state, the
+   `:modstorage` trampoline described above is used to wake it.
+
 ## Mod Format
 
-Mods follow the official Windows mod structure:
+Mods follow the official Windows mod structure. The authoritative source for
+the recognized configuration files is `native/src/config_catalog.cpp` and
+`native/src/config_pipeline.cpp`; when either changes, this section must change
+with it.
 
 ```
 Mod/<mod-name>/
 ├── info.json          # Required: name, description, tags, version
-├── preview.jpg        # Optional: preview image (≤1MB)
+├── preview.jpg        # Optional: preview image
 ├── config/            # Optional: configuration files
-│   ├── cards.json      # Card definitions
-│   ├── upgrade.json    # Upgrade shop items
+│   ├── cards.json      # Card definitions (dedicated pipeline stage)
+│   ├── upgrade.json    # Upgrade shop items (dedicated pipeline stage)
 │   ├── over.json       # Endings
 │   ├── quest.json      # 1001 Nights
 │   ├── tag.json        # Tag definitions
@@ -114,14 +190,24 @@ Mod/<mod-name>/
 │   ├── variable.json   # Game variables
 │   ├── credits.json    # Credits data
 │   ├── sfx_config.json # Sound effect configuration
-│   ├── event/          # Event definitions (one JSON per event ID)
-│   ├── rite/           # Rite definitions (one JSON per rite ID)
-│   ├── loot/           # Loot tables
-│   ├── after_story/    # After-story character configs
-│   ├── init/           # Initialization configs
-│   ├── dt/             # Dialog tree configs
-│   ├── wizard/         # Wizard configs
-│   └── rite_template/  # Rite template configs
+│   ├── rite_template_mappings.json
+│   ├── over_music_config.json
+│   ├── sfx_npc_role_dub.json
+│   ├── sfx_settle_card_new.json
+│   ├── gallery_cards.json
+│   ├── gallery_cg.json
+│   ├── achievement.json
+│   ├── textstyle.json
+│   ├── imagestyle.json
+│   ├── mobile_help.json
+│   ├── event/           # Event definitions (one JSON per event ID)
+│   ├── rite/            # Rite definitions (one JSON per rite ID)
+│   ├── loot/            # Loot tables
+│   ├── after_story/     # After-story character configs
+│   ├── init/            # Initialization configs
+│   ├── dt/              # Dialog tree configs
+│   ├── wizard/          # Wizard configs
+│   └── rite_template/   # Rite template configs
 ├── bgm/               # Optional: background music replacement (.wav)
 └── image/             # Optional: image replacement (.png)
     ├── cards/
@@ -129,6 +215,17 @@ Mod/<mod-name>/
     ├── rite/
     └── tag/
 ```
+
+`cards.json`, `upgrade.json`, `event/`, and `rite/` are handled by dedicated
+stages in `config_pipeline.cpp`; the remaining single files and directories are
+catalog-driven in `config_catalog.cpp`.
+
+Import-side limits enforced by the Manager (see
+`android/manager/core/model/ModModels.kt` and
+`android/manager/core/storage/ModPathPolicy.kt`): configuration and other
+non-media files are limited to 16 MiB each, media files (`.png`, `.wav`,
+`.mp3`, `.ogg`) have no size cap, a Mod ZIP may contain up to 999,999 entries,
+and paths are limited to 8 levels below the Mod root.
 
 ### Data Merge Rules
 

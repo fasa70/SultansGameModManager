@@ -3,9 +3,30 @@
 ## Environment
 
 The Manager uses Chaquopy 17.0.0 with CPython 3.11, `minSdk 24`, and only
-`arm64-v8a`. The primary Windows build uses JDK 21, Android SDK/NDK 27, and
-Android SDK CMake 3.22.1. Run `bash scripts/check-env.sh` from the repository
-root before building.
+`arm64-v8a`. The primary Windows build uses JDK 21, NDK 27.0.12077973, and
+Android SDK CMake 3.22.1. This is the authoritative place for tool versions —
+other documents link here instead of repeating them:
+
+| Setting | Value |
+|---|---|
+| `compileSdk` | 37 — Manager compilation |
+| `targetSdk` | 36 |
+| `minSdk` | 24 (Android 7.0); the loader split's own manifest stays at 21 |
+| SDK platforms needed | **both 37 and 35** — 35 provides the `android.jar` used to build the loader split template |
+| NDK | 27.0.12077973 |
+| CMake | 3.22.1 (Android SDK) |
+| JDK | 21 |
+
+Dobby is pulled in as a git submodule under `native/third_party/dobby`, so
+right after cloning run:
+
+```bash
+git submodule update --init --recursive
+```
+
+`bash scripts/check-env.sh` from the repository root verifies most
+prerequisites, but note that it only checks for Platform 35 — Platform 37 must
+be present as well or Gradle will fail even with a green check-env.
 
 ## Build the Chaquopy Android wheel
 
@@ -49,11 +70,21 @@ loader split, builds the Chaquopy Android wheel, stages the template and
 structural metadata, assembles the signed Manager APK, and verifies the final
 APK. Release credentials remain local and untracked under `/release/`.
 
+The script passes `--no-configuration-cache` and a fixed Gradle JVM heap to
+every Gradle invocation. `RELEASE_GRADLE_JVMARGS` overrides the heap settings
+(default `-Xmx4g -Dfile.encoding=UTF-8`):
+
+```bash
+RELEASE_GRADLE_JVMARGS="-Xmx6g -Dfile.encoding=UTF-8" bash scripts/build-release.sh
+```
+
 A direct `:app:assembleRelease` invocation is not the complete release pipeline:
 it requires `-PreleaseTemplate=<generated template APK path>` and a generated
-Chaquopy wheel in `tools/sultan-core-wheel/dist/`. Prefer
+Chaquopy wheel in `android/manager/tools/sultan-core-wheel/dist/`. Prefer
 `scripts/build-release.sh` so native, template, and wheel generation are
-validated together.
+validated together. Manual `:app:assembleRelease` runs do not pass the script's
+JVM args — add the same `-Dorg.gradle.jvmargs` yourself if the default 2 GiB
+heap from `gradle.properties` is not enough.
 
 ## Loader template checks
 
@@ -88,7 +119,11 @@ the installed `split_modloader.apk`; a readable split without the entry counts
 as revision 0. `ModStorageProvider` gates bridge calls on the same revision
 instead of a separate protocol number: the Manager sends
 `expectedRevision` with each call, and the provider compares it against the
-revision packaged in its own split.
+revision packaged in its own split. There is no separate protocol version.
+
+This section is the single authoritative statement of the revision mechanism
+and its increment criteria; other documents reference it rather than
+restating it.
 
 Increment `LOADER_REVISION`, `RELEASE_METADATA["loaderRevision"]` in
 `scripts/update-release-pins.py`, and the `--revision` argument in
@@ -117,6 +152,9 @@ bash ./gradlew :bootstrap:assembleRelease \
   -PmanagerCertificateSha256=<64-lowercase-hex-characters> \
   -PmodloaderBinary=../../native/build-android-release/libmodloader.so
 
+# android-35 below is pinned by the loader split's own manifest
+# (minSdkVersion=21, targetSdkVersion=35); it is unrelated to the Manager's
+# compileSdk 37 and to the native build's -DANDROID_PLATFORM=android-35.
 python ../bootstrap/build_split_template.py \
   --bootstrap-aar ../bootstrap/build/outputs/aar/bootstrap-release.aar \
   --bootstrap-manifest ../bootstrap/src/main/AndroidManifest.xml \
@@ -134,10 +172,14 @@ python ../bootstrap/build_split_template.py --verify \
 ## Verification and tests
 
 ```bash
+# verify-loader-template.py imports shared contract constants from
+# scripts/release_pin_contracts.py, hence PYTHONPATH=scripts.
 PYTHONPATH=scripts python -X utf8 scripts/verify-loader-template.py \
   --stage android/manager/app/build/release-stage/publish
 
 cd android/manager
+# :core:merge:test is listed separately because it does not tolerate the
+# configuration cache enabled in gradle.properties.
 bash ./gradlew --no-configuration-cache :core:merge:test
 python -m py_compile app/src/main/python/android_merge_id_remap.py \
   app/src/main/python/android_merge_worker.py
