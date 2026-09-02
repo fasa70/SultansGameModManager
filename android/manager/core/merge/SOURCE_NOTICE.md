@@ -31,7 +31,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-The planned Android worker will reuse only the upstream merge-related components:
+The Android worker reuses only the upstream merge-related components:
 
 - `csrc/json/json_cleaner.*` for non-standard JSON repair;
 - `csrc/json/json_doc.*`, `json_val.*`, and their required JSON support;
@@ -61,7 +61,7 @@ commit `2ea5ddb95bfa9fe419540396b637977d0c4293d7` (v1.4.4). Its C++ JSON
 runtime uses these exact submodule commits:
 
 - yyjson `8b4a38dc994a110abaec8a400615567bd996105f` (0.12.0, MIT);
-- rapidfuzz-cpp `6c10b68930df73bfe567972e4008518ba4265b1` (3.3.3, MIT).
+- rapidfuzz-cpp `6c10b68930df73bfe5679720e4008518ba4265b1` (3.3.3, MIT).
 
 Their license texts are staged beside the wheel build sources. No game
 original JSON, device cache export, release key, or password is included.
