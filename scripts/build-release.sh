@@ -20,6 +20,8 @@ keystore="${MANAGER_RELEASE_KEYSTORE:-$repo_root/release/manager-release.jks}"
 password_file="${MANAGER_RELEASE_PASSWORD_FILE:-$repo_root/release/manager-release-password.txt}"
 script_dir="$repo_root/scripts"
 release_root="$repo_root/android/manager/app/build/release-stage"
+gradle_jvmargs="${RELEASE_GRADLE_JVMARGS:--Xmx4g -Dfile.encoding=UTF-8}"
+gradle_args=(--no-configuration-cache "-Dorg.gradle.jvmargs=$gradle_jvmargs")
 
 fail() { printf 'Release build failed: %s\n' "$*" >&2; exit 1; }
 require_dir() { [[ -n "$2" && -d "$2" ]] || fail "$1 is required: $2"; }
@@ -136,7 +138,7 @@ rollback_on_exit() {
 trap rollback_on_exit EXIT
 native_build="$repo_root/native/build-android-release"; native_binary="$native_build/libmodloader.so"; readelf_report="$stage/readelf.txt"; template_candidate="$stage/candidate/modloader-template-10005.apk"; publish_stage="$stage/publish"; manager_apk="$repo_root/android/manager/app/build/outputs/apk/release/app-release.apk"
 
-printf '%s\n' '[1/5] Configure and build official native loader'
+printf '%s\n' '[1/6] Configure and build official native loader'
 MSYS_NO_PATHCONV=1 "$cmake" -S "$(native_path "$repo_root/native")" -B "$(native_path "$native_build")" -G Ninja -DCMAKE_MAKE_PROGRAM="$(native_path "$ninja")" -DCMAKE_TOOLCHAIN_FILE="$(native_path "$android_ndk/build/cmake/android.toolchain.cmake")" -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-35 -DMODLOADER_BACKEND_MODE=1 -DMODLOADER_OFFICIAL_URI_HOOKS=ON -DMODLOADER_OFFICIAL_URI_TEXTURE_HOOK=ON -DMODLOADER_OFFICIAL_TMP_GLYPH_HOOKS=ON -DCMAKE_BUILD_TYPE=Release
 MSYS_NO_PATHCONV=1 "$cmake" --build "$(native_path "$native_build")"
 require_file 'native Dobby submodule' "$repo_root/native/third_party/dobby/CMakeLists.txt"
@@ -146,8 +148,8 @@ assert_native_elf "$readelf" "$native_binary" "$readelf_report"
 export JAVA_HOME="$java_home"
 export ANDROID_HOME="$android_home"
 export ANDROID_NDK_HOME="$android_ndk"
-printf '%s\n' '[2/6] Build protocol v2 Bootstrap AAR'
-(cd "$repo_root/android/manager" && bash ./gradlew --no-configuration-cache :bootstrap:assembleRelease -PmanagerCertificateSha256="$certificate_sha256" -PmodloaderBinary="$(native_path "$native_binary")")
+printf '%s\n' '[2/6] Build Bootstrap AAR'
+(cd "$repo_root/android/manager" && bash ./gradlew "${gradle_args[@]}" :bootstrap:assembleRelease -PmanagerCertificateSha256="$certificate_sha256" -PmodloaderBinary="$(native_path "$native_binary")")
 printf '%s\n' '[3/6] Build and validate frozen split candidate'
 python -X utf8 "$repo_root/android/bootstrap/build_split_template.py" --bootstrap-aar "$(native_path "$repo_root/android/bootstrap/build/outputs/aar/bootstrap-release.aar")" --bootstrap-manifest "$(native_path "$repo_root/android/bootstrap/src/main/AndroidManifest.xml")" --android-jar "$(native_path "$android_jar")" --aapt2 "$(native_path "$aapt2")" --d8 "$(native_path "$d8")" --output "$(native_path "$template_candidate")" --version-code 10005 --version-name 1.0.5 --revision 2
 python -X utf8 "$repo_root/android/bootstrap/build_split_template.py" --verify --output "$(native_path "$template_candidate")" --version-code 10005 --version-name 1.0.5 --revision 2
@@ -159,7 +161,7 @@ printf '%s\n' '[5/6] Build Chaquopy CPython 3.11 Android wheel'
 bash "$repo_root/scripts/build-sultan-core-wheel.sh"
 printf '%s\n' '[6/6] Assemble signed Manager release'
 rm -f "$manager_apk"
-(cd "$repo_root/android/manager" && bash ./gradlew --no-configuration-cache :app:assembleRelease -PmanagerCertificateSha256="$certificate_sha256" -PmodloaderBinary="$(native_path "$native_binary")" -PreleaseTemplate="$(native_path "$template_candidate")")
+(cd "$repo_root/android/manager" && bash ./gradlew "${gradle_args[@]}" :app:assembleRelease -PmanagerCertificateSha256="$certificate_sha256" -PmodloaderBinary="$(native_path "$native_binary")" -PreleaseTemplate="$(native_path "$template_candidate")")
 require_file 'Manager release APK' "$manager_apk"
 "$apksigner" verify "$manager_apk"
 PYTHONPATH="$script_dir" python -X utf8 "$script_dir/verify-loader-template.py" --stage "$publish_stage" --manager-apk "$manager_apk"
