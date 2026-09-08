@@ -12,9 +12,9 @@ GPLv3 does not change.
 ## 苏游修改器 / suyou-save-editor (khb10533/suyou-save-editor)
 
 `android/manager/app/src/main/assets/save-editor/index.html` is the upstream
-**苏游修改器 · 柳漪春涛正式版 v2** save editor, <https://github.com/khb10533/suyou-save-editor>,
-commit `ffbcb9871ec93f2599aeffa82c59176c30cf6d12`, SHA-256
-`1b760303c7aba86c4063b4573ae6a2c538850ba6d83dd07dba9a0bd371f4accb`.
+**苏游修改器 · 柳漪春涛正式版 v3** save editor, <https://github.com/khb10533/suyou-save-editor>,
+commit `02b3e90a792a7d5776ecb3f31bd619e54ed05cb8`, SHA-256
+`4ae374bdc0d0bd7acd4a639c5df4fccf841ed05dfcedef66c53d71788f4de649`.
 
 The file is vendored **byte-for-byte unmodified**. Copyright (C) 2026 柳漪春涛.
 It is licensed under the GNU General Public License version 3 or (at the
