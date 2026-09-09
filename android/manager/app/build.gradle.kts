@@ -109,8 +109,8 @@ android {
         applicationId = "com.sultansgame.modmanager"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 341
-        versionName = "0.3.41"
+        versionCode = 342
+        versionName = "0.3.42"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
             abiFilters += "arm64-v8a"
