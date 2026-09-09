@@ -425,7 +425,7 @@ var RITEDB = {"5000001":{"n":"治理家业","c":4,"lo":"自宅:1","s":[{"t":"你
 
         <!-- 页脚：GPL-3.0 声明（GPL 要求「适当的法律声明」对用户可见） -->
         <footer class="mt-6 pt-4 border-t border-slate-700 text-xs text-gray-500 text-center">
-            <div>苏游修改器 · 柳漪春涛正式版 v2　—　Copyright &copy; 2026 柳漪春涛</div>
+            <div>苏游修改器 · 柳漪春涛正式版 v3　—　Copyright &copy; 2026 柳漪春涛</div>
             <div class="mt-1">
                 本程序是<b class="text-gray-400">自由软件</b>，依 
                 <a href="https://www.gnu.org/licenses/gpl-3.0.html" target="_blank" rel="noopener"
@@ -2928,13 +2928,21 @@ function renderCards(){
                 renderAll(); syncSource();
                 setMsg("✅ 卡牌复制完成（已在末尾展开）");
             }));
-            actRow.appendChild(btn("🗑️ 删除此卡", "bg-red-600 hover:bg-red-700", ()=>{
-                if(!confirm("确定删除这张卡牌吗？此操作不可撤销。")) return;
+            const delBtn = btn("🗑️ 删除此卡", "bg-red-600 hover:bg-red-700", ()=>{
+                if(!delBtn.dataset.confirm){
+                    delBtn.dataset.confirm = "1";
+                    delBtn.innerText = "⚠️ 确认删除？";
+                    delBtn.classList.remove("bg-red-600","hover:bg-red-700");
+                    delBtn.classList.add("bg-red-800","hover:bg-red-900");
+                    setMsg("⚠️ 再次点击删除按钮确认，或点击其他卡牌取消");
+                    return;
+                }
                 getCards().splice(idx, 1);
                 selectedCardIndex = -1;
                 renderAll(); syncSource();
                 setMsg("✅ 卡牌已删除");
-            }));
+            });
+            actRow.appendChild(delBtn);
             body.appendChild(actRow);
 
             block.appendChild(body);
